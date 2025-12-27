@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="th">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Modal Test - No Auth</title>
+    <link rel="stylesheet" href="../assets/css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+</head>
+
+<body>
+    <div style="padding: 3rem;">
+        <h1>Package Modal Test Page</h1>
+        <p>This is a test page without authentication to verify modal functionality.</p>
+
+        <button class="btn btn-primary btn-lg" onclick="showCreatePackageModal()">
+            <i class="fas fa-plus"></i> Open Modal (Test)
+        </button>
+
+        <div
+            style="margin-top: 2rem; padding: 1.5rem; background: var(--color-light-2); border-radius: var(--radius-md);">
+            <h3>Test Instructions:</h3>
+            <ol>
+                <li>✅ Page should load WITHOUT modal showing</li>
+                <li>✅ Click "Open Modal" button - modal should appear</li>
+                <li>✅ Click X button in top-right - modal should close</li>
+                <li>✅ Open modal again, click outside (on dark backdrop) - modal should close</li>
+                <li>✅ Open modal again, press ESC key - modal should close</li>
+                <li>✅ Open modal, fill form, click "บันทึก" - should show alert and close</li>
+            </ol>
+        </div>
+
+        <div
+            style="margin-top: 2rem; padding: 1.5rem; background: var(--color-success); background: rgba(16, 185, 129, 0.1); border-radius: var(--radius-md);">
+            <h3 style="color: var(--color-success);">✅ Fixed Issues:</h3>
+            <ul>
+                <li><strong>Modal Structure:</strong> Changed from inline styles to proper CSS classes</li>
+                <li><strong>Hidden Class:</strong> Added !important to ensure it overrides all other styles</li>
+                <li><strong>Close Button:</strong> Added visible X button with hover animation</li>
+                <li><strong>Backdrop Click:</strong> Click outside modal to close</li>
+                <li><strong>ESC Key:</strong> Press Escape to close modal</li>
+                <li><strong>Smooth Animations:</strong> Added opacity transitions</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- Create/Edit Package Modal -->
+    <div id="packageModal" class="modal-backdrop hidden">
+        <div class="modal-content">
+            <div class="card">
+                <button type="button" class="modal-close-btn" onclick="hidePackageModal()" aria-label="Close">
+                    <i class="fas fa-times"></i>
+                </button>
+                <div class="card-header">
+                    <h3 class="card-title"><i class="fas fa-box"></i> <span id="modalTitle">สร้างแพ็คเกจใหม่</span></h3>
+                </div>
+                <div class="card-body">
+                    <form id="packageForm">
+                        <div class="row">
+                            <div class="col-12">
+                                <div class="form-group">
+                                    <label class="form-label"><i class="fas fa-tag"></i> ชื่อแพ็คเกจ</label>
+                                    <input type="text" id="packageName" class="form-control"
+                                        placeholder="เช่น Starter, Professional" required>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="row">
+                            <div class="col-6">
+                                <div class="form-group">
+                                    <label class="form-label"><i class="fas fa-dollar-sign"></i> ราคา/เดือน
+                                        (บาท)</label>
+                                    <input type="number" id="monthlyPrice" class="form-control" placeholder="990"
+                                        required>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="form-group">
+                                    <label class="form-label"><i class="fas fa-calendar"></i> ระยะเวลา (วัน)</label>
+                                    <input type="number" id="billingPeriod" class="form-control" value="30" required>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style="display: flex; gap: 1rem; margin-top: 2rem;">
+                            <button type="submit" class="btn btn-primary" style="flex: 1;">
+                                <i class="fas fa-save"></i> บันทึก
+                            </button>
+                            <button type="button" class="btn btn-outline" onclick="hidePackageModal()" style="flex: 1;">
+                                <i class="fas fa-times"></i> ยกเลิก
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const packageModal = document.getElementById('packageModal');
+        const packageForm = document.getElementById('packageForm');
+
+        function showCreatePackageModal() {
+            packageForm.reset();
+            packageModal.classList.remove('hidden');
+            setTimeout(() => { packageModal.style.opacity = '1'; }, 10);
+        }
+
+        function hidePackageModal() {
+            packageModal.style.opacity = '0';
+            setTimeout(() => { packageModal.classList.add('hidden'); }, 300);
+        }
+
+        packageModal?.addEventListener('click', (e) => {
+            if (e.target === packageModal) hidePackageModal();
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && !packageModal.classList.contains('hidden')) hidePackageModal();
+        });
+
+        packageForm?.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            alert('✅ บันทึกสำเร็จ!');
+            hidePackageModal();
+        });
+
+        document.querySelector('.modal-content')?.addEventListener('click', (e) => e.stopPropagation());
+    </script>
+</body>
+
+</html>

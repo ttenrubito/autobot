@@ -1,0 +1,14 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"type": "shell",
+			"label": "Deploy Autobot to production (Cloud Run)",
+			"command": "cd /opt/lampp/htdocs/autobot && AUTO_YES=1 ./deploy_app_to_production.sh",
+			"args": [],
+			"group": "build",
+			"isBackground": false,
+			"problemMatcher": []
+		}
+	]
+}

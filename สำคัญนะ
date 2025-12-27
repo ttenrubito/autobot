@@ -1,0 +1,111 @@
+
+
+gcloud run deploy autobot \
+  --source . \
+  --region=asia-southeast1 \
+  --platform=managed \
+  --allow-unauthenticated \
+  --port=80 \
+  --clear-base-image
+
+
+database
+root Password@9
+
+Welcome to Cloud Shell! Type "help" to get started, or type "gemini" to try prompting with Gemini CLI.
+To set your Cloud Platform project in this session use `gcloud config set project [PROJECT_ID]`.
+You can view your projects by running `gcloud projects list`.
+pungping_kamonwan@cloudshell:~$ gcloud projects create autobot-prod
+ERROR: (gcloud.projects.create) Project creation failed. The project ID you specified is already in use by another project. Please try an alternative ID.
+pungping_kamonwan@cloudshell:~$ export PROJECT_ID="autobot-prod-$(date +%y%m%d)-$RANDOM"
+pungping_kamonwan@cloudshell:~$ export PROJECT_NAME="autobot-prod"
+pungping_kamonwan@cloudshell:~$ export REGION="asia-southeast1"
+pungping_kamonwan@cloudshell:~$ echo $PROJECT_ID
+autobot-prod-251215-22549
+pungping_kamonwan@cloudshell:~$ gcloud projects create "$PROJECT_ID" --name="$PROJECT_NAME"
+Create in progress for [https://cloudresourcemanager.googleapis.com/v1/projects/autobot-prod-251215-22549].
+Waiting for [operations/create_project.global.8338415312173295783] to finish...done.                                                                                                                                                
+Enabling service [cloudapis.googleapis.com] on project [autobot-prod-251215-22549]...
+Operation "operations/acat.p2-693230987450-5b4908d2-9515-47cf-80cf-68220f7f7352" finished successfully.
+pungping_kamonwan@cloudshell:~$ gcloud config set project "$PROJECT_ID"
+Updated property [core/project].
+pungping_kamonwan@cloudshell:~ (autobot-prod-251215-22549)$ gcloud billing accounts list
+ACCOUNT_ID: 01EB99-DC5801-435D1F
+NAME: My Billing Account
+OPEN: True
+MASTER_ACCOUNT_ID: 
+pungping_kamonwan@cloudshell:~ (autobot-prod-251215-22549)$ gcloud billing projects link "$PROJECT_ID" --billing-account="ACCOUNT_ID"
+ERROR: (gcloud.billing.projects.link) INVALID_ARGUMENT: Request contains an invalid argument.
+pungping_kamonwan@cloudshell:~ (autobot-prod-251215-22549)$ export BILLING_ACCOUNT="01EB99-DC5801-435D1F"
+pungping_kamonwan@cloudshell:~ (autobot-prod-251215-22549)$ gcloud billing projects link "$PROJECT_ID" --billing-account="$BILLING_ACCOUNT"
+billingAccountName: billingAccounts/01EB99-DC5801-435D1F
+billingEnabled: true
+name: projects/autobot-prod-251215-22549/billingInfo
+projectId: autobot-prod-251215-22549
+pungping_kamonwan@cloudshell:~ (autobot-prod-251215-22549)$ gcloud billing projects describe "$PROJECT_ID"
+billingAccountName: billingAccounts/01EB99-DC5801-435D1F
+billingEnabled: true
+name: projects/autobot-prod-251215-22549/billingInfo
+projectId: autobot-prod-251215-22549
+pungping_kamonwan@cloudshell:~ (autobot-prod-251215-22549)$ gcloud services enable \
+  run.googleapis.com \
+  cloudbuild.googleapis.com \
+  sqladmin.googleapis.com \
+  secretmanager.googleapis.com \
+  artifactregistry.googleapis.com
+Operation "operations/acf.p2-693230987450-c3841dff-98fd-4692-88ab-27d5d38bcc9d" finished successfully.
+pungping_kamonwan@cloudshell:~ (autobot-prod-251215-22549)$ export REGION="asia-southeast1"
+export DB_INSTANCE="autobot-db"
+export DB_NAME="autobot"
+export DB_USER="autobot_app"
+pungping_kamonwan@cloudshell:~ (autobot-prod-251215-22549)$ gcloud sql instances create "$DB_INSTANCE" \
+  --database-version=MYSQL_8_0 \
+  --tier=db-f1-micro \
+  --region="$REGION" \
+  --storage-auto-increase
+Creating Cloud SQL instance for MYSQL_8_0...done.                                                                                                                                                                                   
+Created [https://sqladmin.googleapis.com/sql/v1beta4/projects/autobot-prod-251215-22549/instances/autobot-db].
+NAME: autobot-db
+DATABASE_VERSION: MYSQL_8_0
+LOCATION: asia-southeast1-b
+TIER: db-f1-micro
+PRIMARY_ADDRESS: 34.142.150.88
+PRIVATE_ADDRESS: -
+STATUS: RUNNABLE
+pungping_kamonwan@cloudshell:~ (autobot-prod-251215-22549)$ export ROOT_PASS="Password@9"
+export APP_PASS="Password@9"
+
+gcloud sql users set-password root --instance="$DB_INSTANCE" --password="$ROOT_PASS"
+gcloud sql databases create "$DB_NAME" --instance="$DB_INSTANCE"
+gcloud sql users create "$DB_USER" --instance="$DB_INSTANCE" --password="$APP_PASS"
+Updating Cloud SQL user...done.                                                                                                                                                                                                       
+Creating Cloud SQL database...done.                                                                                                                                                                                                   
+Created database [autobot].
+instance: autobot-db
+name: autobot
+project: autobot-prod-251215-22549
+Creating Cloud SQL user...done.                                                                                                                                                                                                       
+Created user [autobot_app].
+pungping_kamonwan@cloudshell:~ (autobot-prod-251215-22549)$ export INSTANCE_CONN_NAME="$(gcloud sql instances describe "$DB_INSTANCE" --format="value(connectionName)")"
+echo $INSTANCE_CONN_NAME
+autobot-prod-251215-22549:asia-southeast1:autobot-db
+pungping_kamonwan@cloudshell:~ (autobot-prod-251215-22549)$ printf "%s" "$APP_PASS"  | gcloud secrets create db_app_pass  --data-file=-
+printf "%s" "$DB_USER"   | gcloud secrets create db_app_user  --data-file=-
+printf "%s" "$DB_NAME"   | gcloud secrets create db_name      --data-file=-
+printf "%s" "$INSTANCE_CONN_NAME" | gcloud secrets create db_instance_conn --data-file=-
+Created version [1] of the secret [db_app_pass].
+Created version [1] of the secret [db_app_user].
+Created version [1] of the secret [db_name].
+Created version [1] of the secret [db_instance_conn].
+pungping_kamonwan@cloudshell:~ (autobot-prod-251215-22549)$ gcloud iam service-accounts create autobot-run \
+  --display-name="Autobot Cloud Run SA"
+
+export RUN_SA="autobot-run@${PROJECT_ID}.iam.gserviceaccount.com"
+
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:$RUN_SA" \
+  --role="roles/cloudsql.client"
+Created service account [autobot-run].
+ERROR: Policy modification failed. For a binding with condition, run "gcloud alpha iam policies lint-condition" to identify issues in condition.
+ERROR: (gcloud.projects.add-iam-policy-binding) INVALID_ARGUMENT: Service account autobot-run@autobot-prod-251215-22549.iam.gserviceaccount.com does not exist.
+pungping_kamonwan@cloudshell:~ (autobot-prod-251215-22549)$ 

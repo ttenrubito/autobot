@@ -1,0 +1,43 @@
+# Google Cloud Build Configuration
+# This file defines the build process for Cloud Run deployment
+
+steps:
+  # Build the Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/autobot:$COMMIT_SHA', '.']
+  
+  # Push the image to Google Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/autobot:$COMMIT_SHA']
+  
+  # Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'autobot'
+      - '--image=gcr.io/$PROJECT_ID/autobot:$COMMIT_SHA'
+      - '--region=asia-southeast1'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+      - '--port=8080'
+      - '--add-cloudsql-instances=$_CLOUD_SQL_INSTANCE'
+      - '--set-env-vars=DB_HOST=$_DB_HOST,DB_NAME=$_DB_NAME,DB_USER=$_DB_USER,DB_SOCKET=/cloudsql/$_CLOUD_SQL_INSTANCE'
+      - '--set-secrets=DB_PASS=DB_PASSWORD:latest,JWT_SECRET_KEY=JWT_SECRET:latest,OMISE_SECRET_KEY=OMISE_SECRET:latest'
+
+# Images to be pushed to Container Registry
+images:
+  - 'gcr.io/$PROJECT_ID/autobot:$COMMIT_SHA'
+
+# Substitutions (define in Cloud Build trigger)
+substitutions:
+  _CLOUD_SQL_INSTANCE: 'project-id:region:instance-name'
+  _DB_HOST: 'localhost'
+  _DB_NAME: 'autobot'
+  _DB_USER: 'root'
+
+# Configuration
+options:
+  machineType: 'N1_HIGHCPU_8'
+  logging: CLOUD_LOGGING_ONLY

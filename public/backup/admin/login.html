@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="th">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Admin Login - AI Automation</title>
+    <script>
+        // Local XAMPP override - remove this block for Cloud Run deployment
+        window.BASE_PATH_OVERRIDE = '/autobot';
+    </script>
+    <link rel="stylesheet" href="/autobot/assets/css/style.css">
+    <link rel="stylesheet" href="/autobot/assets/css/responsive-fixes.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+</head>
+
+<body class="auth-page auth-page--admin">
+    <div class="auth-container">
+        <div class="auth-card">
+            <div class="auth-header">
+                <div style="text-align: center; margin-bottom: 1rem;">
+                    <img src="/autobot/public/images/logo1.png" alt="AI Automation Logo"
+                        style="max-width: 200px; height: auto;">
+                </div>
+                <h1 class="auth-title"><i class="fas fa-user-shield"></i> Admin Login</h1>
+                <p class="auth-subtitle">เข้าสู่ระบบจัดการ AI Automation</p>
+            </div>
+            <form id="adminLoginForm">
+                <div class="form-group">
+                    <label for="username">ชื่อผู้ใช้ (admin_users.username)</label>
+                    <input type="text" id="username" name="username" required>
+                </div>
+                <div class="form-group">
+                    <label for="password">รหัสผ่าน</label>
+                    <input type="password" id="password" name="password" required>
+                </div>
+                <div id="loginError" class="alert alert-danger hidden"></div>
+                <button type="submit" class="btn btn-primary btn-block">เข้าสู่ระบบผู้ดูแล</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Core JS -->
+    <script src="/autobot/assets/js/constants.js"></script>
+    <script src="/autobot/assets/js/auth.js"></script>
+
+    <!-- Admin login script -->
+    <script>
+        document.getElementById('adminLoginForm').addEventListener('submit', async function (e) {
+            e.preventDefault();
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value;
+            const errorBox = document.getElementById('loginError');
+            errorBox.classList.add('hidden');
+            errorBox.textContent = '';
+
+            if (!username || !password) {
+                errorBox.textContent = 'กรุณากรอกชื่อผู้ใช้และรหัสผ่าน';
+                errorBox.classList.remove('hidden');
+                return;
+            }
+
+            try {
+                // ส่งแบบ JSON ที่ api/admin/login.php รองรับ (username/password)
+                const response = await fetch(`${API_BASE_URL}/admin/login.php`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    const token = data.data?.token;
+                    const admin = data.data?.admin;
+                    if (token) {
+                        localStorage.setItem('admin_token', token);
+                    }
+                    if (admin) {
+                        localStorage.setItem('admin_data', JSON.stringify(admin));
+                    }
+                    // redirect ไป dashboard โดยใช้ PAGES constant
+                    window.location.href = PAGES.ADMIN_DASHBOARD;
+                } else {
+                    errorBox.textContent = data.message || 'เข้าสู่ระบบไม่สำเร็จ';
+                    errorBox.classList.remove('hidden');
+                }
+            } catch (err) {
+                console.error('Admin login error:', err);
+                errorBox.textContent = 'เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์';
+                errorBox.classList.remove('hidden');
+            }
+        });
+    </script>
+</body>
+
+</html>

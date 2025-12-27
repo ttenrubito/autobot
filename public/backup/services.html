@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="th">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>บริการของฉัน - AI Automation</title>
+    <script>
+        // Local XAMPP override - remove this block for Cloud Run deployment
+        window.BASE_PATH_OVERRIDE = '/autobot';
+    </script>
+    <link rel="stylesheet" href="/autobot/assets/css/style.css">
+    <link rel="stylesheet" href="/autobot/assets/css/responsive-fixes.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+</head>
+
+<body>
+    <!-- Sidebar -->
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <a href="#" onclick="window.location.href = PAGES.USER_DASHBOARD; return false;" class="sidebar-logo">AI Automate</a>
+            <p style="font-size: 0.75rem; color: var(--color-gray);">AI Automation Platform</p>
+        </div>
+
+        <div class="sidebar-user">
+            <div class="sidebar-user-avatar" id="userAvatar">U</div>
+            <div class="sidebar-user-info">
+                <div class="sidebar-user-name" id="userName">Loading...</div>
+                <div class="sidebar-user-email" id="userEmail"></div>
+            </div>
+        </div>
+
+        <nav>
+            <ul class="sidebar-nav">
+                <li class="sidebar-nav-item">
+                    <a href="#" onclick="window.location.href = PAGES.USER_DASHBOARD; return false;" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">📊</span>
+                        <span>Dashboard</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="#" onclick="window.location.href = PAGES.USER_SERVICES; return false;" class="sidebar-nav-link active">
+                        <span class="sidebar-nav-icon">🤖</span>
+                        <span>บริการของฉัน</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="#" onclick="window.location.href = PAGES.USER_USAGE; return false;" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">📈</span>
+                        <span>การใช้งาน</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="/autobot/payment.html" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">💳</span>
+                        <span>ชำระเงิน</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="#" onclick="window.location.href = PAGES.USER_BILLING; return false;" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">📄</span>
+                        <span>ใบแจ้งหนี้</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="# onclick="window.location.href = PAGES.USER_PROFILE; return false;" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">👤</span>
+                        <span>โปรไฟล์</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item" style="margin-top: auto; padding-top: 2rem;">
+                    <a href="#" onclick="logout(); return false;" class="sidebar-nav-link"
+                        style="color: var(--color-danger);">
+                        <span class="sidebar-nav-icon">🚪</span>
+                        <span>ออกจากระบบ</span>
+                    </a>
+                </li>
+            </ul>
+        </nav>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <!-- Page Header -->
+        <div class="page-header">
+            <h1 class="page-title">บริการของฉัน</h1>
+            <p class="page-subtitle">จัดการและติดตาม AI Bot และ API ทั้งหมด</p>
+        </div>
+
+        <!-- Services Grid -->
+        <div id="servicesContainer" class="row">
+            <!-- Services will be loaded here -->
+            <div class="col-12 text-center" style="padding: 3rem;">
+                <div class="loading-spinner" style="margin: 0 auto;"></div>
+                <p style="margin-top: 1rem; color: var(--color-gray);">กำลังโหลดข้อมูล...</p>
+            </div>
+        </div>
+    </main>
+
+    <script src="/autobot/assets/js/constants.js"></script>
+    <script src="/autobot/assets/js/auth.js"></script>
+    <script>
+        // Require authentication
+        requireAuth();
+
+        // Load services on page load
+        document.addEventListener('DOMContentLoaded', async () => {
+            await loadUserInfo();
+            await loadServices();
+        });
+
+        async function loadUserInfo() {
+            const userData = getUserData();
+            if (userData) {
+                document.getElementById('userName').textContent = userData.full_name || userData.email;
+                document.getElementById('userEmail').textContent = userData.email;
+                const initial = (userData.full_name || userData.email).charAt(0).toUpperCase();
+                document.getElementById('userAvatar').textContent = initial;
+            }
+        }
+
+        async function loadServices() {
+            try {
+                const response = await apiCall('/services/list');
+
+                if (response && response.success) {
+                    displayServices(response.data);
+                }
+            } catch (error) {
+                console.error('Failed to load services:', error);
+                displayError('ไม่สามารถโหลดข้อมูลได้');
+            }
+        }
+
+        function displayServices(services) {
+            const container = document.getElementById('servicesContainer');
+
+            if (!services || services.length === 0) {
+                container.innerHTML = `
+                    <div class="col-12 text-center" style="padding: 3rem;">
+                        <div style="font-size: 4rem; margin-bottom: 1rem;">🤖</div>
+                        <h3>ยังไม่มีบริการ</h3>
+                        <p style="color: var(--color-gray); margin-top: 0.5rem;">ติดต่อทีมงานเพื่อเปิดใช้บริการของคุณ</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = '';
+
+            services.forEach(service => {
+                const col = document.createElement('div');
+                col.className = 'col-4';
+
+                const statusClass = service.status === 'active' ? 'success' :
+                    service.status === 'paused' ? 'warning' : 'danger';
+                const statusText = service.status === 'active' ? 'ใช้งานอยู่' :
+                    service.status === 'paused' ? 'หยุดชั่วคราว' : 'มีปัญหา';
+
+                const icon = service.platform === 'facebook' ? '📘' :
+                    service.platform === 'line' ? '💚' :
+                        service.service_code === 'google_vision' ? '👁️' :
+                            service.service_code === 'google_nl' ? '🧠' : '🤖';
+
+                col.innerHTML = `
+                    <div class="card">
+                        <div class="card-header" style="background: var(--color-light); border-radius: var(--radius-lg) var(--radius-lg) 0 0;">
+                            <div style="display: flex; justify-content: space-between; align-items: start;">
+                                <div style="display: flex; align items: center; gap: 0.75rem;">
+                                    <div style="font-size: 2rem;">${icon}</div>
+                                    <div>
+                                        <h3 class="card-title" style="margin: 0;">${service.service_name}</h3>
+                                        <p class="card-subtitle" style="margin: 0.25rem 0 0 0;">${service.service_type}</p>
+                                    </div>
+                                </div>
+                                <span class="badge badge-${statusClass}">${statusText}</span>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 1rem;">
+                                <div>
+                                    <div style="font-size: 0.75rem; color: var(--color-gray); text-transform: uppercase;">ข้อความ 24h</div>
+                                    <div style="font-size: 1.5rem; font-weight: 700; color: var(--color-dark);">${formatNumber(service.messages_24h || 0)}</div>
+                                </div>
+                                <div>
+                                    <div style="font-size: 0.75rem; color: var(--color-gray); text-transform: uppercase;">API Calls 24h</div>
+                                    <div style="font-size: 1.5rem; font-weight: 700; color: var(--color-dark);">${formatNumber(service.api_calls_24h || 0)}</div>
+                                </div>
+                            </div>
+                            ${service.platform ? `
+                                <div style="margin-bottom: 1rem; padding: 0.75rem; background: var(--color-light); border-radius: var(--radius-md);">
+                                    <div style="font-size: 0.75rem; color: var(--color-gray); margin-bottom: 0.25rem;">API Key</div>
+                                    <code style="font-size: 0.75rem; color: var(--color-dark-2);">${service.api_key}</code>
+                                </div>
+                            ` : ''}
+                            <a href="service-details.html?id=${service.id}" class="btn btn-primary btn-block">
+                                ดูรายละเอียด
+                            </a>
+                        </div>
+                    </div>
+                `;
+
+                container.appendChild(col);
+            });
+        }
+
+        function displayError(message) {
+            const container = document.getElementById('servicesContainer');
+            container.innerHTML = `
+                <div class="col-12 text-center" style="padding: 3rem;">
+                    <div style="font-size: 4rem; margin-bottom: 1rem;">⚠️</div>
+                    <h3>${message}</h3>
+                </div>
+            `;
+        }
+    </script>
+</body>
+
+</html>

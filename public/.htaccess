@@ -1,0 +1,30 @@
+RewriteEngine On
+
+# ---------------------------------------------------------------------------
+# Root redirect
+# - Visiting https://domain/ should go to login.html
+#   NOTE: use internal rewrite (no external 302) to avoid proxy redirect loops.
+# ---------------------------------------------------------------------------
+RewriteRule ^$ login.html [L]
+
+# ---------------------------------------------------------------------------
+# Static assets (do NOT rewrite)
+# ---------------------------------------------------------------------------
+RewriteRule ^assets/ - [L]
+RewriteRule ^images/ - [L]
+RewriteRule ^uploads/ - [L]
+
+# ---------------------------------------------------------------------------
+# API
+# - Cloud Run container has DocumentRoot=/public, but /api lives one level up.
+# - Keep query string.
+# ---------------------------------------------------------------------------
+RewriteRule ^api/(.*)$ ../api/$1 [L,QSA]
+
+# ---------------------------------------------------------------------------
+# Public pages
+# - Allow /dashboard, /profile, etc. to map to .php when .php exists.
+# ---------------------------------------------------------------------------
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME}.php -f
+RewriteRule ^(.+?)/?$ $1.php [L]

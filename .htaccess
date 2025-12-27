@@ -1,0 +1,122 @@
+# Security Headers
+<IfModule mod_headers.c>
+    # Prevent clickjacking
+    Header always set X-Frame-Options "SAMEORIGIN"
+    
+    # Prevent MIME type sniffing
+    Header always set X-Content-Type-Options "nosniff"
+    
+    # Enable XSS protection
+    Header always set X-XSS-Protection "1; mode=block"
+    
+    # Remove server signature
+    Header always unset X-Powered-By
+    Header unset X-Powered-By
+    
+    # Referrer policy
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+    
+    # Content Security Policy (adjust based on your needs)
+    # Header always set Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; img-src 'self' data: https:; font-src 'self' https://cdnjs.cloudflare.com; connect-src 'self'"
+    
+    # Permissions Policy (formerly Feature-Policy)
+    Header always set Permissions-Policy "geolocation=(), microphone=(), camera=()"
+    
+    # HTTPS Strict Transport Security (uncomment for production with HTTPS)
+    # Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+</IfModule>
+
+# Disable directory listing
+Options -Indexes
+
+# Protect sensitive files
+<FilesMatch "\.(ini|log|sql|md|json|lock)$">
+    Require all denied
+</FilesMatch>
+
+# Protect config files
+<FilesMatch "^(config|\.env)">
+    Require all denied
+</FilesMatch>
+
+# Protect .git and other version control
+RedirectMatch 404 /\.git
+RedirectMatch 404 /\.svn
+RedirectMatch 404 /\.hg
+
+# Enable GZIP compression
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE text/html text/plain text/xml text/css text/javascript application/javascript application/json
+</IfModule>
+
+# Browser caching for static assets
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresByType image/jpg "access plus 1 year"
+    ExpiresByType image/jpeg "access plus 1 year"
+    ExpiresByType image/gif "access plus 1 year"
+    ExpiresByType image/png "access plus 1 year"
+    ExpiresByType image/webp "access plus 1 year"
+    ExpiresByType text/css "access plus 1 month"
+    ExpiresByType application/javascript "access plus 1 month"
+    ExpiresByType application/pdf "access plus 1 month"
+    ExpiresByType image/x-icon "access plus 1 year"
+</IfModule>
+
+# Prevent access to sensitive directories
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    
+    # Block access to includes, database, logs, config directories (but NOT public OR api!)
+    RewriteRule ^(includes|database|logs|config|vendor|node_modules)/ - [F,L]
+    
+    # PRIORITY 1: Allow direct access to /public directory and subdirectories
+    RewriteCond %{REQUEST_URI} ^/autobot/public/ [OR]
+    RewriteCond %{REQUEST_URI} ^/autobot/assets/
+    RewriteRule ^ - [L]
+    
+    # PRIORITY 2: Map /assets to /assets (for CSS, JS, images)
+    # Only if not already in /public
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_URI} !^/autobot/public/
+    RewriteRule ^assets/(.*)$ assets/$1 [L]
+    
+    # PRIORITY 3: URL rewrite for admin pages (/admin/* -> /public/admin/*)
+    # Only if not already in /public
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_URI} !^/autobot/public/
+    RewriteRule ^admin/(.+)$ public/admin/$1 [L]
+    
+    # PRIORITY 4a: URL rewrite for .php files in root (map to /public)
+    # /autobot/dashboard.php -> /autobot/public/dashboard.php
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_URI} !^/autobot/public/
+    RewriteRule ^(login|dashboard|profile|billing|payment|services|usage|api-docs|payment-test|omise-test|chat-history|addresses|orders|payment-history)\.php$ public/$1.php [L]
+    
+    # PRIORITY 4b: URL rewrite for clean user-facing URLs (map root HTML files to /public)
+    # /autobot/login.html -> /autobot/public/login.html
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_URI} !^/autobot/public/
+    RewriteRule ^(login|dashboard|profile|billing|payment|services|usage|api-docs|payment-test|omise-test)\.html$ public/$1.html [L]
+    
+    # NOTE: /api/* requests will naturally pass through to api/.htaccess
+    # which handles routing to api/index.php
+    
+    # Prevent PHP execution in upload directories (if you have uploads)
+    # RewriteRule ^uploads/.*\.php$ - [F,L]
+</IfModule>
+
+# Limit request size (10MB)
+<IfModule mod_php7.c>
+    php_value upload_max_filesize 10M
+    php_value post_max_size 10M
+</IfModule>
+
+# Custom error pages (optional - create these files)
+# ErrorDocument 403 /error/403.html
+# ErrorDocument 404 /error/404.html
+# ErrorDocument 500 /error/500.html

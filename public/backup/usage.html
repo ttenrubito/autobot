@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="th">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>การใช้งาน - AI Automation</title>
+    <script>
+        // Local XAMPP override - remove this block for Cloud Run deployment
+        window.BASE_PATH_OVERRIDE = '/autobot';
+    </script>
+    <link rel="stylesheet" href="/autobot/assets/css/style.css">
+    <link rel="stylesheet" href="/autobot/assets/css/responsive-fixes.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body>
+    <!-- Sidebar -->
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <a href="#" onclick="window.location.href = PAGES.USER_DASHBOARD; return false;" class="sidebar-logo">AI Automate</a>
+            <p style="font-size: 0.75rem; color: var(--color-gray);">AI Automation Platform</p>
+        </div>
+
+        <div class="sidebar-user">
+            <div class="sidebar-user-avatar" id="userAvatar">U</div>
+            <div class="sidebar-user-info">
+                <div class="sidebar-user-name" id="userName">Loading...</div>
+                <div class="sidebar-user-email" id="userEmail"></div>
+            </div>
+        </div>
+
+        <nav>
+            <ul class="sidebar-nav">
+                <li class="sidebar-nav-item">
+                    <a href="#" onclick="window.location.href = PAGES.USER_DASHBOARD; return false;" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">📊</span>
+                        <span>Dashboard</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="#" onclick="window.location.href = PAGES.USER_SERVICES; return false;" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">🤖</span>
+                        <span>บริการของฉัน</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="#" onclick="window.location.href = PAGES.USER_USAGE; return false;" class="sidebar-nav-link active">
+                        <span class="sidebar-nav-icon">📈</span>
+                        <span>การใช้งาน</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="/autobot/payment.html" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">💳</span>
+                        <span>ชำระเงิน</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="#" onclick="window.location.href = PAGES.USER_BILLING; return false;" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">📄</span>
+                        <span>ใบแจ้งหนี้</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="# onclick="window.location.href = PAGES.USER_PROFILE; return false;" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">👤</span>
+                        <span>โปรไฟล์</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item" style="margin-top: auto; padding-top: 2rem;">
+                    <a href="#" onclick="logout(); return false;" class="sidebar-nav-link"
+                        style="color: var(--color-danger);">
+                        <span class="sidebar-nav-icon">🚪</span>
+                        <span>ออกจากระบบ</span>
+                    </a>
+                </li>
+            </ul>
+        </nav>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <!-- Page Header -->
+        <div class="page-header">
+            <h1 class="page-title">การใช้งาน</h1>
+            <p class="page-subtitle">ติดตามสถิติการใช้งาน API และ Bot Messages</p>
+        </div>
+
+        <!-- Filter Controls -->
+        <div class="card">
+            <div class="card-body" style="padding: 1.5rem;">
+                <div style="display: flex; gap: 1rem; align-items: end; flex-wrap: wrap;">
+                    <div style="flex: 1; min-width: 250px;">
+                        <label
+                            style="display: block; margin-bottom: 0.5rem; font-weight: 600; color: var(--color-dark-2);">เลือกบริการ</label>
+                        <select id="serviceSelector" class="form-input" style="width: 100%;">
+                            <option value="">กำลังโหลด...</option>
+                        </select>
+                    </div>
+                    <div style="min-width: 200px;">
+                        <label
+                            style="display: block; margin-bottom: 0.5rem; font-weight: 600; color: var(--color-dark-2);">ช่วงเวลา</label>
+                        <select id="periodSelector" class="form-input" style="width: 100%;">
+                            <option value="7d">7 วันล่าสุด</option>
+                            <option value="30d">30 วันล่าสุด</option>
+                            <option value="90d">90 วันล่าสุด</option>
+                        </select>
+                    </div>
+                    <button id="refreshBtn" class="btn btn-primary" style="height: 44px;">
+                        <i class="fas fa-sync-alt"></i> รีเฟรช
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Summary Stats -->
+        <div class="row mt-4">
+            <div class="col-4">
+                <div class="stat-card">
+                    <div class="stat-icon secondary">💬</div>
+                    <div class="stat-content">
+                        <div class="stat-label">Bot Messages รวม</div>
+                        <div class="stat-value" id="totalBotMessages">-</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-4">
+                <div class="stat-card">
+                    <div class="stat-icon info">🔌</div>
+                    <div class="stat-content">
+                        <div class="stat-label">API Calls รวม</div>
+                        <div class="stat-value" id="totalApiCalls">-</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-4">
+                <div class="stat-card">
+                    <div class="stat-icon warning">💰</div>
+                    <div class="stat-content">
+                        <div class="stat-label">ค่าใช้จ่าย API</div>
+                        <div class="stat-value" id="totalApiCost">-</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Usage Trend Chart -->
+        <div class="card mt-4">
+            <div class="card-header">
+                <h3 class="card-title">แนวโน้มการใช้งาน</h3>
+                <p class="card-subtitle">กราฟแสดงการใช้งาน Bot Messages และ API Calls</p>
+            </div>
+            <div class="card-body">
+                <div style="height: 350px; position: relative;">
+                    <canvas id="usageTrendChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Two Column Layout -->
+        <div class="row mt-4">
+            <!-- API Breakdown -->
+            <div class="col-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">การใช้งาน API แยกตามประเภท</h3>
+                        <p class="card-subtitle">สถิติ API Calls แยกตาม API Type</p>
+                    </div>
+                    <div class="card-body">
+                        <div style="height: 300px; position: relative;">
+                            <canvas id="apiBreakdownChart"></canvas>
+                        </div>
+                        <div id="apiBreakdownTable" class="mt-3">
+                            <!-- API breakdown table will be inserted here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recent Messages -->
+            <div class="col-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">ข้อความล่าสุด</h3>
+                        <p class="card-subtitle">Bot Messages ล่าสุด (50 รายการ)</p>
+                    </div>
+                    <div class="card-body" style="max-height: 500px; overflow-y: auto;">
+                        <div id="recentMessages">
+                            <div style="text-align: center; padding: 2rem; color: var(--color-gray);">
+                                กำลังโหลด...
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="/autobot/assets/js/constants.js"></script>
+    <script src="/autobot/assets/js/auth.js"></script>
+    <script>
+        requireAuth();
+
+        let currentServiceId = null;
+        let usageTrendChart = null;
+        let apiBreakdownChart = null;
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            await loadUserInfo();
+            await loadServices();
+
+            // Event listeners
+            document.getElementById('serviceSelector').addEventListener('change', (e) => {
+                currentServiceId = e.target.value;
+                if (currentServiceId) {
+                    loadUsageData();
+                }
+            });
+
+            document.getElementById('periodSelector').addEventListener('change', () => {
+                if (currentServiceId) {
+                    loadUsageData();
+                }
+            });
+
+            document.getElementById('refreshBtn').addEventListener('click', () => {
+                if (currentServiceId) {
+                    loadUsageData();
+                }
+            });
+        });
+
+        async function loadUserInfo() {
+            const userData = getUserData();
+            if (userData) {
+                document.getElementById('userName').textContent = userData.full_name || userData.email;
+                document.getElementById('userEmail').textContent = userData.email;
+                const initial = (userData.full_name || userData.email).charAt(0).toUpperCase();
+                document.getElementById('userAvatar').textContent = initial;
+            }
+        }
+
+        async function loadServices() {
+            try {
+                const response = await apiCall('/services/list');
+
+                if (response && response.success && response.data.length > 0) {
+                    const selector = document.getElementById('serviceSelector');
+                    selector.innerHTML = '<option value="">เลือกบริการ...</option>';
+
+                    response.data.forEach(service => {
+                        const option = document.createElement('option');
+                        option.value = service.id;
+                        option.textContent = `${service.service_name} (${service.service_type})`;
+                        selector.appendChild(option);
+                    });
+
+                    // Auto-select first service
+                    currentServiceId = response.data[0].id;
+                    selector.value = currentServiceId;
+                    await loadUsageData();
+                } else {
+                    document.getElementById('serviceSelector').innerHTML = '<option value="">ไม่มีบริการ</option>';
+                }
+            } catch (error) {
+                console.error('Failed to load services:', error);
+            }
+        }
+
+        async function loadUsageData() {
+            if (!currentServiceId) return;
+
+            const period = document.getElementById('periodSelector').value;
+
+            try {
+                const response = await apiCall(`/services/${currentServiceId}/usage?period=${period}`);
+
+                if (response && response.success) {
+                    displayUsageData(response.data);
+                }
+            } catch (error) {
+                console.error('Failed to load usage data:', error);
+                showError('ไม่สามารถโหลดข้อมูลได้');
+            }
+        }
+
+        function displayUsageData(data) {
+            const { daily_usage, api_breakdown, recent_messages } = data;
+
+            // Calculate totals
+            let totalBot = 0;
+            let totalApi = 0;
+            daily_usage.forEach(day => {
+                totalBot += parseInt(day.bot_messages || 0);
+                totalApi += parseInt(day.api_calls || 0);
+            });
+
+            let totalCost = 0;
+            api_breakdown.forEach(api => {
+                totalCost += parseFloat(api.total_cost || 0);
+            });
+
+            // Update summary stats
+            document.getElementById('totalBotMessages').textContent = formatNumber(totalBot);
+            document.getElementById('totalApiCalls').textContent = formatNumber(totalApi);
+            document.getElementById('totalApiCost').textContent = formatCurrency(totalCost);
+
+            // Render charts
+            renderUsageTrendChart(daily_usage);
+            renderApiBreakdownChart(api_breakdown);
+
+            // Display recent messages
+            displayRecentMessages(recent_messages);
+        }
+
+        function renderUsageTrendChart(dailyUsage) {
+            const ctx = document.getElementById('usageTrendChart').getContext('2d');
+
+            // Destroy existing chart
+            if (usageTrendChart) {
+                usageTrendChart.destroy();
+            }
+
+            // Prepare data (reverse to show oldest to newest)
+            const labels = dailyUsage.reverse().map(day => {
+                const date = new Date(day.date);
+                return date.toLocaleDateString('th-TH', { month: 'short', day: 'numeric' });
+            });
+            const botData = dailyUsage.map(day => parseInt(day.bot_messages || 0));
+            const apiData = dailyUsage.map(day => parseInt(day.api_calls || 0));
+
+            usageTrendChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Bot Messages',
+                        data: botData,
+                        borderColor: '#10b981',
+                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                        tension: 0.4,
+                        fill: true
+                    }, {
+                        label: 'API Calls',
+                        data: apiData,
+                        borderColor: '#2563eb',
+                        backgroundColor: 'rgba(37, 99, 235, 0.1)',
+                        tension: 0.4,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top'
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderApiBreakdownChart(apiBreakdown) {
+            const ctx = document.getElementById('apiBreakdownChart').getContext('2d');
+
+            // Destroy existing chart
+            if (apiBreakdownChart) {
+                apiBreakdownChart.destroy();
+            }
+
+            if (!apiBreakdown || apiBreakdown.length === 0) {
+                apiBreakdownChart = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['ไม่มีข้อมูล'],
+                        datasets: [{
+                            data: [1],
+                            backgroundColor: ['#e5e7eb']
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false
+                    }
+                });
+                document.getElementById('apiBreakdownTable').innerHTML = '<p style="text-align: center; color: var(--color-gray);">ไม่มีข้อมูลการใช้งาน API</p>';
+                return;
+            }
+
+            const labels = apiBreakdown.map(api => api.api_type);
+            const data = apiBreakdown.map(api => parseInt(api.total_requests || 0));
+            const colors = ['#2563eb', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
+
+            apiBreakdownChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        data: data,
+                        backgroundColor: colors.slice(0, labels.length)
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'bottom'
+                        }
+                    }
+                }
+            });
+
+            // Display API breakdown table
+            let tableHtml = '<table style="width: 100%; font-size: 0.875rem; margin-top: 1rem;"><thead><tr><th style="text-align: left;">API Type</th><th style="text-align: right;">Requests</th><th style="text-align: right;">Avg Time</th><th style="text-align: right;">Cost</th></tr></thead><tbody>';
+
+            apiBreakdown.forEach(api => {
+                tableHtml += `
+                    <tr>
+                        <td><strong>${api.api_type}</strong></td>
+                        <td style="text-align: right;">${formatNumber(api.total_requests)}</td>
+                        <td style="text-align: right;">${api.avg_response_time || 0} ms</td>
+                        <td style="text-align: right;">${formatCurrency(api.total_cost || 0)}</td>
+                    </tr>
+                `;
+            });
+
+            tableHtml += '</tbody></table>';
+            document.getElementById('apiBreakdownTable').innerHTML = tableHtml;
+        }
+
+        function displayRecentMessages(messages) {
+            const container = document.getElementById('recentMessages');
+
+            if (!messages || messages.length === 0) {
+                container.innerHTML = '<p style="text-align: center; color: var(--color-gray);">ไม่มีข้อความ</p>';
+                return;
+            }
+
+            let html = '';
+            messages.forEach(msg => {
+                const isIncoming = msg.direction === 'incoming';
+                const iconColor = isIncoming ? 'var(--color-info)' : 'var(--color-success)';
+                const icon = isIncoming ? '📥' : '📤';
+
+                html += `
+                    <div style="padding: 0.75rem; margin-bottom: 0.5rem; background: var(--color-light); border-radius: var(--radius-md); border-left: 3px solid ${iconColor};">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 0.25rem;">
+                            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                <span>${icon}</span>
+                                <strong style="font-size: 0.75rem; color: var(--color-dark-2);">${msg.direction === 'incoming' ? 'Incoming' : 'Outgoing'}</strong>
+                                <span style="font-size: 0.75rem; color: var(--color-gray);">${msg.message_type}</span>
+                            </div>
+                            <span style="font-size: 0.75rem; color: var(--color-gray);">${formatRelativeTime(msg.created_at)}</span>
+                        </div>
+                        <div style="font-size: 0.875rem; color: var(--color-dark);">${msg.message_content || '<em>No content</em>'}</div>
+                    </div>
+                `;
+            });
+
+            container.innerHTML = html;
+        }
+
+        function showError(message) {
+            document.getElementById('totalBotMessages').textContent = '-';
+            document.getElementById('totalApiCalls').textContent = '-';
+            document.getElementById('totalApiCost').textContent = '-';
+            alert(message);
+        }
+    </script>
+</body>
+
+</html>

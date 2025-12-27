@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="th">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>โปรไฟล์ - AI Automation</title>
+    <script>
+        // Local XAMPP override - remove this block for Cloud Run deployment
+        window.BASE_PATH_OVERRIDE = '/autobot';
+    </script>
+    <link rel="stylesheet" href="/autobot/assets/css/style.css">
+    <link rel="stylesheet" href="/autobot/assets/css/responsive-fixes.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+</head>
+
+<body>
+    <!-- Sidebar -->
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <a href="#" onclick="window.location.href = PAGES.USER_DASHBOARD; return false;" class="sidebar-logo">AI Automate</a>
+            <p style="font-size: 0.75rem; color: var(--color-gray);">AI Automation Platform</p>
+        </div>
+
+        <div class="sidebar-user">
+            <div class="sidebar-user-avatar" id="userAvatar">U</div>
+            <div class="sidebar-user-info">
+                <div class="sidebar-user-name" id="userName">Loading...</div>
+                <div class="sidebar-user-email" id="userEmail"></div>
+            </div>
+        </div>
+
+        <nav>
+            <ul class="sidebar-nav">
+                <li class="sidebar-nav-item">
+                    <a href="#" onclick="window.location.href = PAGES.USER_DASHBOARD; return false;" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">📊</span>
+                        <span>Dashboard</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="#" onclick="window.location.href = PAGES.USER_SERVICES; return false;" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">🤖</span>
+                        <span>บริการของฉัน</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="#" onclick="window.location.href = PAGES.USER_USAGE; return false;" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">📈</span>
+                        <span>การใช้งาน</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="/autobot/payment.html" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">💳</span>
+                        <span>ชำระเงิน</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="#" onclick="window.location.href = PAGES.USER_BILLING; return false;" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">📄</span>
+                        <span>ใบแจ้งหนี้</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="# onclick="window.location.href = PAGES.USER_PROFILE; return false;" class="sidebar-nav-link active">
+                        <span class="sidebar-nav-icon">👤</span>
+                        <span>โปรไฟล์</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item" style="margin-top: auto; padding-top: 2rem;">
+                    <a href="#" onclick="logout(); return false;" class="sidebar-nav-link"
+                        style="color: var(--color-danger);">
+                        <span class="sidebar-nav-icon">🚪</span>
+                        <span>ออกจากระบบ</span>
+                    </a>
+                </li>
+            </ul>
+        </nav>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <!-- Page Header -->
+        <div class="page-header">
+            <h1 class="page-title">ตั้งค่าโปรไฟล์</h1>
+            <p class="page-subtitle">จัดการข้อมูลบัญชีของคุณ</p>
+        </div>
+
+        <div class="row">
+            <!-- Account Information -->
+            <div class="col-8">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">ข้อมูลบัญชี</h3>
+                        <p class="card-subtitle">อัพเดทข้อมูลส่วนตัวของคุณ</p>
+                    </div>
+                    <div class="card-body">
+                        <form id="profileForm">
+                            <div class="form-group">
+                                <label class="form-label">ชื่อ-นามสกุล</label>
+                                <input type="text" id="fullName" class="form-control" placeholder="John Doe">
+                            </div>
+
+                            <div class="form-group">
+                                <label class="form-label">อีเมล</label>
+                                <input type="email" id="email" class="form-control" placeholder="your@email.com"
+                                    disabled>
+                                <small
+                                    style="color: var(--color-gray); font-size: 0.875rem;">ไม่สามารถเปลี่ยนอีเมลได้</small>
+                            </div>
+
+                            <div class="form-group">
+                                <label class="form-label">เบอร์โทรศัพท์</label>
+                                <input type="tel" id="phone" class="form-control" placeholder="0812345678">
+                            </div>
+
+                            <div class="form-group">
+                                <label class="form-label">ชื่อบริษัท</label>
+                                <input type="text" id="companyName" class="form-control" placeholder="บริษัท ABC จำกัด">
+                            </div>
+
+                            <div id="profileError" class="form-error hidden"></div>
+
+                            <button type="submit" class="btn btn-primary">บันทึกการเปลี่ยนแปลง</button>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Change Password -->
+                <div class="card mt-4">
+                    <div class="card-header">
+                        <h3 class="card-title">เปลี่ยนรหัสผ่าน</h3>
+                        <p class="card-subtitle">อัพเดทรหัสผ่านของคุณ</p>
+                    </div>
+                    <div class="card-body">
+                        <form id="passwordForm">
+                            <div class="form-group">
+                                <label class="form-label">รหัสผ่านปัจจุบัน</label>
+                                <input type="password" id="currentPassword" class="form-control">
+                            </div>
+
+                            <div class="form-group">
+                                <label class="form-label">รหัสผ่านใหม่</label>
+                                <input type="password" id="newPassword" class="form-control">
+                            </div>
+
+                            <div class="form-group">
+                                <label class="form-label">ยืนยันรหัสผ่านใหม่</label>
+                                <input type="password" id="confirmPassword" class="form-control">
+                            </div>
+
+                            <div id="passwordError" class="form-error hidden"></div>
+
+                            <button type="submit" class="btn btn-secondary">เปลี่ยนรหัสผ่าน</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Account Info Sidebar -->
+            <div class="col-4">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">ข้อมูลบัญชี</h3>
+                    </div>
+                    <div class="card-body">
+                        <div
+                            style="text-align: center; padding-bottom: 1.5rem; border-bottom: 1px solid var(--color-light-3);">
+                            <div style="width: 80px; height: 80px; margin: 0 auto 1rem; border-radius: 50%; background: var(--gradient-primary); display: flex; align-items: center; justify-content: center; font-size: 2rem; color: white; font-weight: 700;"
+                                id="profileAvatar">
+                                U
+                            </div>
+                            <div style="font-weight: 600; font-size: 1.125rem;" id="profileName">Loading...</div>
+                            <div style="color: var(--color-gray); font-size: 0.875rem; margin-top: 0.25rem;"
+                                id="profileEmail"></div>
+                        </div>
+
+                        <div style="margin-top: 1.5rem;">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 1rem;">
+                                <span style="color: var(--color-gray);">สถานะบัญชี:</span>
+                                <span class="badge badge-success" id="accountStatus">Active</span>
+                            </div>
+
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 1rem;">
+                                <span style="color: var(--color-gray);">สมัครสมาชิกเมื่อ:</span>
+                                <strong id="memberSince">-</strong>
+                            </div>
+
+                            <div style="display: flex; justify-content: space-between;">
+                                <span style="color: var(--color-gray);">เข้าสู่ระบบล่าสุด:</span>
+                                <strong id="lastLogin">-</strong>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card mt-3">
+                    <div class="card-body" style="background: var(--color-light); border-radius: var(--radius-lg);">
+                        <strong style="display: block; margin-bottom: 0.5rem;">ต้องการความช่วยเหลือ?</strong>
+                        <p style="font-size: 0.875rem; color: var(--color-gray); margin-bottom: 1rem;">
+                            ติดต่อทีมสนับสนุนของเราได้ตลอด 24/7
+                        </p>
+                        <a href="mailto:support@aiautomation.com" class="btn btn-outline btn-block">
+                            ติดต่อฝ่ายสนับสนุน
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="/autobot/assets/js/constants.js"></script>
+    <script src="/autobot/assets/js/auth.js"></script>
+    <script>
+        requireAuth();
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            await loadUserProfile();
+        });
+
+        async function loadUserProfile() {
+            try {
+                const response = await apiCall('/auth/me');
+
+                if (response && response.success) {
+                    displayUserProfile(response.data);
+                }
+            } catch (error) {
+                console.error('Failed to load profile:', error);
+            }
+        }
+
+        function displayUserProfile(user) {
+            // Sidebar
+            const initial = (user.full_name || user.email).charAt(0).toUpperCase();
+            document.getElementById('userAvatar').textContent = initial;
+            document.getElementById('userName').textContent = user.full_name || user.email;
+            document.getElementById('userEmail').textContent = user.email;
+
+            // Profile card
+            document.getElementById('profileAvatar').textContent = initial;
+            document.getElementById('profileName').textContent = user.full_name || user.email;
+            document.getElementById('profileEmail').textContent = user.email;
+            document.getElementById('accountStatus').textContent = user.status === 'active' ? 'Active' : 'Inactive';
+            document.getElementById('memberSince').textContent = formatDate(user.created_at).split(' ')[0];
+            document.getElementById('lastLogin').textContent = user.last_login ? formatDate(user.last_login).split(' ')[0] : 'ไม่ทราบ';
+
+            // Form fields
+            document.getElementById('fullName').value = user.full_name || '';
+            document.getElementById('email').value = user.email;
+            document.getElementById('phone').value = user.phone || '';
+            document.getElementById('companyName').value = user.company_name || '';
+        }
+
+        // Profile form submission (demo - API endpoint not implemented yet)
+        document.getElementById('profileForm')?.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            showLoading();
+
+            // Simulate API call
+            setTimeout(() => {
+                hideLoading();
+                showToast('บันทึกข้อมูลสำเร็จ', 'success');
+            }, 1000);
+        });
+
+        // Password form submission (demo)
+        document.getElementById('passwordForm')?.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const currentPassword = document.getElementById('currentPassword').value;
+            const newPassword = document.getElementById('newPassword').value;
+            const confirmPassword = document.getElementById('confirmPassword').value;
+
+            // Validate
+            if (!currentPassword || !newPassword || !confirmPassword) {
+                document.getElementById('passwordError').textContent = 'กรุณากรอกข้อมูลให้ครบถ้วน';
+                document.getElementById('passwordError').classList.remove('hidden');
+                return;
+            }
+
+            if (newPassword !== confirmPassword) {
+                document.getElementById('passwordError').textContent = 'รหัสผ่านไม่ตรงกัน';
+                document.getElementById('passwordError').classList.remove('hidden');
+                return;
+            }
+
+            if (newPassword.length < 6) {
+                document.getElementById('passwordError').textContent = 'รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร';
+                document.getElementById('passwordError').classList.remove('hidden');
+                return;
+            }
+
+            showLoading();
+
+            // Simulate API call
+            setTimeout(() => {
+                hideLoading();
+                showToast('เปลี่ยนรหัสผ่านสำเร็จ', 'success');
+                document.getElementById('passwordForm').reset();
+            }, 1000);
+        });
+    </script>
+</body>
+
+</html>

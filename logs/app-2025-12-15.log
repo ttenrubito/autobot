@@ -1,0 +1,1 @@
+{"timestamp":"2025-12-15 10:45:20","level":"WARNING","request_id":"req_693f84501de4c5.10584759","message":"LINE webhook signature verification failed","context":[],"user_ip":"127.0.0.1","user_agent":"curl\/7.68.0","method":"POST","uri":"\/autobot\/api\/webhooks\/line.php"}

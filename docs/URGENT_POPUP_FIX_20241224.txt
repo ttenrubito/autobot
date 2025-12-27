@@ -1,0 +1,173 @@
+═══════════════════════════════════════════════════════════
+🚨 URGENT FIXES - Payment History Popup & Images
+═══════════════════════════════════════════════════════════
+Date: 2024-12-24 10:10 AM
+Status: DEPLOYING NOW
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+## ISSUES FOUND (from screenshot)
+
+1. ❌ **Slip Images Not Showing**
+   - Paths in DB still have: `/autobot/public/uploads/`
+   - Records affected: ID 19, 20
+
+2. ❌ **Popup Layout Broken**
+   - Not centered on screen
+   - Content cramped/messy
+   - Layout not organized properly
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+## FIXES APPLIED ✅
+
+### 1. Database Fix (SQL)
+```sql
+UPDATE payments 
+SET slip_image = REPLACE(slip_image, '/autobot/public/uploads/', '/uploads/') 
+WHERE slip_image LIKE '/autobot/public/uploads/%';
+```
+
+**Before:**
+- ID 19: `/autobot/public/uploads/slips/test1_payment4.png` ❌
+- ID 20: `/autobot/public/uploads/slips/test1_payment5.png` ❌
+
+**After:**
+- ID 19: `/uploads/slips/test1_payment4.png` ✅
+- ID 20: `/uploads/slips/test1_payment5.png` ✅
+
+### 2. Popup Layout Fix (CSS)
+
+**Changes in payment-history.php:**
+
+```css
+/* BEFORE */
+.payment-modal {
+    padding: 2rem;  /* Too much padding */
+}
+
+.payment-modal-dialog {
+    max-width: 1200px;  /* Too narrow */
+    max-height: calc(100vh - 4rem);  /* Complex calc */
+}
+
+/* AFTER */
+.payment-modal {
+    padding: 1rem;  /* Better spacing */
+    align-items: center;  /* Force center */
+    justify-content: center;  /* Force center */
+}
+
+.payment-modal-dialog {
+    max-width: 1400px;  /* Wider for better layout */
+    max-height: 90vh;  /* Simpler, more space */
+    margin: auto;  /* Extra centering */
+}
+```
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+## DEPLOYMENT STATUS
+
+✅ SQL Update: EXECUTED (gcloud sql connect)
+🔄 Code Deploy: IN PROGRESS (deploy_app_to_production.sh)
+
+Files Modified:
+  - public/payment-history.php (CSS fixes)
+
+ETA: 5-10 minutes
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+## TESTING INSTRUCTIONS
+
+URL: https://autobot.boxdesign.in.th/payment-history.php
+
+### Test 1: Slip Images
+1. Open payment history
+2. Click on payment ID 19 or 20
+3. ✅ Slip image should load correctly
+4. ✅ No 404 errors in DevTools Network tab
+
+### Test 2: Popup Layout  
+1. Click any payment card
+2. ✅ Popup appears centered on screen
+3. ✅ Content organized in 2 equal columns
+4. ✅ Text not cramped
+5. ✅ Slip image on right side
+6. ✅ All sections visible and readable
+
+### Expected Layout:
+```
+┌─────────────────────────────────────────┐
+│  🔍 ตรวจสอบการชำระเงิน          [X]     │
+├─────────────────────────────────────────┤
+│                                           │
+│  ┌──────────────┐  ┌──────────────┐     │
+│  │              │  │              │     │
+│  │  Profile     │  │   Slip       │     │
+│  │  Details     │  │   Image      │     │
+│  │  Chat        │  │   (right)    │     │
+│  │  System      │  │              │     │
+│  │              │  │              │     │
+│  │  (left 50%)  │  │  (right 50%) │     │
+│  └──────────────┘  └──────────────┘     │
+│                                           │
+│  <- CENTERED ON SCREEN ->                │
+└─────────────────────────────────────────┘
+```
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+## WHAT WAS WRONG
+
+### Slip Images
+- Database had old paths with `/autobot/public` prefix
+- These paths don't exist on Cloud Run
+- Apache Alias only works for `/uploads/` prefix
+
+### Popup Layout
+- Padding too large (2rem → 1rem)
+- Max-width too narrow (1200px → 1400px)
+- Missing explicit centering (added `margin: auto`)
+- Max-height calculation complex (simplified to 90vh)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+## VERIFICATION
+
+After deployment completes (~10 min):
+
+```bash
+# Check deployment status
+gcloud run services describe autobot \
+  --region=asia-southeast1 \
+  --format="value(status.url)"
+
+# Test the page
+curl -I https://autobot.boxdesign.in.th/payment-history.php
+
+# Check if images load
+curl -I https://autobot.boxdesign.in.th/uploads/slips/test1_payment4.png
+curl -I https://autobot.boxdesign.in.th/uploads/slips/test1_payment5.png
+```
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+## SUMMARY
+
+🔧 2 Critical Fixes:
+  1. ✅ Database slip paths corrected (2 records)
+  2. ✅ Popup CSS improved (centered + wider)
+
+📊 Impact:
+  - All slip images will load correctly
+  - Popup will be centered and readable
+  - Professional layout maintained
+
+⏱️ Deployment: ~10 minutes
+🎯 Ready for: User testing
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Next: Wait for deployment, then test immediately!

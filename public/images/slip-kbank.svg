@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="800" height="1100" viewBox="0 0 800 1100" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="kbank-bg" x1="0" y1="0" x2="800" y2="1100">
+      <stop stop-color="#138F2D"/>
+      <stop offset="1" stop-color="#0A5D1E"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="800" height="1100" fill="#F5F5F5"/>
+  
+  <!-- Header -->
+  <rect width="800" height="180" fill="url(#kbank-bg)"/>
+  <text x="50" y="80" font-family="Arial, sans-serif" font-size="36" font-weight="bold" fill="#FFFFFF">KBANK</text>
+  <text x="50" y="120" font-family="Arial, sans-serif" font-size="18" fill="#FFFFFF">ธนาคารกสิกรไทย</text>
+  <text x="50" y="150" font-family="Arial, sans-serif" font-size="14" fill="#D0F0D0">Slip ยืนยันการโอนเงิน</text>
+  
+  <!-- Transaction Details Card -->
+  <rect x="40" y="220" width="720" height="800" rx="16" fill="#FFFFFF" stroke="#E0E0E0" stroke-width="2"/>
+  
+  <!-- Status Badge -->
+  <rect x="580" y="250" width="140" height="40" rx="20" fill="#10B981"/>
+  <text x="610" y="278" font-family="Arial, sans-serif" font-size="16" font-weight="bold" fill="#FFFFFF">สำเร็จ</text>
+  
+  <!-- Transaction Info -->
+  <text x="80" y="290" font-family="Arial, sans-serif" font-size="14" fill="#666666">วันที่-เวลาทำรายการ</text>
+  <text x="80" y="320" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#000000">23 ธ.ค. 2568 เวลา 14:32:15</text>
+  
+  <line x1="80" y1="350" x2="720" y2="350" stroke="#E0E0E0" stroke-width="1"/>
+  
+  <!-- Amount -->
+  <text x="80" y="390" font-family="Arial, sans-serif" font-size="14" fill="#666666">จำนวนเงิน</text>
+  <text x="80" y="440" font-family="Arial, sans-serif" font-size="48" font-weight="bold" fill="#138F2D">฿ 1,490.00</text>
+  
+  <line x1="80" y1="480" x2="720" y2="480" stroke="#E0E0E0" stroke-width="1"/>
+  
+  <!-- From Account -->
+  <text x="80" y="520" font-family="Arial, sans-serif" font-size="14" fill="#666666">จาก บัญชี</text>
+  <text x="80" y="550" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#000000">นาย ทดสอบ ระบบ</text>
+  <text x="80" y="580" font-family="Arial, sans-serif" font-size="16" fill="#666666">xxx-x-x1234-x</text>
+  
+  <line x1="80" y1="610" x2="720" y2="610" stroke="#E0E0E0" stroke-width="1"/>
+  
+  <!-- To Account -->
+  <text x="80" y="650" font-family="Arial, sans-serif" font-size="14" fill="#666666">ไปยัง บัญชี</text>
+  <text x="80" y="680" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#000000">บริษัท ออโต้บอท จำกัด</text>
+  <text x="80" y="710" font-family="Arial, sans-serif" font-size="16" fill="#666666">xxx-x-x5678-x</text>
+  
+  <line x1="80" y1="740" x2="720" y2="740" stroke="#E0E0E0" stroke-width="1"/>
+  
+  <!-- Reference -->
+  <text x="80" y="780" font-family="Arial, sans-serif" font-size="14" fill="#666666">เลขที่อ้างอิง</text>
+  <text x="80" y="810" font-family="Arial, sans-serif" font-size="16" font-weight="600" fill="#000000">KB20251223143215ABC</text>
+  
+  <text x="80" y="850" font-family="Arial, sans-serif" font-size="14" fill="#666666">หมายเหตุ</text>
+  <text x="80" y="880" font-family="Arial, sans-serif" font-size="16" fill="#000000">ชำระค่าบริการ ORDER-CHAT-00123</text>
+  
+  <!-- Footer -->
+  <text x="80" y="980" font-family="Arial, sans-serif" font-size="12" fill="#999999">สอบถามข้อมูลเพิ่มเติม โทร. 02-8888888</text>
+  <text x="80" y="1005" font-family="Arial, sans-serif" font-size="12" fill="#999999">สลิปนี้เป็นหลักฐานการโอนเงินอิเล็กทรอนิกส์</text>
+</svg>

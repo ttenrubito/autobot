@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="th">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- Auto-detect environment and load CSS -->
+    <script>
+        (function () {
+            var host = window.location.hostname;
+            var path = window.location.pathname;
+            var isLocal = (host === 'localhost' || host === '127.0.0.1') && path.includes('/autobot/');
+            var base = isLocal ? '/autobot' : '';
+            var v = '1.0.1'; // Version for cache busting
+
+            // Create stylesheet links
+            var styles = [
+                base + '/assets/css/style.css?v=' + v,
+                base + '/assets/css/responsive-fixes.css?v=' + v
+            ];
+
+            styles.forEach(function (href) {
+                var link = document.createElement('link');
+                link.rel = 'stylesheet';
+                link.href = href;
+                document.head.appendChild(link);
+            });
+
+            // Immediately load path-config.js (for API endpoints)
+            var script = document.createElement('script');
+            script.src = base + '/assets/js/path-config.js?v=' + v;
+            document.head.appendChild(script);
+        })();
+    </script>
+
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">

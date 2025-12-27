@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="th">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>เข้าสู่ระบบ - AI Automation</title>
+
+    <!-- Load path-config in a way that works in BOTH localhost (/autobot) and production (root) -->
+    <script>
+        (function () {
+            var isLocal = (location.hostname === 'localhost' || location.hostname === '127.0.0.1');
+            var base = '';
+            if (isLocal && location.pathname.indexOf('/autobot/') === 0) base = '/autobot';
+
+            // Keep as single source of truth for path-config
+            window.BASE_PATH_OVERRIDE = base;
+
+            function loadScript(src, onload) {
+                var s = document.createElement('script');
+                s.src = src;
+                s.onload = onload;
+                s.onerror = function () { console.error('[login] Failed to load script:', src); };
+                document.head.appendChild(s);
+            }
+
+            // Load path-config.js from the right base
+            loadScript(base + '/assets/js/path-config.js', function () {
+                // Apply CSS after PATH is ready
+                var style = document.getElementById('appStyle');
+                var fixes = document.getElementById('responsiveFixes');
+                if (style && window.PATH) style.href = PATH.asset('assets/css/style.css');
+                if (fixes && window.PATH) fixes.href = PATH.asset('assets/css/responsive-fixes.css');
+            });
+        })();
+    </script>
+
+    <!-- NOTE: do not set href here; it's filled after path-config loads -->
+    <link id="appStyle" rel="stylesheet" href="">
+    <link id="responsiveFixes" rel="stylesheet" href="">
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/png" id="favicon">
+    <script>
+        // Set favicon dynamically using PATH helper
+        if (typeof PATH !== 'undefined' && PATH.image) {
+            document.getElementById('favicon').href = PATH.image('logo1.png');
+        }
+    </script>
+
+</head>
+
+<body>
+    <div class="login-container">
+        <div class="login-card fade-in">
+            <div class="login-header">
+                <div class="login-logo" style="text-align: center; margin-bottom: 1rem;">
+                    <img id="logoImage" alt="AI Automation Logo" style="max-width: 200px; height: auto;">
+                </div>
+                <p class="login-tagline">บริการ AI Automation สำหรับธุรกิจ</p>
+            </div>
+
+            <form id="loginForm" autocomplete="off">
+                <div class="form-group">
+                    <label for="email" class="form-label">อีเมล</label>
+                    <input type="email" id="email" name="email" class="form-control" placeholder="your@email.com"
+                        required>
+                    <div id="emailError" class="form-error hidden"></div>
+                </div>
+
+                <div class="form-group">
+                    <label for="password" class="form-label">รหัสผ่าน</label>
+                    <input type="password" id="password" name="password" class="form-control" placeholder="••••••••"
+                        autocomplete="new-password" required>
+                    <div id="passwordError" class="form-error hidden"></div>
+                </div>
+
+                <div class="form-group">
+                    <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                        <input type="checkbox" id="remember" name="remember">
+                        <span style="font-size: 0.875rem; color: var(--color-dark-3);">จดจำการเข้าสู่ระบบ</span>
+                    </label>
+                </div>
+
+                <div id="loginError" class="form-error hidden"></div>
+
+                <button type="submit" class="btn btn-primary btn-block btn-lg" id="loginBtn">
+                    <span id="loginBtnText">เข้าสู่ระบบ</span>
+                    <span id="loginSpinner" class="spinner hidden" style="display: none;"></span>
+                </button>
+
+                <div class="text-center mt-3">
+                    <a href="forgot-password.html" style="color: var(--color-primary); font-size: 0.875rem;">
+                        ลืมรหัสผ่าน?
+                    </a>
+                </div>
+            </form>
+
+            <div class="text-center mt-4" style="padding-top: 1.5rem; border-top: 1px solid var(--color-light-3);">
+                <p style="font-size: 0.875rem; color: var(--color-gray);">
+                    ยังไม่มีบัญชี?
+                    <a href="mailto:contact@aiautomation.com" style="color: var(--color-primary); font-weight: 600;">
+                        ติดต่อเรา
+                    </a>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Wait for path-config.js to load before using PATH
+        window.addEventListener('load', function () {
+            // Set logo image using path-config
+            var logoImg = document.getElementById('logoImage');
+            if (logoImg && typeof PATH !== 'undefined') {
+                // PATH.image expects a path relative to /images
+                logoImg.src = PATH.image('logo1.png');
+            }
+        });
+
+        // Login form handler
+        document.getElementById('loginForm').addEventListener('submit', async function (e) {
+            e.preventDefault();
+
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const remember = document.getElementById('remember').checked;
+
+            const loginError = document.getElementById('loginError');
+            const loginBtn = document.getElementById('loginBtn');
+            const loginBtnText = document.getElementById('loginBtnText');
+            const loginSpinner = document.getElementById('loginSpinner');
+
+            // Show loading
+            loginBtn.disabled = true;
+            loginBtnText.classList.add('hidden');
+            loginSpinner.classList.remove('hidden');
+            loginError.classList.add('hidden');
+
+            try {
+                // Use API_ENDPOINTS from path-config.js (auto-detects environment)
+                const response = await fetch(API_ENDPOINTS.AUTH_LOGIN, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const data = await response.json();
+                console.log('Login response:', data);
+
+                if (data.success && data.data) {
+                    // Save to localStorage (user-specific keys)
+                    localStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, data.data.token);
+                    localStorage.setItem(STORAGE_KEYS.USER_DATA, JSON.stringify(data.data.user));
+
+                    // Redirect to user dashboard using auto-detected path
+                    window.location.href = PAGES.USER_DASHBOARD;
+                } else {
+                    loginError.textContent = data.message || 'อีเมลหรือรหัสผ่านไม่ถูกต้อง';
+                    loginError.classList.remove('hidden');
+                }
+            } catch (error) {
+                console.error('Login error:', error);
+                loginError.textContent = 'เกิดข้อผิดพลาดในการเข้าสู่ระบบ';
+                loginError.classList.remove('hidden');
+            } finally {
+                // Reset button
+                loginBtn.disabled = false;
+                loginBtnText.classList.remove('hidden');
+                loginSpinner.classList.add('hidden');
+            }
+        });
+    </script>
+</body>
+
+</html>

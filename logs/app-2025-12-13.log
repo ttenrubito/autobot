@@ -1,0 +1,1 @@
+{"timestamp":"2025-12-13 10:38:03","level":"ERROR","request_id":"req_693cdf9b7892f0.78357143","message":"Gateway message error: Database query failed","context":[],"user_ip":"127.0.0.1","user_agent":"curl\/7.68.0","method":"POST","uri":"\/autobot\/api\/gateway\/message.php"}

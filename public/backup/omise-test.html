@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="th">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ทดสอบการชำระเงิน Omise</title>
+    <script>
+        // Local XAMPP override - remove this block for Cloud Run deployment
+        window.BASE_PATH_OVERRIDE = '/autobot';
+    </script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 2rem;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            padding: 2rem;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        h1 {
+            color: #667eea;
+            margin-bottom: 0.5rem;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 2rem;
+        }
+
+        .step {
+            background: #f8f9fa;
+            padding: 1.5rem;
+            border-radius: 12px;
+            margin-bottom: 1.5rem;
+            border-left: 4px solid #667eea;
+        }
+
+        .step h2 {
+            color: #333;
+            font-size: 1.25rem;
+            margin-bottom: 1rem;
+        }
+
+        .form-group {
+            margin-bottom: 1rem;
+        }
+
+        label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            color: #333;
+        }
+
+        input,
+        select {
+            width: 100%;
+            padding: 0.75rem;
+            border: 2px solid #e1e8ed;
+            border-radius: 8px;
+            font-size: 1rem;
+            transition: all 0.3s;
+        }
+
+        input:focus,
+        select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 1rem 2rem;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+            width: 100%;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .result {
+            background: #d4edda;
+            border: 2px solid #28a745;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-top: 1rem;
+            display: none;
+        }
+
+        .result.show {
+            display: block;
+        }
+
+        .error {
+            background: #f8d7da;
+            border: 2px solid #dc3545;
+            color: #721c24;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-top: 1rem;
+            display: none;
+        }
+
+        .error.show {
+            display: block;
+        }
+
+        .success-icon {
+            font-size: 3rem;
+            text-align: center;
+            margin-bottom: 1rem;
+        }
+
+        code {
+            background: #f1f3f5;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            color: #e83e8c;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .info-box {
+            background: #e7f3ff;
+            border-left: 4px solid #2196F3;
+            padding: 1rem;
+            margin: 1rem 0;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>🧪 ทดสอบการชำระเงิน Omise</h1>
+        <p class="subtitle">ทดสอบเพิ่มบัตรและตัดเงินโดยไม่ต้อง login</p>
+
+        <!-- Step 1: เพิ่มบัตร -->
+        <div class="step">
+            <h2>ขั้นตอนที่ 1: เพิ่มบัตรเครดิต</h2>
+
+            <div class="info-box">
+                <strong>💳 ข้อมูลบัตรทดสอบ Omise:</strong><br>
+                • หมายเลขบัตร: <code>4242 4242 4242 4242</code><br>
+                • ชื่อ: <code>TEST USER</code><br>
+                • วันหมดอายุ: <code>12/25</code><br>
+                • CVV: <code>123</code>
+            </div>
+
+            <div class="form-group">
+                <label>User ID (ทดสอบด้วย user_id=2)</label>
+                <input type="number" id="userId" value="2" min="1">
+            </div>
+
+            <div class="form-group">
+                <label>หมายเลขบัตร</label>
+                <input type="text" id="cardNumber" placeholder="4242 4242 4242 4242" maxlength="19"
+                    value="4242424242424242">
+            </div>
+
+            <div class="form-group">
+                <label>ชื่อบนบัตร</label>
+                <input type="text" id="cardName" placeholder="TEST USER" value="TEST USER">
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                <div class="form-group">
+                    <label>วันหมดอายุ (MM/YY)</label>
+                    <input type="text" id="cardExpiry" placeholder="12/25" value="1225" maxlength="5">
+                </div>
+                <div class="form-group">
+                    <label>CVV</label>
+                    <input type="text" id="cardCVV" placeholder="123" value="123" maxlength="4">
+                </div>
+            </div>
+
+            <button onclick="addCard()" id="addCardBtn">
+                เพิ่มบัตรเครดิต
+            </button>
+
+            <div class="result" id="cardResult"></div>
+            <div class="error" id="cardError"></div>
+        </div>
+
+        <!-- Step 2: ตัดเงิน -->
+        <div class="step">
+            <h2>ขั้นตอนที่ 2: ทดสอบตัดเงิน</h2>
+
+            <div class="form-group">
+                <label>จำนวนเงิน (บาท)</label>
+                <input type="number" id="amount" placeholder="100" value="100" min="20" step="0.01">
+            </div>
+
+            <div class="form-group">
+                <label>รายละเอียด</label>
+                <input type="text" id="description" placeholder="ทดสอบการชำระเงิน" value="ทดสอบการชำระเงิน">
+            </div>
+
+            <button onclick="createCharge()" id="chargeBtn">
+                ตัดเงินทดสอบ
+            </button>
+
+            <div class="result" id="chargeResult"></div>
+            <div class="error" id="chargeError"></div>
+        </div>
+
+        <!-- Step 3: ตรวจสอบ -->
+        <div class="step">
+            <h2>ขั้นตอนที่ 3: ตรวจสอบใน Omise Dashboard</h2>
+            <p style="margin-bottom: 1rem;">เปิดหน้า Omise Dashboard เพื่อดูผลลัพธ์:</p>
+            <a href="https://dashboard.omise.co/test/charges" target="_blank"
+                style="display: inline-block; background: #00bfa5; color: white; padding: 0.75rem 1.5rem; border-radius: 8px; text-decoration: none; font-weight: 600;">
+                🔍 เปิด Omise Dashboard
+            </a>
+        </div>
+    </div>
+
+    <script src="https://cdn.omise.co/omise.js"></script>
+    <script>
+        // ตั้งค่า Omise Public Key
+        Omise.setPublicKey('pkey_test_654hy8uu12f7afruxgn');
+
+        // ฟังก์ชันสร้าง Token จาก Omise
+        function createOmiseToken() {
+            return new Promise((resolve, reject) => {
+                const cardNumber = document.getElementById('cardNumber').value.replace(/\s/g, '');
+                const cardName = document.getElementById('cardName').value;
+                const cardExpiry = document.getElementById('cardExpiry').value;
+                const cardCVV = document.getElementById('cardCVV').value;
+
+                // แยก expiry
+                const month = cardExpiry.substring(0, 2);
+                const year = '20' + cardExpiry.substring(2, 4);
+
+                Omise.createToken('card', {
+                    name: cardName,
+                    number: cardNumber,
+                    expiration_month: parseInt(month),
+                    expiration_year: parseInt(year),
+                    security_code: cardCVV
+                }, function (statusCode, response) {
+                    if (statusCode === 200) {
+                        resolve(response.id);
+                    } else {
+                        reject(response.message || 'Failed to create token');
+                    }
+                });
+            });
+        }
+
+        // ฟังก์ชันเพิ่มบัตร
+        async function addCard() {
+            const btn = document.getElementById('addCardBtn');
+            const resultDiv = document.getElementById('cardResult');
+            const errorDiv = document.getElementById('cardError');
+            const userId = document.getElementById('userId').value;
+
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading"></span> กำลังประมวลผล...';
+            resultDiv.classList.remove('show');
+            errorDiv.classList.remove('show');
+
+            try {
+                // 1. สร้าง Omise Token
+                const omiseToken = await createOmiseToken();
+                console.log('Omise Token:', omiseToken);
+
+                // 2. เรียก API เพิ่มบัตร (ไม่ต้อง auth)
+                const response = await fetch(`/autobot/api/payment/add-card-test?user_id=${userId}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        omise_token: omiseToken,
+                        set_default: true
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    resultDiv.innerHTML = `
+                        <div class="success-icon">✅</div>
+                        <h3>เพิ่มบัตรสำเร็จ!</h3>
+                        <p><strong>Payment Method ID:</strong> ${data.data.id}</p>
+                        <p><strong>บัตร:</strong> ${data.data.card_brand} •••• ${data.data.card_last4}</p>
+                        <p><strong>สถานะ:</strong> บัตรหลัก ✓</p>
+                    `;
+                    resultDiv.classList.add('show');
+                } else {
+                    throw new Error(data.message || 'Failed to add card');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                errorDiv.textContent = '❌ เกิดข้อผิดพลาด: ' + error.message;
+                errorDiv.classList.add('show');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = 'เพิ่มบัตรเครดิต';
+            }
+        }
+
+        // ฟังก์ชันตัดเงิน
+        async function createCharge() {
+            const btn = document.getElementById('chargeBtn');
+            const resultDiv = document.getElementById('chargeResult');
+            const errorDiv = document.getElementById('chargeError');
+            const userId = document.getElementById('userId').value;
+            const amount = document.getElementById('amount').value;
+            const description = document.getElementById('description').value;
+
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading"></span> กำลังประมวลผล...';
+            resultDiv.classList.remove('show');
+            errorDiv.classList.remove('show');
+
+            try {
+                const response = await fetch(`/autobot/api/payment/create-charge-test?user_id=${userId}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        amount: parseFloat(amount),
+                        description: description
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    resultDiv.innerHTML = `
+                        <div class="success-icon">💳</div>
+                        <h3>ชำระเงินสำเร็จ!</h3>
+                        <p><strong>Charge ID:</strong> <code>${data.data.omise_charge_id}</code></p>
+                        <p><strong>Transaction ID:</strong> ${data.data.transaction_id}</p>
+                        <p><strong>จำนวนเงิน:</strong> <span style="font-size: 1.5rem; color: #28a745;">฿${data.data.amount}</span></p>
+                        <p><strong>สถานะ:</strong> ${data.data.status}</p>
+                        <hr style="margin: 1rem 0;">
+                        <p><strong>ตรวจสอบใน Omise Dashboard:</strong></p>
+                        <a href="https://dashboard.omise.co/test/charges/${data.data.omise_charge_id}" target="_blank" style="color: #667eea;">
+                            ดูรายละเอียด →
+                        </a>
+                    `;
+                    resultDiv.classList.add('show');
+                } else {
+                    throw new Error(data.message || 'Failed to create charge');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                errorDiv.textContent = '❌ เกิดข้อผิดพลาด: ' + error.message;
+                errorDiv.classList.add('show');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = 'ตัดเงินทดสอบ';
+            }
+        }
+    </script>
+</body>
+
+</html>

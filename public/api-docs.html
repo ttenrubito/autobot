@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="th">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Documentation - AI Automation</title>
+    <script>
+        // Local XAMPP override - remove this block for Cloud Run deployment
+        window.BASE_PATH_OVERRIDE = '/autobot';
+    </script>
+    <link rel="stylesheet" href="../assets/css/style.css">
+    <link rel="stylesheet" href="../assets/css/responsive-fixes.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+
+<body>
+    <!-- Sidebar (same as other pages) -->
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <a href="dashboard.html" class="sidebar-logo">AI Automate</a>
+            <p style="font-size: 0.75rem; color: var(--color-gray);">AI Automation Platform</p>
+        </div>
+
+        <div class="sidebar-user">
+            <div class="sidebar-user-avatar" id="userAvatar">U</div>
+            <div class="sidebar-user-info">
+                <div class="sidebar-user-name" id="userName">Loading...</div>
+                <div class="sidebar-user-email" id="userEmail"></div>
+            </div>
+        </div>
+
+        <nav>
+            <ul class="sidebar-nav">
+                <li class="sidebar-nav-item">
+                    <a href="dashboard.html" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">📊</span>
+                        <span>Dashboard</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="services.html" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">🤖</span>
+                        <span>บริการของฉัน</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="usage.html" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">📈</span>
+                        <span>การใช้งาน</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="api-docs.html" class="sidebar-nav-link active">
+                        <span class="sidebar-nav-icon">📚</span>
+                        <span>API Docs</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="payment.html" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">💳</span>
+                        <span>ชำระเงิน</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="billing.html" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">📄</span>
+                        <span>ใบแจ้งหนี้</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="profile.html" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">👤</span>
+                        <span>โปรไฟล์</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item" style="margin-top: auto; padding-top: 2rem;">
+                    <a href="#" onclick="logout(); return false;" class="sidebar-nav-link"
+                        style="color: var(--color-danger);">
+                        <span class="sidebar-nav-icon">🚪</span>
+                        <span>ออกจากระบบ</span>
+                    </a>
+                </li>
+            </ul>
+        </nav>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <!-- Page Header -->
+        <div class="page-header">
+            <h1 class="page-title">API Documentation</h1>
+            <p class="page-subtitle">คู่มือการใช้งาน API สำหรับ n8n และระบบอื่นๆ</p>
+        </div>
+
+        <!-- API Key Section -->
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-key"></i> Your API Key</h3>
+                <p class="card-subtitle">ใช้ API Key นี้ในการเรียก API ของเรา</p>
+            </div>
+            <div class="card-body">
+                <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
+                    <div style="flex: 1; min-width: 300px;">
+                        <div style="position: relative;">
+                            <input type="password" id="apiKeyInput" class="form-control" readonly
+                                style="font-family: monospace; padding-right: 8rem; font-size: 0.875rem;">
+                            <div
+                                style="position: absolute; right: 0.5rem; top: 50%; transform: translateY(-50%); display: flex; gap: 0.5rem;">
+                                <button onclick="toggleApiKey()" class="btn btn-sm btn-outline" title="Show/Hide">
+                                    <i class="fas fa-eye" id="toggleIcon"></i>
+                                </button>
+                                <button onclick="copyApiKey()" class="btn btn-sm btn-outline" title="Copy">
+                                    <i class="fas fa-copy"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <button onclick="regenerateApiKey()" class="btn btn-warning">
+                        <i class="fas fa-sync"></i> Regenerate
+                    </button>
+                </div>
+
+                <div
+                    style="margin-top: 1rem; padding: 1rem; background: rgba(239, 68, 68, 0.1); border-radius: var(--radius-md); border-left: 4px solid var(--color-danger);">
+                    <p style="margin: 0; font-size: 0.875rem;">
+                        <i class="fas fa-exclamation-triangle"></i>
+                        <strong>คำเตือน:</strong> อย่าแชร์ API Key ของคุณกับใครหรือนำไปเผยแพร่ในที่สาธารณะ
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Quick Start -->
+        <div class="card mt-4">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-rocket"></i> Quick Start</h3>
+            </div>
+            <div class="card-body">
+                <h4 style="margin-top: 0;">วิธีใช้งานกับ n8n</h4>
+                <ol style="padding-left: 1.5rem;">
+                    <li style="margin-bottom: 0.5rem;">เปิด n8n workflow ของคุณ</li>
+                    <li style="margin-bottom: 0.5rem;">เพิ่ม HTTP Request node</li>
+                    <li style="margin-bottom: 0.5rem;">ตั้งค่า Headers เพิ่ม <code>X-API-Key</code> ด้วย API Key ของคุณ
+                    </li>
+                    <li style="margin-bottom: 0.5rem;">เลือก Endpoint ที่ต้องการใช้งาน</li>
+                </ol>
+            </div>
+        </div>
+
+        <!-- Google Vision API -->
+        <div class="card mt-4">
+            <div class="card-header"
+                style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+                <h3 class="card-title" style="color: white; margin: 0;">
+                    <i class="fas fa-eye"></i> Google Vision API
+                </h3>
+            </div>
+            <div class="card-body">
+                <!-- Labels Detection -->
+                <h4><i class="fas fa-tags"></i> Label Detection</h4>
+                <p>ตรวจจับและระบุวัตถุ, สถานที่, กิจกรรมในรูปภาพ</p>
+
+                <div style="background: #1e1e1e; border-radius: var(--radius-md); padding: 1.5rem; margin: 1rem 0;">
+                    <pre><code class="language-bash">POST https://yourdomain.com/api/gateway/vision/labels
+Headers:
+  X-API-Key: your_api_key_here
+  Content-Type: application/json
+
+Body:
+{
+  "image": {
+    "content": "base64_encoded_image"
+  }
+}</code></pre>
+                </div>
+
+                <hr style="margin: 2rem 0;">
+
+                <!-- Text Detection -->
+                <h4><i class="fas fa-font"></i> Text Detection (OCR)</h4>
+                <p>แยกข้อความจากรูปภาพ</p>
+
+                <div style="background: #1e1e1e; border-radius: var(--radius-md); padding: 1.5rem; margin: 1rem 0;">
+                    <pre><code class="language-bash">POST https://yourdomain.com/api/gateway/vision/text
+Headers:
+  X-API-Key: your_api_key_here
+  Content-Type: application/json
+
+Body:
+{
+  "image": {
+    "content": "base64_encoded_image"
+  }
+}</code></pre>
+                </div>
+
+                <hr style="margin: 2rem 0;">
+
+                <!-- Face Detection -->
+                <h4><i class="fas fa-smile"></i> Face Detection</h4>
+                <p>ตรวจจับใบหน้าในรูปภาพ</p>
+
+                <div style="background: #1e1e1e; border-radius: var(--radius-md); padding: 1.5rem; margin: 1rem 0;">
+                    <pre><code class="language-bash">POST https://yourdomain.com/api/gateway/vision/faces
+Headers:
+  X-API-Key: your_api_key_here
+  Content-Type: application/json
+
+Body:
+{
+  "image": {
+    "content": "base64_encoded_image"
+  }
+}</code></pre>
+                </div>
+            </div>
+        </div>
+
+        <!-- Google Natural Language API -->
+        <div class="card mt-4">
+            <div class="card-header"
+                style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white;">
+                <h3 class="card-title" style="color: white; margin: 0;">
+                    <i class="fas fa-brain"></i> Google Natural Language API
+                </h3>
+            </div>
+            <div class="card-body">
+                <!-- Sentiment Analysis -->
+                <h4><i class="fas fa-heart"></i> Sentiment Analysis</h4>
+                <p>วิเคราะห์ความรู้สึกของข้อความ</p>
+
+                <div style="background: #1e1e1e; border-radius: var(--radius-md); padding: 1.5rem; margin: 1rem 0;">
+                    <pre><code class="language-bash">POST https://yourdomain.com/api/gateway/language/sentiment
+Headers:
+  X-API-Key: your_api_key_here
+  Content-Type: application/json
+
+Body:
+{
+  "text": "I love this product! It's amazing!"
+}</code></pre>
+                </div>
+
+                <hr style="margin: 2rem 0;">
+
+                <!-- Entity Extraction -->
+                <h4><i class="fas fa-project-diagram"></i> Entity Extraction</h4>
+                <p>แยกและจำแนก entities จากข้อความ</p>
+
+                <div style="background: #1e1e1e; border-radius: var(--radius-md); padding: 1.5rem; margin: 1rem 0;">
+                    <pre><code class="language-bash">POST https://yourdomain.com/api/gateway/language/entities
+Headers:
+  X-API-Key: your_api_key_here
+  Content-Type: application/json
+
+Body:
+{
+  "text": "Google was founded in California by Larry Page and Sergey Brin"
+}</code></pre>
+                </div>
+            </div>
+        </div>
+
+        <!-- Rate Limits -->
+        <div class="card mt-4">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-tachometer-alt"></i> Rate Limits</h3>
+            </div>
+            <div class="card-body">
+                <div id="rateLimitsContainer">
+                    <p style="color: var(--color-gray);">กำลังโหลด...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Error Codes -->
+        <div class="card mt-4">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-exclamation-circle"></i> Error Codes</h3>
+            </div>
+            <div class="card-body">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Code</th>
+                            <th>Message</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>401</td>
+                            <td>Unauthorized</td>
+                            <td>API key ไม่ถูกต้องหรือหมดอายุ</td>
+                        </tr>
+                        <tr>
+                            <td>403</td>
+                            <td>Forbidden</td>
+                            <td>ไม่มีสิทธิ์เข้าถึง service นี้</td>
+                        </tr>
+                        <tr>
+                            <td>429</td>
+                            <td>Too Many Requests</td>
+                            <td>เกิน rate limit</td>
+                        </tr>
+                        <tr>
+                            <td>503</td>
+                            <td>Service Unavailable</td>
+                            <td>Service ถูกปิดชั่วคราว</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+    <script src="../assets/js/auth.js"></script>
+    <script>
+        requireAuth();
+
+        let apiKeyData = null;
+        let isApiKeyVisible = false;
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            await loadUserInfo();
+            await loadApiKey();
+            hljs.highlightAll();
+        });
+
+        async function loadUserInfo() {
+            const userData = getUserData();
+            if (userData) {
+                document.getElementById('userName').textContent = userData.full_name || userData.email;
+                document.getElementById('userEmail').textContent = userData.email;
+                const initial = (userData.full_name || userData.email).charAt(0).toUpperCase();
+                document.getElementById('userAvatar').textContent = initial;
+            }
+        }
+
+        async function loadApiKey() {
+            try {
+                const response = await apiCall('/user/api-key.php');
+
+                if (response && response.success) {
+                    apiKeyData = response.data;
+                    const apiKey = apiKeyData.api_key?.api_key || 'No API key generated';
+                    document.getElementById('apiKeyInput').value = apiKey;
+
+                    // Display rate limits
+                    displayRateLimits(apiKeyData.services);
+                }
+            } catch (error) {
+                console.error('Failed to load API key:', error);
+            }
+        }
+
+        function displayRateLimits(services) {
+            const container = document.getElementById('rateLimitsContainer');
+
+            if (!services || services.length === 0) {
+                container.innerHTML = '<p>ไม่มี API services ที่เปิดใช้งาน</p>';
+                return;
+            }
+
+            let html = '<table><thead><tr><th>Service</th><th>Daily Limit</th><th>Monthly Limit</th><th>Status</th></tr></thead><tbody>';
+
+            services.forEach(service => {
+                html += `
+                    <tr>
+                        <td><strong>${service.service_name}</strong></td>
+                        <td>${service.daily_limit ? formatNumber(service.daily_limit) : 'Unlimited'}</td>
+                        <td>${service.monthly_limit ? formatNumber(service.monthly_limit) : 'Unlimited'}</td>
+                        <td>
+                            ${service.is_enabled
+                        ? '<span class="badge badge-success">Enabled</span>'
+                        : '<span class="badge badge-danger">Disabled</span>'}
+                        </td>
+                    </tr>
+                `;
+            });
+
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        }
+
+        function toggleApiKey() {
+            const input = document.getElementById('apiKeyInput');
+            const icon = document.getElementById('toggleIcon');
+            isApiKeyVisible = !isApiKeyVisible;
+            input.type = isApiKeyVisible ? 'text' : 'password';
+            icon.className = isApi KeyVisible ? 'fas fa-eye-slash' : 'fas fa-eye';
+        }
+
+        async function copyApiKey() {
+            const input = document.getElementById('apiKeyInput');
+            await navigator.clipboard.writeText(input.value);
+            showToast('API Key copied to clipboard!', 'success');
+        }
+
+        async function regenerateApiKey() {
+            if (!confirm('คุณต้องการสร้าง API Key ใหม่ใช่หรือไม่? API Key เก่าจะไม่สามารถใช้งานได้อีก')) {
+                return;
+            }
+
+            showLoading();
+
+            try {
+                const response = await apiCall('/user/regenerate-key.php', {
+                    method: 'POST'
+                });
+
+                if (response && response.success) {
+                    apiKeyData.api_key.api_key = response.data.api_key;
+                    document.getElementById('apiKeyInput').value = response.data.api_key;
+                    showToast('API Key regenerated successfully', 'success');
+                } else {
+                    showToast(response.message || 'Failed to regenerate', 'error');
+                }
+            } catch (error) {
+                console.error('Regenerate error:', error);
+                showToast('เกิดข้อผิดพลาด', 'error');
+            } finally {
+                hideLoading();
+            }
+        }
+    </script>
+</body>
+
+</html>

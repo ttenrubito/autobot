@@ -1,0 +1,170 @@
+/**
+ * Mobile Responsive - Hamburger Menu and Sidebar Toggle
+ */
+
+/* Mobile menu toggle button */
+.mobile-menu-toggle {
+    display: none;
+    position: fixed;
+    top: 1rem;
+    left: 1rem;
+    z-index: 1001;
+    background: var(--color-primary);
+    color: white;
+    border: none;
+    width: 3rem;
+    height: 3rem;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    box-shadow: var(--shadow-lg);
+    transition: var(--transition);
+}
+
+.mobile-menu-toggle:hover {
+    background: var(--color-primary-dark);
+    transform: scale(1.05);
+}
+
+.mobile-menu-toggle i {
+    font-size: 1.25rem;
+}
+
+/* Mobile overlay */
+.mobile-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 999;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.mobile-overlay.active {
+    opacity: 1;
+}
+
+/* Responsive styles for tablets and below */
+@media (max-width: 768px) {
+
+    /* Show mobile menu button */
+    .mobile-menu-toggle {
+        display: flex !important;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .mobile-overlay {
+        display: block !important;
+    }
+
+    .mobile-overlay.active {
+        opacity: 1 !important;
+    }
+
+    /* Hide sidebar by default on mobile */
+    .sidebar {
+        position: fixed !important;
+        left: -280px !important;
+        top: 0;
+        bottom: 0;
+        width: 280px !important;
+        z-index: 1000 !important;
+        transition: left 0.3s ease !important;
+        transform: none !important;
+    }
+
+    /* Show sidebar when menu is open */
+    .sidebar.mobile-open {
+        left: 0 !important;
+    }
+
+    /* Adjust main content */
+    .main-content {
+        margin-left: 0 !important;
+        width: 100%;
+        padding: 1rem;
+    }
+
+    /* Adjust page header for mobile */
+    .page-header {
+        margin-top: 4rem;
+        padding: 1rem;
+    }
+
+    .page-title {
+        font-size: 1.5rem;
+    }
+
+    .page-subtitle {
+        font-size: 0.875rem;
+    }
+
+    /* Make tables scrollable */
+    .table-container {
+        overflow-x: auto;
+    }
+
+    table {
+        min-width: 600px;
+    }
+
+    /* Stack columns on mobile */
+    .row {
+        flex-direction: column;
+    }
+
+    .col-4,
+    .col-6,
+    .col-8 {
+        width: 100% !important;
+        max-width: 100%;
+    }
+
+    /* Adjust cards */
+    .card {
+        margin-bottom: 1rem;
+    }
+
+    /* Stats cards responsive */
+    .stat-card {
+        padding: 1rem;
+    }
+
+    .stat-value {
+        font-size: 1.5rem;
+    }
+}
+
+/* Extra small devices */
+@media (max-width: 480px) {
+    .mobile-menu-toggle {
+        width: 2.5rem;
+        height: 2.5rem;
+    }
+
+    .mobile-menu-toggle i {
+        font-size: 1rem;
+    }
+
+    .sidebar {
+        width: 260px;
+        left: -260px;
+    }
+
+    .page-title {
+        font-size: 1.25rem;
+    }
+
+    .btn {
+        padding: 0.5rem 1rem;
+        font-size: 0.875rem;
+    }
+
+    .form-control {
+        font-size: 0.875rem;
+    }
+}

@@ -1,0 +1,8 @@
+{
+  "extra": {
+    "paas": {
+      "document-root": "public",
+      "index-document": "index.html"
+    }
+  }
+}

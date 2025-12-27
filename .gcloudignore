@@ -1,0 +1,41 @@
+# This file specifies files that are *not* uploaded to Google Cloud
+# using gcloud. It follows the same syntax as .gitignore
+
+.git
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node
+node_modules/
+npm-debug.log
+
+# Environment
+.env
+.env.local
+
+# Mac
+.DS_Store
+
+# Logs
+*.log
+storage/logs/*
+
+# Cache
+.cache
+
+# Documentation (upload only essential)
+README.md
+
+# Development
+docker-compose.yml
+
+# Build
+.dockerignore
+Dockerfile.bak.*
+*.bak.*
+apache-config.conf.bak.*

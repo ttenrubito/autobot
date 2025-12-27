@@ -1,0 +1,528 @@
+/* Modal & Overlay Fixes */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 900;
+    /* Lower than sidebar (9999) */
+    padding: var(--spacing-xl);
+    overflow-y: auto;
+}
+
+/* -------------------------------------------------------------------------
+ * New: modal-ui (opt-in)
+ * Our customer pages use:
+ *   <div class="modal modal-ui" data-ui="modal">
+ *     <div class="modal-overlay"></div>
+ *     <div class="modal-dialog">
+ *       <div class="modal-content-wrapper">...
+ * ------------------------------------------------------------------------- */
+.modal.modal-ui[data-ui="modal"] {
+    background: transparent; /* overlay handles dim */
+    padding: 16px;
+}
+
+.modal.modal-ui .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+}
+
+.modal.modal-ui .modal-dialog {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    max-width: 720px;
+    margin: auto;
+    max-height: calc(100vh - 32px);
+    display: flex;
+}
+
+.modal.modal-ui .modal-content-wrapper {
+    width: 100%;
+    background: var(--color-card, #fff);
+    border-radius: 16px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100vh - 32px);
+}
+
+.modal.modal-ui .modal-header-custom {
+    padding: 16px 18px;
+    border-bottom: 1px solid var(--color-border, #e5e7eb);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.modal.modal-ui .modal-title-custom {
+    margin: 0;
+    font-size: 1.05rem;
+    font-weight: 700;
+}
+
+.modal.modal-ui .modal-close-custom {
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+}
+
+.modal.modal-ui .modal-close-custom:hover {
+    background: rgba(0, 0, 0, 0.06);
+}
+
+.modal.modal-ui .modal-body-custom {
+    padding: 16px 18px;
+    overflow: auto;
+}
+
+/* Mobile: prevent layout break */
+@media (max-width: 768px) {
+    .modal.modal-ui .modal-dialog {
+        max-width: 100%;
+    }
+}
+
+.modal.hidden {
+    display: none;
+}
+
+.modal-content {
+    background: var(--color-white);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-xl);
+    width: 100%;
+    max-width: 500px;
+    max-height: 90vh;
+    overflow-y: auto;
+    position: relative;
+    animation: modalSlideIn 0.3s ease-out;
+}
+
+.modal-header {
+    padding: var(--spacing-xl);
+    border-bottom: 1px solid var(--color-light-3);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.modal-title {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin: 0;
+    color: var(--color-dark);
+}
+
+.modal-close {
+    background: transparent;
+    border: none;
+    font-size: 1.5rem;
+    color: var(--color-gray);
+    cursor: pointer;
+    padding: var(--spacing-sm);
+    line-height: 1;
+    transition: var(--transition);
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-md);
+}
+
+.modal-close:hover {
+    background: var(--color-light-2);
+    color: var(--color-danger);
+}
+
+.modal-body {
+    padding: var(--spacing-md) var(--spacing-lg);
+}
+
+.modal-footer {
+    padding: var(--spacing-xl);
+    border-top: 1px solid var(--color-light-3);
+    display: flex;
+    gap: var(--spacing-md);
+    justify-content: flex-end;
+}
+
+@keyframes modalSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-20px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Ensure sidebar is always accessible */
+.sidebar {
+    z-index: 9999 !important;
+}
+
+/* Invoice Details Styles - Compact Professional Design */
+.invoice-details {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+}
+
+/* Invoice Header Section */
+.invoice-header {
+    background: linear-gradient(135deg, #f8f9ff 0%, #f0f2ff 100%);
+    padding: var(--spacing-md) var(--spacing-lg);
+    border-radius: var(--radius-md);
+    border: 1px solid #e0e4ff;
+}
+
+.invoice-info-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--spacing-md);
+    margin-bottom: var(--spacing-sm);
+}
+
+.invoice-info-row:last-child {
+    margin-bottom: 0;
+}
+
+.invoice-info-item {
+    position: relative;
+    padding-left: 1.5rem;
+}
+
+.invoice-info-item::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 2px;
+    width: 16px;
+    height: 16px;
+    background: var(--color-primary);
+    opacity: 0.1;
+    border-radius: 3px;
+}
+
+.invoice-info-item label {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-bottom: 0.25rem;
+}
+
+.invoice-info-item label i {
+    color: var(--color-primary);
+    opacity: 0.7;
+    font-size: 0.75rem;
+}
+
+.invoice-info-item strong,
+.invoice-info-item span {
+    display: block;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #1e293b;
+}
+
+/* Invoice Section Headers */
+.invoice-section {
+    border-top: 1px solid #e2e8f0;
+    padding-top: var(--spacing-md);
+    margin-top: var(--spacing-xs);
+}
+
+.invoice-section h4 {
+    font-size: 0.875rem;
+    font-weight: 700;
+    margin-bottom: var(--spacing-sm);
+    color: #334155;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.invoice-section h4 i {
+    color: var(--color-primary);
+    font-size: 0.95rem;
+}
+
+/* Line Items */
+.invoice-line-items {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    background: #fafbfc;
+    padding: var(--spacing-sm);
+    border-radius: var(--radius-md);
+    border: 1px solid #e2e8f0;
+}
+
+.invoice-line-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem 0.75rem;
+    background: white;
+    border-radius: var(--radius-sm);
+    border: 1px solid #e2e8f0;
+    transition: all 0.15s ease;
+}
+
+.invoice-line-item:hover {
+    border-color: var(--color-primary);
+    box-shadow: 0 1px 4px rgba(79, 70, 229, 0.08);
+}
+
+.line-item-description {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+
+.line-item-description strong {
+    color: #1e293b;
+    font-weight: 600;
+    font-size: 0.875rem;
+}
+
+.line-item-description span {
+    color: #64748b;
+    font-size: 0.75rem;
+}
+
+.line-item-amount {
+    font-weight: 700;
+    color: #0f172a;
+    font-size: 0.9375rem;
+    margin-left: var(--spacing-md);
+    white-space: nowrap;
+}
+
+/* Totals Section */
+.invoice-totals {
+    background: linear-gradient(to bottom, #ffffff 0%, #f8fafc 100%);
+    border: 1px solid #e2e8f0;
+    border-radius: var(--radius-md);
+    padding: var(--spacing-sm) var(--spacing-md);
+    margin-top: var(--spacing-xs);
+}
+
+.invoice-total-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.35rem 0;
+    font-size: 0.875rem;
+}
+
+.invoice-total-row span {
+    color: #64748b;
+    font-weight: 500;
+}
+
+.invoice-total-row strong {
+    color: #1e293b;
+    font-weight: 600;
+}
+
+.invoice-grand-total {
+    border-top: 1px solid #e2e8f0;
+    padding-top: var(--spacing-sm);
+    margin-top: var(--spacing-xs);
+    background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%);
+    margin: var(--spacing-xs) calc(-1 * var(--spacing-md)) calc(-1 * var(--spacing-sm));
+    padding: var(--spacing-sm) var(--spacing-md);
+    border-radius: 0 0 var(--radius-md) var(--radius-md);
+}
+
+.invoice-grand-total span,
+.invoice-grand-total strong {
+    color: white;
+    font-size: 1rem;
+    font-weight: 700;
+}
+
+.invoice-grand-total span {
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    font-size: 0.8125rem;
+    opacity: 0.95;
+}
+
+/* Actions */
+.invoice-actions {
+    padding-top: var(--spacing-md);
+    display: flex;
+    gap: var(--spacing-sm);
+}
+
+.invoice-actions .btn {
+    flex: 1;
+    padding: 0.625rem var(--spacing-md);
+    font-weight: 600;
+    font-size: 0.9375rem;
+    border-radius: var(--radius-md);
+    transition: all 0.2s ease;
+}
+
+.invoice-actions .btn-primary {
+    background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%);
+    box-shadow: 0 2px 8px rgba(79, 70, 229, 0.25);
+}
+
+.invoice-actions .btn-primary:hover {
+    box-shadow: 0 4px 12px rgba(79, 70, 229, 0.35);
+    transform: translateY(-1px);
+}
+
+/* Larger modal for invoice details */
+#invoiceModal .modal-content {
+    max-width: 700px;
+}
+
+/* =====================================================
+   Unified Modal System (for customer pages using .modal)
+   Fixes: z-index conflicts, overlay, scroll, mobile layout
+   Applies to: chat-history.php, addresses.php, orders.php, payment-history.php
+===================================================== */
+
+/* Use an attribute so we can opt-in without breaking legacy modals */
+.modal[data-ui="modal"],
+.modal.modal-ui {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9500; /* below sidebar (9999 in this repo), above content */
+    padding: 1rem;
+}
+
+.modal[data-ui="modal"] .modal-overlay,
+.modal.modal-ui .modal-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.65);
+    backdrop-filter: blur(4px);
+}
+
+.modal[data-ui="modal"] .modal-dialog,
+.modal.modal-ui .modal-dialog {
+    position: relative;
+    width: min(900px, 100%);
+    max-height: 90vh;
+    z-index: 1;
+}
+
+.modal[data-ui="modal"] .modal-content-wrapper,
+.modal.modal-ui .modal-content-wrapper {
+    background: var(--color-white);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-xl);
+    overflow: hidden;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.modal[data-ui="modal"] .modal-body-custom,
+.modal.modal-ui .modal-body-custom {
+    overflow: auto;
+}
+
+@media (max-width: 768px) {
+    .modal[data-ui="modal"] .modal-dialog,
+    .modal.modal-ui .modal-dialog {
+        width: 100%;
+        max-height: 92vh;
+    }
+}
+
+/* Mobile modal */
+@media (max-width: 768px) {
+    .modal {
+        padding: 0;
+    }
+
+    .modal-content {
+        max-width: 100%;
+        max-height: 100vh;
+        border-radius: 0;
+        margin: 0;
+    }
+
+    .modal-header,
+    .modal-body,
+    .modal-footer {
+        padding: var(--spacing-lg);
+    }
+
+    .invoice-info-row {
+        grid-template-columns: 1fr;
+        gap: var(--spacing-lg);
+    }
+
+    .invoice-header {
+        padding: var(--spacing-lg);
+    }
+
+    .invoice-info-item {
+        padding-left: 1.5rem;
+    }
+
+    .invoice-line-item {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: var(--spacing-sm);
+    }
+
+    .line-item-amount {
+        margin-left: 0;
+        align-self: flex-end;
+        font-size: 1.125rem;
+    }
+
+    .invoice-totals {
+        padding: var(--spacing-md) var(--spacing-lg);
+    }
+
+    .invoice-grand-total {
+        margin: var(--spacing-md) calc(-1 * var(--spacing-lg)) calc(-1 * var(--spacing-md));
+        padding: var(--spacing-md) var(--spacing-lg);
+    }
+
+    .invoice-actions {
+        flex-direction: column;
+    }
+
+    #invoiceModal .modal-content {
+        max-width: 100%;
+    }
+}

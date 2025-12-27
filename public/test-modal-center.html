@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Modal Center</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Sarabun', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: #f3f4f6;
+            padding: 2rem;
+        }
+
+        .test-modal {
+            position: fixed !important;
+            inset: 0 !important;
+            z-index: 9999 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            display: none;
+        }
+
+        .test-modal.show {
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+        }
+
+        .test-modal-overlay {
+            position: fixed !important;
+            inset: 0 !important;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(10px);
+            z-index: 9998;
+        }
+
+        .test-modal-dialog {
+            position: relative !important;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4);
+            width: 90vw !important;
+            max-width: 900px !important;
+            height: auto !important;
+            max-height: 90vh !important;
+            min-width: 600px;
+            z-index: 9999;
+            margin: 0 !important;
+            padding: 2rem;
+        }
+
+        .test-modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .test-modal-title {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #1f2937;
+        }
+
+        .test-modal-close {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: #f3f4f6;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            color: #6b7280;
+        }
+
+        .test-modal-close:hover {
+            background: #e5e7eb;
+            color: #374151;
+        }
+
+        .btn-test {
+            padding: 1rem 2rem;
+            background: #374151;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-test:hover {
+            background: #1f2937;
+            transform: translateY(-2px);
+        }
+
+        .info {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 10px;
+            margin-top: 1rem;
+        }
+
+        .info h2 {
+            margin-bottom: 0.5rem;
+            color: #1f2937;
+        }
+
+        .info code {
+            background: #f3f4f6;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎯 ทดสอบ Modal อยู่กึ่งกลางจอ</h1>
+    
+    <div class="info">
+        <h2>วิธีทดสอบ:</h2>
+        <ol>
+            <li>กดปุ่มด้านล่าง</li>
+            <li>Modal ควรจะขึ้นมาตรงกลางจอพอดี</li>
+            <li>เปิด Developer Tools (F12) แล้วดู Element ว่ามี <code>align-items: center</code> และ <code>justify-content: center</code> หรือไม่</li>
+        </ol>
+    </div>
+
+    <br>
+
+    <button class="btn-test" onclick="openTestModal()">🔍 เปิด Modal ทดสอบ</button>
+
+    <!-- Test Modal -->
+    <div id="testModal" class="test-modal" style="display: none; align-items: center; justify-content: center;">
+        <div class="test-modal-overlay" onclick="closeTestModal()"></div>
+        <div class="test-modal-dialog">
+            <div class="test-modal-header">
+                <h2 class="test-modal-title">🎉 Modal ทดสอบ</h2>
+                <button class="test-modal-close" onclick="closeTestModal()">×</button>
+            </div>
+            <div class="test-modal-body">
+                <p>ถ้า Modal นี้อยู่กึ่งกลางจอ แสดงว่า CSS ทำงานถูกต้อง</p>
+                <br>
+                <p>ขนาดหน้าจอของคุณ:</p>
+                <ul>
+                    <li>Width: <span id="screenWidth"></span>px</li>
+                    <li>Height: <span id="screenHeight"></span>px</li>
+                </ul>
+                <br>
+                <p>ตำแหน่ง Modal:</p>
+                <ul>
+                    <li>Left: <span id="modalLeft"></span>px</li>
+                    <li>Top: <span id="modalTop"></span>px</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function openTestModal() {
+            const modal = document.getElementById('testModal');
+            modal.classList.add('show');
+            modal.style.display = 'flex';
+            
+            // Update screen info
+            document.getElementById('screenWidth').textContent = window.innerWidth;
+            document.getElementById('screenHeight').textContent = window.innerHeight;
+            
+            // Wait for modal to render
+            setTimeout(() => {
+                const dialog = modal.querySelector('.test-modal-dialog');
+                const rect = dialog.getBoundingClientRect();
+                document.getElementById('modalLeft').textContent = Math.round(rect.left);
+                document.getElementById('modalTop').textContent = Math.round(rect.top);
+                
+                console.log('🎯 Modal Position:', {
+                    left: rect.left,
+                    top: rect.top,
+                    width: rect.width,
+                    height: rect.height,
+                    centerX: rect.left + rect.width / 2,
+                    centerY: rect.top + rect.height / 2,
+                    screenCenterX: window.innerWidth / 2,
+                    screenCenterY: window.innerHeight / 2,
+                    isCentered: {
+                        horizontal: Math.abs((rect.left + rect.width / 2) - (window.innerWidth / 2)) < 10,
+                        vertical: Math.abs((rect.top + rect.height / 2) - (window.innerHeight / 2)) < 10
+                    }
+                });
+            }, 100);
+        }
+
+        function closeTestModal() {
+            const modal = document.getElementById('testModal');
+            modal.classList.remove('show');
+            modal.style.display = 'none';
+        }
+
+        // Close on ESC
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeTestModal();
+            }
+        });
+    </script>
+</body>
+</html>

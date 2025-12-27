@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="th">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ใบแจ้งหนี้ - AI Automation</title>
+    <script>
+        // Local XAMPP override - remove this block for Cloud Run deployment
+        window.BASE_PATH_OVERRIDE = '/autobot';
+    </script>
+    <link rel="stylesheet" href="/autobot/assets/css/style.css">
+    <link rel="stylesheet" href="/autobot/assets/css/responsive-fixes.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+</head>
+
+<body>
+    <!-- Sidebar -->
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <a href="#" onclick="window.location.href = PAGES.USER_DASHBOARD; return false;" class="sidebar-logo">AI Automate</a>
+            <p style="font-size: 0.75rem; color: var(--color-gray);">AI Automation Platform</p>
+        </div>
+
+        <div class="sidebar-user">
+            <div class="sidebar-user-avatar" id="userAvatar">U</div>
+            <div class="sidebar-user-info">
+                <div class="sidebar-user-name" id="userName">Loading...</div>
+                <div class="sidebar-user-email" id="userEmail"></div>
+            </div>
+        </div>
+
+        <nav>
+            <ul class="sidebar-nav">
+                <li class="sidebar-nav-item">
+                    <a href="#" onclick="window.location.href = PAGES.USER_DASHBOARD; return false;" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">📊</span>
+                        <span>Dashboard</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="#" onclick="window.location.href = PAGES.USER_SERVICES; return false;" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">🤖</span>
+                        <span>บริการของฉัน</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="#" onclick="window.location.href = PAGES.USER_USAGE; return false;" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">📈</span>
+                        <span>การใช้งาน</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="/autobot/payment.html" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">💳</span>
+                        <span>ชำระเงิน</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="#" onclick="window.location.href = PAGES.USER_BILLING; return false;" class="sidebar-nav-link active">
+                        <span class="sidebar-nav-icon">📄</span>
+                        <span>ใบแจ้งหนี้</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="# onclick="window.location.href = PAGES.USER_PROFILE; return false;" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">👤</span>
+                        <span>โปรไฟล์</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item" style="margin-top: auto; padding-top: 2rem;">
+                    <a href="#" onclick="logout(); return false;" class="sidebar-nav-link"
+                        style="color: var(--color-danger);">
+                        <span class="sidebar-nav-icon">🚪</span>
+                        <span>ออกจากระบบ</span>
+                    </a>
+                </li>
+            </ul>
+        </nav>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <!-- Page Header -->
+        <div class="page-header">
+            <h1 class="page-title">ใบแจ้งหนี้ & ประวัติการชำระเงิน</h1>
+            <p class="page-subtitle">จัดการและดาวน์โหลดใบแจ้งหนี้ของคุณ</p>
+        </div>
+
+        <!-- Invoices Table -->
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">ใบแจ้งหนี้ทั้งหมด</h3>
+                <p class="card-subtitle">รายการใบแจ้งหนี้และสถานะการชำระเงิน</p>
+            </div>
+            <div class="card-body">
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>เลขที่ใบแจ้งหนี้</th>
+                                <th>วันที่</th>
+                                <th>รอบบิล</th>
+                                <th>จำนวนเงิน</th>
+                                <th>สถานะ</th>
+                                <th>วันครบกำหนด</th>
+                                <th>การกระทำ</th>
+                            </tr>
+                        </thead>
+                        <tbody id="invoicesBody">
+                            <tr>
+                                <td colspan="7" style="text-align: center; padding: 2rem;">
+                                    <div class="loading-spinner" style="margin: 0 auto;"></div>
+                                    <p style="margin-top: 1rem; color: var(--color-gray);">กำลังโหลด...</p>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Payment History -->
+        <div class="card mt-4">
+            <div class="card-header">
+                <h3 class="card-title">ประวัติการชำระเงิน</h3>
+                <p class="card-subtitle">รายการธุรกรรมทั้งหมด</p>
+            </div>
+            <div class="card-body">
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>วันที่</th>
+                                <th>เลขที่ใบแจ้งหนี้</th>
+                                <th>จำนวนเงิน</th>
+                                <th>วิธีการชำระ</th>
+                                <th>สถานะ</th>
+                            </tr>
+                        </thead>
+                        <tbody id="transactionsBody">
+                            <tr>
+                                <td colspan="5" style="text-align: center; padding: 2rem;">
+                                    <div class="loading-spinner" style="margin: 0 auto;"></div>
+                                    <p style="margin-top: 1rem; color: var(--color-gray);">กำลังโหลด...</p>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="/autobot/assets/js/constants.js"></script>
+    <script src="/autobot/assets/js/auth.js"></script>
+    <script>
+        requireAuth();
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            await loadUserInfo();
+            await loadInvoices();
+            await loadTransactions();
+        });
+
+        async function loadUserInfo() {
+            const userData = getUserData();
+            if (userData) {
+                document.getElementById('userName').textContent = userData.full_name || userData.email;
+                document.getElementById('userEmail').textContent = userData.email;
+                const initial = (userData.full_name || userData.email).charAt(0).toUpperCase();
+                document.getElementById('userAvatar').textContent = initial;
+            }
+        }
+
+        async function loadInvoices() {
+            try {
+                const response = await apiCall('/billing/invoices');
+
+                if (response && response.success) {
+                    displayInvoices(response.data);
+                }
+            } catch (error) {
+                console.error('Failed to load invoices:', error);
+                displayInvoicesError();
+            }
+        }
+
+        function displayInvoices(invoices) {
+            const tbody = document.getElementById('invoicesBody');
+
+            if (!invoices || invoices.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="7" style="text-align: center; padding: 2rem;">
+                            <div style="font-size: 3rem; margin-bottom: 1rem;">📄</div>
+                            <p style="color: var(--color-gray);">ยังไม่มีใบแจ้งหนี้</p>
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            tbody.innerHTML = '';
+
+            invoices.forEach(invoice => {
+                const row = document.createElement('tr');
+
+                const statusBadge = invoice.status === 'paid'
+                    ? '<span class="badge badge-success">ชำระแล้ว</span>'
+                    : invoice.status === 'pending'
+                        ? '<span class="badge badge-warning">รอชำระ</span>'
+                        : invoice.status === 'failed'
+                            ? '<span class="badge badge-danger">ล้มเหลว</span>'
+                            : '<span class="badge badge-info">ยกเลิก</span>';
+
+                const billingPeriod = invoice.billing_period_start && invoice.billing_period_end
+                    ? `${formatDate(invoice.billing_period_start).split(' ')[0]} - ${formatDate(invoice.billing_period_end).split(' ')[0]}`
+                    : '-';
+
+                row.innerHTML = `
+                    <td><strong>${invoice.invoice_number}</strong></td>
+                    <td>${formatDate(invoice.created_at).split(' ')[0]}</td>
+                    <td>${billingPeriod}</td>
+                    <td><strong>${formatCurrency(invoice.total)}</strong></td>
+                    <td>${statusBadge}</td>
+                    <td>${invoice.due_date ? formatDate(invoice.due_date).split(' ')[0] : '-'}</td>
+                    <td>
+                        <button class="btn btn-sm btn-outline" onclick="viewInvoice(${invoice.id})">
+                            ดูรายละเอียด
+                        </button>
+                    </td>
+                `;
+
+                tbody.appendChild(row);
+            });
+        }
+
+        function displayInvoicesError() {
+            const tbody = document.getElementById('invoicesBody');
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="7" style="text-align: center; padding: 2rem; color: var(--color-danger);">
+                        ไม่สามารถโหลดข้อมูลได้
+                    </td>
+                </tr>
+            `;
+        }
+
+        async function loadTransactions() {
+            try {
+                const response = await apiCall('/billing/transactions');
+
+                if (response && response.success) {
+                    displayTransactions(response.data);
+                }
+            } catch (error) {
+                console.error('Failed to load transactions:', error);
+                displayTransactionsError();
+            }
+        }
+
+        function displayTransactions(transactions) {
+            const tbody = document.getElementById('transactionsBody');
+
+            if (!transactions || transactions.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="5" style="text-align: center; padding: 2rem;">
+                            <p style="color: var(--color-gray);">ยังไม่มีประวัติการชำระเงิน</p>
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            tbody.innerHTML = '';
+
+            transactions.forEach(tx => {
+                const row = document.createElement('tr');
+
+                const statusBadge = tx.status === 'successful'
+                    ? '<span class="badge badge-success">สำเร็จ</span>'
+                    : tx.status === 'pending'
+                        ? '<span class="badge badge-warning">รอดำเนินการ</span>'
+                        : '<span class="badge badge-danger">ล้มเหลว</span>';
+
+                const paymentMethod = tx.card_brand && tx.card_last4
+                    ? `${tx.card_brand.toUpperCase()} •••• ${tx.card_last4}`
+                    : '-';
+
+                row.innerHTML = `
+                    <td>${formatDate(tx.created_at)}</td>
+                    <td>${tx.invoice_number}</td>
+                    <td><strong>${formatCurrency(tx.amount)}</strong></td>
+                    <td>${paymentMethod}</td>
+                    <td>${statusBadge}</td>
+                `;
+
+                tbody.appendChild(row);
+            });
+        }
+
+        function displayTransactionsError() {
+            const tbody = document.getElementById('transactionsBody');
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="5" style="text-align: center; padding: 2rem; color: var(--color-danger);">
+                        ไม่สามารถโหลดข้อมูลได้
+                    </td>
+                </tr>
+            `;
+        }
+
+        async function viewInvoice(invoiceId) {
+            showLoading();
+
+            try {
+                const response = await apiCall(`/billing/invoices/${invoiceId}`);
+
+                if (response && response.success) {
+                    showInvoiceDetails(response.data);
+                }
+            } catch (error) {
+                console.error('Failed to load invoice details:', error);
+                showToast('ไม่สามารถโหลดรายละเอียดได้', 'error');
+            } finally {
+                hideLoading();
+            }
+        }
+
+        function showInvoiceDetails(invoice) {
+            const itemsHtml = invoice.items.map(item => `
+                <tr>
+                    <td>${item.description}</td>
+                    <td style="text-align: right;">${item.quantity}</td>
+                    <td style="text-align: right;">${formatCurrency(item.unit_price)}</td>
+                    <td style="text-align: right;"><strong>${formatCurrency(item.amount)}</strong></td>
+                </tr>
+            `).join('');
+
+            alert(`ใบแจ้งหนี้ ${invoice.invoice_number}\n\nยอดรวม: ${formatCurrency(invoice.total)}\nสถานะ: ${invoice.status}\n\n(รายละเอียดเต็มจะแสดงในหน้า modal ที่สวยกว่านี้)`);
+        }
+    </script>
+</body>
+
+</html>

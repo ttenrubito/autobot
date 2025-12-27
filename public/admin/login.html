@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="th">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Login - AI Automation</title>
+
+    <!-- Load CSS immediately using relative paths (works on both localhost (/autobot) and prod) -->
+    <link rel="stylesheet" href="../../assets/css/style.css?v=1.0.1">
+    <link rel="stylesheet" href="../../assets/css/responsive-fixes.css?v=1.0.1">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+
+    <!-- Load path-config.js for API endpoints -->
+    <script src="../../assets/js/path-config.js?v=1.0.1"></script>
+</head>
+
+<body class="auth-page auth-page--admin">
+    <div class="auth-container">
+        <div class="auth-card">
+            <div class="auth-header">
+                <div style="text-align: center; margin-bottom: 1rem;">
+                    <img id="logoImage" alt="AI Automation Logo" style="max-width: 200px; height: auto;">
+                </div>
+                <h1 class="auth-title"><i class="fas fa-user-shield"></i> Admin Login</h1>
+                <p class="auth-subtitle">เข้าสู่ระบบจัดการ AI Automation</p>
+            </div>
+            <form id="adminLoginForm">
+                <div class="form-group">
+                    <label for="username">ชื่อผู้ใช้ (admin_users.username)</label>
+                    <input type="text" id="username" name="username" required>
+                </div>
+                <div class="form-group">
+                    <label for="password">รหัสผ่าน</label>
+                    <input type="password" id="password" name="password" required>
+                </div>
+                <div id="loginError" class="alert alert-danger hidden"></div>
+                <button type="submit" class="btn btn-primary btn-block">เข้าสู่ระบบผู้ดูแล</button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // Wait for path-config.js to load before using PATH
+        window.addEventListener('load', function () {
+            // Set logo image using path-config
+            var logoImg = document.getElementById('logoImage');
+            if (logoImg && typeof PATH !== 'undefined') {
+                logoImg.src = PATH.image('logo1.png');
+            }
+        });
+
+        // Admin login form handler
+        document.getElementById('adminLoginForm').addEventListener('submit', async function (e) {
+            e.preventDefault();
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value;
+            const errorBox = document.getElementById('loginError');
+            errorBox.classList.add('hidden');
+            errorBox.textContent = '';
+
+            if (!username || !password) {
+                errorBox.textContent = 'กรุณากรอกชื่อผู้ใช้และรหัสผ่าน';
+                errorBox.classList.remove('hidden');
+                return;
+            }
+
+            try {
+                // Use API_ENDPOINTS from path-config.js (auto-detects environment)
+                const response = await fetch(API_ENDPOINTS.ADMIN_LOGIN, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    const token = data.data?.token;
+                    const admin = data.data?.admin;
+                    if (token) {
+                        localStorage.setItem(STORAGE_KEYS.ADMIN_TOKEN, token);
+                    }
+                    if (admin) {
+                        localStorage.setItem(STORAGE_KEYS.ADMIN_DATA, JSON.stringify(admin));
+                    }
+                    // Redirect to dashboard using auto-detected path
+                    window.location.href = PAGES.ADMIN_DASHBOARD;
+                } else {
+                    errorBox.textContent = data.message || 'เข้าสู่ระบบไม่สำเร็จ';
+                    errorBox.classList.remove('hidden');
+                }
+            } catch (err) {
+                console.error('Admin login error:', err);
+                errorBox.textContent = 'เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์';
+                errorBox.classList.remove('hidden');
+            }
+        });
+    </script>
+</body>
+
+</html>

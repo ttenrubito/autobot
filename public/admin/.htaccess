@@ -1,0 +1,13 @@
+# Allow admin pages to be served
+<IfModule mod_rewrite.c>
+    RewriteEngine Off
+</IfModule>
+
+# Allow directory access
+Options +Indexes
+
+# Security - require authentication (optional - comment out for testing)
+# AuthType Basic
+# AuthName "Admin Area"
+# AuthUserFile /opt/lampp/htdocs/autobot/.htpasswd
+# Require valid-user

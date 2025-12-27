@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="th">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard - AI Automation</title>
+    <link rel="stylesheet" href="../assets/css/style.css">
+    <link rel="stylesheet" href="../assets/css/responsive-fixes.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+</head>
+
+<body>
+    <div style="display: flex; min-height: 100vh;">
+        <!-- Sidebar -->
+        <aside
+            style="width: 250px; background: linear-gradient(180deg, #667eea 0%, #764ba2 100%); color: white; padding: 1.5rem;">
+            <div style="margin-bottom: 2rem;">
+                <h2 style="margin: 0; font-size: 1.25rem;">🔐 Admin Panel</h2>
+                <p style="margin: 0.25rem 0 0 0; font-size: 0.75rem; opacity: 0.9;">AI Automation</p>
+            </div>
+
+            <nav>
+                <ul style="list-style: none; padding: 0; margin: 0;">
+                    <li style="margin-bottom: 0.5rem;">
+                        <a href="dashboard.html"
+                            style="display: block; padding: 0.75rem 1rem; background: rgba(255,255,255,0.2); border-radius: var(--radius-md); color: white; text-decoration: none;">
+                            <i class="fas fa-chart-line"></i> Dashboard
+                        </a>
+                    </li>
+                    <li style="margin-bottom: 0.5rem;">
+                        <a href="services.html"
+                            style="display: block; padding: 0.75rem 1rem; color: white; text-decoration: none; border-radius: var(--radius-md);">
+                            <i class="fas fa-cogs"></i> API Services
+                        </a>
+                    </li>
+                    <li style="margin-bottom: 0.5rem;">
+                        <a href="customers.html"
+                            style="display: block; padding: 0.75rem 1rem; color: white; text-decoration: none; border-radius: var(--radius-md);">
+                            <i class="fas fa-users"></i> Customers
+                        </a>
+                    </li>
+                    <li style="margin-top: auto; padding-top: 2rem;">
+                        <a href="#" onclick="logout(); return false;"
+                            style="display: block; padding: 0.75rem 1rem; color: white; text-decoration: none; border-radius: var(--radius-md);">
+                            <i class="fas fa-sign-out-alt"></i> Logout
+                        </a>
+                    </li>
+                </ul>
+            </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main style="flex: 1; padding: 2rem; background: var(--color-light);">
+            <h1 style="margin: 0 0 0.5rem 0;">Dashboard</h1>
+            <p style="color: var(--color-gray); margin: 0 0 2rem 0;">ภาพรวมระบบ AI Automation</p>
+
+            <!-- Stats Cards -->
+            <div
+                style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
+                <div class="card">
+                    <div class="card-body">
+                        <div style="display: flex; justify-content: space-between; align-items: start;">
+                            <div>
+                                <p style="margin: 0; color: var(--color-gray); font-size: 0.875rem;">Total Customers</p>
+                                <h3 style="margin: 0.5rem 0 0 0; font-size: 2rem;" id="totalCustomers">-</h3>
+                            </div>
+                            <div
+                                style="width: 50px; height: 50px; background: var(--color-primary); border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; color: white; font-size: 1.5rem;">
+                                <i class="fas fa-users"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-body">
+                        <div style="display: flex; justify-content: space-between; align-items: start;">
+                            <div>
+                                <p style="margin: 0; color: var(--color-gray); font-size: 0.875rem;">API Calls Today</p>
+                                <h3 style="margin: 0.5rem 0 0 0; font-size: 2rem;" id="apiCallsToday">-</h3>
+                            </div>
+                            <div
+                                style="width: 50px; height: 50px; background: var(--color-success); border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; color: white; font-size: 1.5rem;">
+                                <i class="fas fa-plug"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-body">
+                        <div style="display: flex; justify-content: space-between; align-items: start;">
+                            <div>
+                                <p style="margin: 0; color: var(--color-gray); font-size: 0.875rem;">Revenue This Month
+                                </p>
+                                <h3 style="margin: 0.5rem 0 0 0; font-size: 2rem;" id="revenueMonth">-</h3>
+                            </div>
+                            <div
+                                style="width: 50px; height: 50px; background: var(--color-warning); border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; color: white; font-size: 1.5rem;">
+                                <i class="fas fa-dollar-sign"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-body">
+                        <div style="display: flex; justify-content: space-between; align-items: start;">
+                            <div>
+                                <p style="margin: 0; color: var(--color-gray); font-size: 0.875rem;">Active Services</p>
+                                <h3 style="margin: 0.5rem 0 0 0; font-size: 2rem;" id="activeServices">-</h3>
+                            </div>
+                            <div
+                                style="width: 50px; height: 50px; background: var(--color-info); border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; color: white; font-size: 1.5rem;">
+                                <i class="fas fa-cog"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- API Services Status -->
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">API Services Status</h3>
+                </div>
+                <div class="card-body">
+                    <div id="servicesContainer" style="display: grid; gap: 1rem;">
+                        <p style="text-align: center; color: var(--color-gray);">กำลังโหลด...</p>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        const API_BASE_URL = '/autobot/api';
+
+        // Check admin auth
+        const adminToken = localStorage.getItem('admin_token');
+        if (!adminToken) {
+            window.location.href = 'index.html';
+        }
+
+        async function adminApiCall(endpoint) {
+            const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+                headers: {
+                    'Authorization': `Bearer ${adminToken}`,
+                    'Content-Type': 'application/json'
+                }
+            });
+            return await response.json();
+        }
+
+        async function loadDashboard() {
+            try {
+                // Load services
+                const servicesResp = await adminApiCall('/admin/services/list.php');
+                if (servicesResp.success) {
+                    displayServices(servicesResp.data);
+
+                    // Update stats
+                    const enabledCount = servicesResp.data.filter(s => s.is_enabled).length;
+                    document.getElementById('activeServices').textContent = `${enabledCount}/${servicesResp.data.length}`;
+
+                    const totalCalls = servicesResp.data.reduce((sum, s) => sum + parseInt(s.total_requests_today || 0), 0);
+                    document.getElementById('apiCallsToday').textContent = totalCalls.toLocaleString();
+                }
+
+                // Mock other stats (implement proper endpoints later)
+                document.getElementById('totalCustomers').textContent = '5';
+                document.getElementById('revenueMonth').textContent = '฿12,500';
+
+            } catch (error) {
+                console.error('Dashboard load error:', error);
+            }
+        }
+
+        function displayServices(services) {
+            const container = document.getElementById('servicesContainer');
+            container.innerHTML = '';
+
+            services.forEach(service => {
+                const div = document.createElement('div');
+                div.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 1rem; background: var(--color-light); border-radius: var(--radius-md); border: 1px solid var(--color-light-3);';
+
+                div.innerHTML = `
+                    <div>
+                        <strong>${service.service_name}</strong>
+                        <p style="margin: 0.25rem 0 0 0; font-size: 0.875rem; color: var(--color-gray);">${service.service_code}</p>
+                        <p style="margin: 0.25rem 0 0 0; font-size: 0.75rem; color: var(--color-gray);">
+                            <i class="fas fa-users"></i> ${service.enabled_customers} customers | 
+                            <i class="fas fa-chart-line"></i> ${service.total_requests_today} calls today
+                        </p>
+                    </div>
+                    <label class="toggle-switch">
+                        <input type="checkbox" ${service.is_enabled ? 'checked' : ''} onchange="toggleService(${service.id}, this.checked)">
+                        <span class="toggle-slider"></span>
+                    </label>
+                `;
+
+                container.appendChild(div);
+            });
+        }
+
+        async function toggleService(serviceId, isEnabled) {
+            try {
+                const response = await fetch(`${API_BASE_URL}/admin/services/toggle.php`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${adminToken}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ service_id: serviceId, is_enabled: isEnabled })
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    console.log('Service toggled successfully');
+                }
+            } catch (error) {
+                console.error('Toggle error:', error);
+            }
+        }
+
+        function logout() {
+            localStorage.removeItem('admin_token');
+            localStorage.removeItem('admin_data');
+            window.location.href = 'index.html';
+        }
+
+        document.addEventListener('DOMContentLoaded', loadDashboard);
+    </script>
+
+    <style>
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 50px;
+            height: 24px;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 24px;
+        }
+
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+
+        input:checked+.toggle-slider {
+            background-color: var(--color-success);
+        }
+
+        input:checked+.toggle-slider:before {
+            transform: translateX(26px);
+        }
+    </style>
+</body>
+
+</html>

@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="800" height="1000" viewBox="0 0 800 1000" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="pp-bg" x1="0" y1="0" x2="800" y2="1000">
+      <stop stop-color="#1E3A8A"/>
+      <stop offset="1" stop-color="#3B82F6"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="800" height="1000" fill="#F0F4F8"/>
+  
+  <!-- Header with PromptPay logo -->
+  <rect width="800" height="200" fill="url(#pp-bg)"/>
+  <circle cx="400" cy="100" r="50" fill="#FFFFFF" opacity="0.2"/>
+  <text x="400" y="115" font-family="Arial, sans-serif" font-size="48" font-weight="bold" fill="#FFFFFF" text-anchor="middle">฿</text>
+  <text x="400" cy="160" font-family="Arial, sans-serif" font-size="18" fill="#BFDBFE" text-anchor="middle">PromptPay Payment Receipt</text>
+  
+  <!-- Card -->
+  <rect x="40" y="240" width="720" height="700" rx="24" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5"/>
+  
+  <!-- Success Banner -->
+  <rect x="60" y="270" width="680" height="80" rx="12" fill="#ECFDF5"/>
+  <circle cx="100" cy="310" r="24" fill="#10B981"/>
+  <text x="130" y="295" font-family="Arial, sans-serif" font-size="14" fill="#065F46">สถานะ</text>
+  <text x="130" y="325" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#059669">ชำระเงินสำเร็จ</text>
+  <path d="M93 310 L98 315 L108 305" stroke="#FFFFFF" stroke-width="3" fill="none" stroke-linecap="round"/>
+  
+  <!-- Amount Section -->
+  <text x="400" y="420" font-family="Arial, sans-serif" font-size="16" fill="#64748B" text-anchor="middle">จำนวนเงินที่โอน</text>
+  <text x="400" y="470" font-family="Arial, sans-serif" font-size="56" font-weight="bold" fill="#1E3A8A" text-anchor="middle">฿499.00</text>
+  
+  <rect x="60" y="510" width="680" height="1" fill="#E2E8F0"/>
+  
+  <!-- Transaction Details -->
+  <g transform="translate(80, 550)">
+    <text y="0" font-family="Arial, sans-serif" font-size="13" fill="#94A3B8">ผู้โอน</text>
+    <text y="28" font-family="Arial, sans-serif" font-size="17" font-weight="600" fill="#0F172A">นาย ทดสอบ ระบบ</text>
+    <text y="52" font-family="Arial, sans-serif" font-size="14" fill="#64748B">โทร. 0xx-xxx-1234</text>
+  </g>
+  
+  <rect x="60" y="635" width="680" height="1" fill="#E2E8F0"/>
+  
+  <g transform="translate(80, 670)">
+    <text y="0" font-family="Arial, sans-serif" font-size="13" fill="#94A3B8">ผู้รับเงิน</text>
+    <text y="28" font-family="Arial, sans-serif" font-size="17" font-weight="600" fill="#0F172A">บริษัท ออโต้บอท จำกัด</text>
+    <text y="52" font-family="Arial, sans-serif" font-size="14" fill="#64748B">PromptPay ID: 0xx-xxx-5678</text>
+  </g>
+  
+  <rect x="60" y="755" width="680" height="1" fill="#E2E8F0"/>
+  
+  <g transform="translate(80, 790)">
+    <text y="0" font-family="Arial, sans-serif" font-size="13" fill="#94A3B8">วันที่-เวลา</text>
+    <text y="28" font-family="Arial, sans-serif" font-size="16" font-weight="600" fill="#0F172A">23 ธ.ค. 2568, 01:05:30</text>
+    
+    <text y="70" font-family="Arial, sans-serif" font-size="13" fill="#94A3B8">รหัสอ้างอิง</text>
+    <text y="98" font-family="Arial, sans-serif" font-size="15" font-weight="600" fill="#0F172A">PP202512230105987</text>
+  </g>
+  
+  <!-- Footer -->
+  <text x="400" y="955" font-family="Arial, sans-serif" font-size="12" fill="#94A3B8" text-anchor="middle">ใบเสร็จนี้ออกโดยระบบอัตโนมัติ ไม่ต้องลงลายมือชื่อ</text>
+</svg>

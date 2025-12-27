@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ชำระเงิน - AI Automation</title>
+    <script>
+    (function () {
+        var host = window.location.hostname;
+        var isLocal = host === "localhost" || host === "127.0.0.1";
+        var base = isLocal ? "/autobot" : "";
+        document.write(
+            "<scr" + "ipt src=\"" + base + "/assets/js/path-config.js?v=" + Date.now() + "\"><\\/scr" + "ipt>"
+        );
+    })();
+</script>
+    <script>
+        loadCSS('assets/css/style.css');
+        loadCSS('assets/css/responsive-fixes.css');
+    </script>
+</head>
+<body>
+<script>
+    window.location.href = PAGES.USER_PAYMENT || PATH.page('public/payment.php');
+</script>
+</body>
+</html>

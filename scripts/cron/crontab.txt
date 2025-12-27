@@ -1,0 +1,11 @@
+# Crontab Configuration for Autobot
+# Add this to crontab using: crontab -e
+
+# Daily billing cycle - runs at 2:00 AM every day
+0 2 * * * /usr/bin/php /opt/lampp/htdocs/autobot/scripts/cron/daily-billing.php >> /opt/lampp/htdocs/autobot/logs/billing.log 2>&1
+
+# Alternative: If using XAMPP/LAMPP PHP
+# 0 2 * * * /opt/lampp/bin/php /opt/lampp/htdocs/autobot/scripts/cron/daily-billing.php >> /opt/lampp/htdocs/autobot/logs/billing.log 2>&1
+
+# Manual test command:
+# php /opt/lampp/htdocs/autobot/scripts/cron/daily-billing.php

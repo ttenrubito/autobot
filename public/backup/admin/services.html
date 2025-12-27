@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="th">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>จัดการบริการ - Admin Panel</title>
+    <script>
+        // Local XAMPP override - remove this block for Cloud Run deployment
+        window.BASE_PATH_OVERRIDE = '/autobot';
+    </script>
+    <link rel="stylesheet" href="/autobot/assets/css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+</head>
+
+<body>
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <a href="/autobot/admin/index.html" class="sidebar-logo">Admin Panel</a>
+        </div>
+        <nav>
+            <ul class="sidebar-nav">
+                <li><a href="/autobot/admin/index.html" class="sidebar-nav-link"><i class="fas fa-home"></i>
+                        Dashboard</a></li>
+                <li><a href="/autobot/admin/customers.html" class="sidebar-nav-link"><i class="fas fa-users"></i>
+                        ลูกค้า</a></li>
+                <li><a href="/autobot/admin/packages.html" class="sidebar-nav-link"><i class="fas fa-box"></i>
+                        แพ็คเกจ</a></li>
+                <li><a href="/autobot/admin/services.html" class="sidebar-nav-link active"><i class="fas fa-robot"></i>
+                        บริการ</a></li>
+                <li><a href="/autobot/admin/invoices.html" class="sidebar-nav-link"><i class="fas fa-file-invoice"></i>
+                        ใบแจ้งหนี้</a></li>
+                <li><a href="/autobot/admin/reports.html" class="sidebar-nav-link"><i class="fas fa-chart-bar"></i>
+                        รายงาน</a></li>
+                <li><a href="/autobot/admin/settings.html" class="sidebar-nav-link"><i class="fas fa-cog"></i>
+                        ตั้งค่า</a></li>
+            </ul>
+        </nav>
+    </aside>
+
+    <main class="main-content">
+        <div class="page-header">
+            <h1 class="page-title"><i class="fas fa-robot"></i> จัดการบริการ</h1>
+        </div>
+
+        <div class="card">
+            <div class="card-body">
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>ชื่อบริการ</th>
+                                <th>ลูกค้า</th>
+                                <th>ประเภท</th>
+                                <th>แพลตฟอร์ม</th>
+                                <th>สถานะ</th>
+                                <th>การใช้งาน</th>
+                                <th>วันที่สร้าง</th>
+                            </tr>
+                        </thead>
+                        <tbody id="servicesTable">
+                            <tr>
+                                <td colspan="7" style="text-align:center;">กำลังโหลด...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="/autobot/assets/js/constants.js"></script>
+    <script src="/autobot/assets/js/auth.js"></script>
+    <script>
+        async function loadServices() {
+            const token = localStorage.getItem('admin_token');
+            try {
+                const response = await fetch('/autobot/api/admin/services.php', {
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+                const result = await response.json();
+
+                const tbody = document.getElementById('servicesTable');
+                if (result.success && result.data.services) {
+                    tbody.innerHTML = result.data.services.map(s => `
+                        <tr>
+                            <td><strong>${s.service_name}</strong></td>
+                            <td>${s.customer_name}<br/><small>${s.customer_email}</small></td>
+                            <td><span class="badge badge-secondary">${s.service_type_name}</span></td>
+                            <td>${s.platform || '-'}</td>
+                            <td><span class="badge badge-${s.status === 'active' ? 'success' : 'warning'}">${s.status}</span></td>
+                            <td>${s.usage_count || 0} requests</td>
+                            <td>${new Date(s.created_at).toLocaleDateString('th-TH')}</td>
+                        </tr>
+                    `).join('');
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;">ไม่พบข้อมูล</td></tr>';
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                document.getElementById('servicesTable').innerHTML = '<tr><td colspan="7" style="text-align:center;">เกิดข้อผิดพลาด</td></tr>';
+            }
+        }
+
+        loadServices();
+    </script>
+</body>
+
+</html>

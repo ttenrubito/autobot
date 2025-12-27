@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="th">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ชำระเงิน - AI Automation</title>
+    <script>
+        // Local XAMPP override - remove this block for Cloud Run deployment
+        window.BASE_PATH_OVERRIDE = '/autobot';
+    </script>
+    <link rel="stylesheet" href="/autobot/assets/css/style.css">
+    <link rel="stylesheet" href="/autobot/assets/css/responsive-fixes.css">
+    <link rel="stylesheet" href="/autobot/assets/css/modal-fixes.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <script src="https://cdn.omise.co/omise.js"></script>
+</head>
+
+<body>
+    <!-- Sidebar (same as dashboard) -->
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <a href="#" onclick="window.location.href = PAGES.USER_DASHBOARD; return false;" class="sidebar-logo">AI Automate</a>
+            <p class="sidebar-tagline">AI Automation Platform</p>
+        </div>
+
+        <div class="sidebar-user">
+            <div class="sidebar-user-avatar" id="userAvatar">U</div>
+            <div class="sidebar-user-info">
+                <div class="sidebar-user-name" id="userName">Loading...</div>
+                <div class="sidebar-user-email" id="userEmail"></div>
+            </div>
+        </div>
+
+        <nav>
+            <ul class="sidebar-nav">
+                <li class="sidebar-nav-item">
+                    <a href="#" onclick="window.location.href = PAGES.USER_DASHBOARD; return false;" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">📊</span>
+                        <span>Dashboard</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="#" onclick="window.location.href = PAGES.USER_SERVICES; return false;" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">🤖</span>
+                        <span>บริการของฉัน</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="#" onclick="window.location.href = PAGES.USER_USAGE; return false;" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">📈</span>
+                        <span>การใช้งาน</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="/autobot/payment.html" class="sidebar-nav-link active">
+                        <span class="sidebar-nav-icon">💳</span>
+                        <span>ชำระเงิน</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="#" onclick="window.location.href = PAGES.USER_BILLING; return false;" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">📄</span>
+                        <span>ใบแจ้งหนี้</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item">
+                    <a href="# onclick="window.location.href = PAGES.USER_PROFILE; return false;" class="sidebar-nav-link">
+                        <span class="sidebar-nav-icon">👤</span>
+                        <span>โปรไฟล์</span>
+                    </a>
+                </li>
+                <li class="sidebar-nav-item sidebar-nav-item--logout">
+                    <a href="#" onclick="logout(); return false;" class="sidebar-nav-link sidebar-nav-link--logout">
+                        <span class="sidebar-nav-icon">🚪</span>
+                        <span>ออกจากระบบ</span>
+                    </a>
+                </li>
+            </ul>
+        </nav>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <!-- Page Header -->
+        <div class="page-header">
+            <div>
+                <h1 class="page-title">บัตรเครดิต & การชำระเงิน</h1>
+                <p class="page-subtitle">จัดการวิธีการชำระเงินของคุณ</p>
+            </div>
+        </div>
+
+        <div class="row">
+            <!-- Payment Methods List -->
+            <div class="col-8">
+                <div class="card">
+                    <div class="card-header card-header--between">
+                        <div>
+                            <h3 class="card-title">บัตรเครดิตของฉัน</h3>
+                            <p class="card-subtitle">จัดการบัตรที่ใช้สำหรับการชำระเงินอัตโนมัติ</p>
+                        </div>
+                        <button class="btn btn-primary" onclick="showAddCardForm()">
+                            เพิ่มบัตรใหม่
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div id="paymentMethodsContainer">
+                            <div class="text-center card-loading">
+                                <div class="loading-spinner"></div>
+                                <p class="card-loading-text">กำลังโหลด...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Current Subscription Info -->
+            <div class="col-4">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">แพ็คเกจปัจจุบัน</h3>
+                    </div>
+                    <div class="card-body" id="subscriptionInfo">
+                        <div class="text-center card-loading card-loading--compact">
+                            <p class="card-loading-text">กำลังโหลด...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Trust Badges -->
+                <div class="card mt-3 card-trust">
+                    <div class="card-header card-trust-header">
+                        <h3 class="card-title card-trust-title">
+                            <i class="fas fa-shield-alt"></i> ระบบชำระเงินปลอดภัย
+                        </h3>
+                    </div>
+                    <div class="card-body">
+                        <div class="card-trust-list">
+                            <div class="card-trust-item">
+                                <div class="card-trust-icon">
+                                    <i class="fas fa-lock"></i>
+                                </div>
+                                <div class="card-trust-text">
+                                    <strong class="card-trust-text-title">256-bit SSL Encryption</strong>
+                                    <span class="card-trust-text-subtitle">เข้ารหัสระดับธนาคาร</span>
+                                </div>
+                            </div>
+                            <div class="card-trust-item">
+                                <div class="card-trust-icon">
+                                    <i class="fas fa-check-circle"></i>
+                                </div>
+                                <div class="card-trust-text">
+                                    <strong class="card-trust-text-title">PCI DSS Compliant</strong>
+                                    <span class="card-trust-text-subtitle">มาตรฐานสากล</span>
+                                </div>
+                            </div>
+                            <div class="card-trust-item">
+                                <div class="card-trust-icon">
+                                    <i class="fas fa-user-shield"></i>
+                                </div>
+                                <div class="card-trust-text">
+                                    <strong class="card-trust-text-title">Omise Payment Gateway</strong>
+                                    <span class="card-trust-text-subtitle">ผู้ให้บริการชั้นนำ</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="supported-cards supported-cards--compact">
+                            <p class="supported-cards-label">บัตรที่รองรับ</p>
+                            <div class="supported-cards-row">
+                                <span class="card-brand card-brand__visa">
+                                    <img src="/autobot/public/images/visa.svg" alt="VISA">
+                                </span>
+                                <span class="card-brand card-brand--mc" aria-label="Mastercard">
+                                    <img src="/autobot/public/images/master.svg" alt="Mastercard">
+                                </span>
+                                <span class="card-brand card-brand__jcb">
+                                    <img src="/autobot/public/images/jcb.svg" alt="JCB">
+                                </span>
+                                <span class="card-brand card-brand__amex">
+                                    <img src="/autobot/public/images/amex.svg" alt="AMEX">
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Support Card -->
+                <div class="card mt-3 support-card">
+                    <div class="card-body">
+                        <div class="support-card-icon">
+                            <i class="fas fa-headset"></i>
+                        </div>
+                        <strong class="support-card-title">ต้องการความช่วยเหลือ?</strong>
+                        <p class="support-card-text">ติดต่อทีมสนับสนุน 24/7</p>
+                        <a href="mailto:support@aiautomation.com" class="btn btn-outline btn-block">
+                            <i class="fas fa-envelope"></i> ติดต่อเรา
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Add Card Modal (Hidden by default) -->
+        <div id="addCardModal" class="hidden payment-modal-backdrop">
+            <div class="card payment-modal">
+                <!-- Modal Header -->
+                <div class="card-header payment-modal-header">
+                    <div class="payment-modal-header-content">
+                        <div class="payment-modal-header-text">
+                            <h3 class="payment-modal-title">
+                                <i class="fas fa-credit-card"></i> เพิ่มบัตรเครดิต/เดบิต
+                            </h3>
+                            <p class="payment-modal-subtitle">
+                                <i class="fas fa-lock"></i> ปลอดภัยด้วย SSL + PCI DSS
+                            </p>
+                        </div>
+                        <button type="button" class="payment-modal-close" onclick="hideAddCardForm()">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Scrollable Content -->
+                <div class="card-body payment-modal-body">
+                    <!-- Accepted Card Types with actual card styles -->
+                    <div class="payment-modal-accepted">
+                        <p class="payment-modal-accepted-label">บัตรที่รองรับ</p>
+                        <div class="supported-cards-row">
+                            <span class="card-brand card-brand__visa">
+                                <img src="/autobot/public/images/visa.svg" alt="VISA">
+                            </span>
+                            <span class="card-brand card-brand--mc" aria-label="Mastercard">
+                                <img src="/autobot/public/images/master.svg" alt="Mastercard">
+                            </span>
+                            <span class="card-brand card-brand__jcb">
+                                <img src="/autobot/public/images/jcb.svg" alt="JCB">
+                            </span>
+                            <span class="card-brand card-brand__amex">
+                                <img src="/autobot/public/images/amex.svg" alt="AMEX">
+                            </span>
+                        </div>
+                    </div>
+
+                    <form id="cardForm" class="card-form">
+                        <div class="form-group">
+                            <label class="form-label">
+                                <i class="fas fa-credit-card"></i> หมายเลขบัตร
+                            </label>
+                            <div class="card-form-number-wrapper">
+                                <input type="text" id="cardNumber" class="form-control card-form-number-input"
+                                    placeholder="1234 5678 9012 3456" maxlength="19" required>
+                                <div id="cardBrandIcon" class="card-form-brand-icon">
+                                    <i class="fas fa-credit-card"></i>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">
+                                <i class="fas fa-user"></i> ชื่อบนบัตร
+                            </label>
+                            <input type="text" id="cardName" class="form-control card-form-name-input"
+                                placeholder="JOHN DOE" required>
+                        </div>
+
+                        <div class="row">
+                            <div class="col-6">
+                                <div class="form-group">
+                                    <label class="form-label">
+                                        <i class="far fa-calendar-alt"></i> วันหมดอายุ
+                                    </label>
+                                    <input type="text" id="cardExpiry" class="form-control card-form-expiry-input"
+                                        placeholder="MM/YY" maxlength="5" required>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="form-group">
+                                    <label class="form-label">
+                                        <i class="fas fa-key"></i> CVV
+                                    </label>
+                                    <input type="password" id="cardCVV" class="form-control card-form-cvv-input"
+                                        placeholder="***" maxlength="4" required>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-group payment-modal-default-checkbox">
+                            <label class="payment-modal-default-checkbox-label">
+                                <input type="checkbox" id="setDefault" class="payment-modal-default-checkbox-input">
+                                <span>
+                                    <i class="fas fa-star"></i>
+                                    ตั้งเป็นบัตรหลัก
+                                </span>
+                            </label>
+                        </div>
+
+                        <div id="cardError" class="form-error hidden"></div>
+
+                        <div class="payment-modal-actions">
+                            <button type="submit" class="btn btn-primary payment-modal-submit">
+                                <i class="fas fa-save"></i> บันทึกบัตร
+                            </button>
+                            <button type="button" class="btn btn-outline payment-modal-cancel"
+                                onclick="hideAddCardForm()">
+                                <i class="fas fa-times"></i> ยกเลิก
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="/autobot/assets/js/constants.js"></script>
+    <script src="/autobot/assets/js/auth.js"></script>
+    <script src="/autobot/assets/js/payment.js"></script>
+</body>
+
+</html>

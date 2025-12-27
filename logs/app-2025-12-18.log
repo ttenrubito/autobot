@@ -1,0 +1,3 @@
+{"timestamp":"2025-12-18 16:00:51","level":"INFO","request_id":"req_6943c2c3d76b20.35029656","message":"========== Facebook Token Refresh Started ==========","context":[],"user_ip":"unknown","user_agent":"unknown","method":"","uri":""}
+{"timestamp":"2025-12-18 16:00:51","level":"INFO","request_id":"req_6943c2c3d76b20.35029656","message":"Mode: LIVE","context":[],"user_ip":"unknown","user_agent":"unknown","method":"","uri":""}
+{"timestamp":"2025-12-18 16:00:51","level":"ERROR","request_id":"req_6943c2c3d76b20.35029656","message":"Fatal error: Database connection failed: SQLSTATE[HY000] [2002] Connection refused","context":[],"user_ip":"unknown","user_agent":"unknown","method":"","uri":""}

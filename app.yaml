@@ -1,0 +1,41 @@
+# Google App Engine Configuration (Alternative to Cloud Run)
+# Use this if deploying to App Engine instead of Cloud Run
+
+runtime: php82
+
+# Environment variables
+env_variables:
+  APP_ENV: 'production'
+  APP_DEBUG: 'false'
+  BASE_URL: 'https://autobot-prod.appspot.com'
+
+# Instance class
+instance_class: F2
+
+# Automatic scaling
+automatic_scaling:
+  min_instances: 1
+  max_instances: 10
+  target_cpu_utilization: 0.65
+
+# Handlers
+handlers:
+  # Static assets from assets
+  - url: /assets
+    static_dir: assets
+    secure: always
+
+  # API endpoints
+  - url: /api/.*
+    script: auto
+    secure: always
+
+  # Public HTML pages
+  - url: /.*
+    static_files: public/\1
+    upload: public/.*
+    secure: always
+
+# Cloud SQL
+beta_settings:
+  cloud_sql_instances: 'autobot-prod:asia-southeast1:autobot-db'

@@ -1,0 +1,470 @@
+<?php
+/**
+ * LINE Messaging API Webhook Handler
+ * Receives messages from LINE and routes to bot gateway
+ */
+
+require_once __DIR__ . '/../../includes/Database.php';
+require_once __DIR__ . '/../../includes/Response.php';
+require_once __DIR__ . '/../../includes/Logger.php';
+
+header('Content-Type: application/json');
+
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    http_response_code(405);
+    echo json_encode(['error' => 'Method not allowed']);
+    exit;
+}
+
+try {
+    handleIncomingWebhook();
+} catch (Exception $e) {
+    Logger::error('LINE webhook error: ' . $e->getMessage());
+    http_response_code(500);
+    echo json_encode(['error' => 'Server error']);
+}
+
+/**
+ * Handle incoming webhook from LINE
+ */
+function handleIncomingWebhook() {
+    $input = file_get_contents('php://input');
+    $data = json_decode($input, true);
+    
+    if (!$data) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Invalid JSON']);
+        return;
+    }
+    
+    // Verify signature
+    $signature = $_SERVER['HTTP_X_LINE_SIGNATURE'] ?? '';
+    if (!verifySignature($input, $signature)) {
+        Logger::warning('LINE webhook signature verification failed');
+        http_response_code(403);
+        echo json_encode(['error' => 'Invalid signature']);
+        return;
+    }
+    
+    // Process each event
+    if (isset($data['events'])) {
+        foreach ($data['events'] as $event) {
+            processEvent($event);
+        }
+    }
+    
+    // LINE expects 200 OK response
+    http_response_code(200);
+    echo json_encode(['status' => 'received']);
+}
+
+/**
+ * Verify LINE webhook signature
+ */
+function verifySignature($payload, $signature) {
+    if (empty($signature)) {
+        return false;
+    }
+    
+    // Get channel secret from database or environment
+    $db = Database::getInstance();
+    
+    // Try to find active LINE channel
+    $channels = $db->query(
+        "SELECT config FROM customer_channels WHERE type = 'line' AND status = 'active' AND is_deleted = 0 LIMIT 1"
+    );
+    
+    $channelSecret = '';
+    if (!empty($channels)) {
+        $config = json_decode($channels[0]['config'] ?? '{}', true);
+        $channelSecret = $config['channel_secret'] ?? '';
+    }
+    
+    // Fallback to environment variable
+    if (empty($channelSecret)) {
+        $channelSecret = getenv('LINE_CHANNEL_SECRET') ?: '';
+    }
+    
+    if (empty($channelSecret)) {
+        Logger::error('LINE channel secret not configured');
+        return false;
+    }
+    
+    $expectedSignature = base64_encode(hash_hmac('sha256', $payload, $channelSecret, true));
+    return hash_equals($expectedSignature, $signature);
+}
+
+/**
+ * Process individual LINE event
+ */
+function processEvent($event) {
+    $type = $event['type'] ?? '';
+    
+    // Only process message events
+    if ($type !== 'message') {
+        return;
+    }
+    
+    $source = $event['source'] ?? [];
+    $message = $event['message'] ?? [];
+    $replyToken = $event['replyToken'] ?? null;
+    
+    $userId = $source['userId'] ?? null;
+    $messageType = $message['type'] ?? 'text';
+    $messageId = $message['id'] ?? null;
+    $text = $message['text'] ?? '';
+    
+    if (!$userId || !$replyToken) {
+        return;
+    }
+    
+    // Find LINE channel
+    $db = Database::getInstance();
+    $channel = $db->queryOne(
+        "SELECT * FROM customer_channels 
+         WHERE type = 'line' 
+         AND status = 'active' 
+         AND is_deleted = 0 
+         LIMIT 1"
+    );
+    
+    if (!$channel) {
+        Logger::warning('No active LINE channel found');
+        return;
+    }
+
+    // ✅ Deduplication check
+    if ($messageId !== '' && isMessageAlreadyProcessed((int)$channel['id'], $messageId)) {
+        Logger::info("LINE webhook: Duplicate message detected (mid=$messageId, channel_id={$channel['id']}), skipping");
+        return;
+    }
+    
+    // ✅ NEW: Check if user is admin (via whitelist in config)
+    $config = json_decode($channel['config'] ?? '{}', true);
+    $adminUserIds = $config['admin_user_ids'] ?? [];
+    $isAdmin = in_array($userId, $adminUserIds, true);
+    
+    if ($isAdmin) {
+        Logger::info('[LINE_WEBHOOK] Admin user detected', [
+            'user_id' => $userId,
+            'channel_id' => $channel['id']
+        ]);
+    }
+    
+    // Prepare message for gateway
+    $gatewayMessage = [
+        'inbound_api_key' => $channel['inbound_api_key'],
+        'external_user_id' => $userId,
+        'text' => $text,
+        'message_type' => $messageType,
+        'channel_type' => 'line',
+        'is_admin' => $isAdmin,  // ✅ NEW: Admin detection
+        'metadata' => [
+            'message_id' => $messageId,
+            'reply_token' => $replyToken,
+            'source_type' => $source['type'] ?? 'user',
+            'platform' => 'line',
+            'is_admin' => $isAdmin
+        ]
+    ];
+    
+    // ✅ Handle sticker messages
+    if ($messageType === 'sticker') {
+        Logger::info("LINE webhook: Sticker received", [
+            'sticker_id' => $message['stickerId'] ?? null,
+            'package_id' => $message['packageId'] ?? null
+        ]);
+        
+        // Send friendly sticker acknowledgment
+        $stickerReply = 'รับสติกเกอร์แล้วค่ะ 😊 ต้องการให้ช่วยอะไรต่อดีคะ';
+        sendLineReply($replyToken, $stickerReply, [], $channel);
+        
+        // Record event for deduplication
+        if ($messageId !== '') {
+            recordMessageEvent((int)$channel['id'], $messageId, ['reply_text' => $stickerReply]);
+        }
+        return;
+    }
+    
+    // ✅ Handle image messages - download and normalize
+    if ($messageType === 'image') {
+        $imageUrl = downloadLineImage($messageId, $channel);
+        
+        if ($imageUrl) {
+            $gatewayMessage['attachments'] = [[
+                'type' => 'image',
+                'url' => $imageUrl  // ✅ Now has proper URL!
+            ]];
+            Logger::info("LINE webhook: Image downloaded and normalized", [
+                'message_id' => $messageId,
+                'public_url' => $imageUrl
+            ]);
+        } else {
+            Logger::error("LINE webhook: Failed to download image", [
+                'message_id' => $messageId
+            ]);
+            $gatewayMessage['attachments'] = [[
+                'type' => 'image',
+                'message_id' => $messageId
+            ]];
+        }
+    } elseif ($messageType === 'location') {
+        $gatewayMessage['metadata']['location'] = [
+            'latitude' => $message['latitude'] ?? null,
+            'longitude' => $message['longitude'] ?? null,
+            'address' => $message['address'] ?? null
+        ];
+    }
+    
+    // Call internal message gateway
+    $response = callGateway($gatewayMessage);
+    
+    // Extract response data (gateway wraps in 'data')
+    $data = is_array($response) && isset($response['data']) ? $response['data'] : $response;
+    $replyText = is_array($data) ? (string)($data['reply_text'] ?? '') : '';
+    $actions = is_array($data) && isset($data['actions']) ? $data['actions'] : [];
+    
+    Logger::info("[LINE_WEBHOOK] Gateway response received", [
+        'has_reply' => !empty($replyText),
+        'actions_count' => count($actions),
+        'actions_full' => $actions
+    ]);
+    
+    // ✅ Record message event for deduplication
+    if ($messageId !== '') {
+        recordMessageEvent((int)$channel['id'], $messageId, $response);
+    }
+    
+    // ✅ Send response back to LINE (text + actions/images)
+    if ($replyText !== '' || !empty($actions)) {
+        sendLineReply($replyToken, $replyText, $actions, $channel);
+    }
+}
+
+/**
+ * ✅ Download image from LINE Content API and save to public directory
+ */
+function downloadLineImage($messageId, $channel) {
+    $config = json_decode($channel['config'] ?? '{}', true);
+    $channelAccessToken = $config['channel_access_token'] ?? '';
+    
+    if (empty($channelAccessToken)) {
+        Logger::error('LINE channel access token not configured');
+        return null;
+    }
+    
+    // Create upload directory if doesn't exist
+    $uploadDir = __DIR__ . '/../../public/uploads/line_images';
+    if (!is_dir($uploadDir)) {
+        mkdir($uploadDir, 0755, true);
+    }
+    
+    // Download image from LINE
+    $url = "https://api-data.line.me/v2/bot/message/$messageId/content";
+    
+    $ch = curl_init($url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Authorization: Bearer ' . $channelAccessToken
+    ]);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+    
+    $imageData = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    
+    if ($httpCode !== 200 || !$imageData) {
+        Logger::error("Failed to download LINE image: HTTP $httpCode");
+        return null;
+    }
+    
+    // Save to file
+    $filename = $messageId . '.jpg';
+    $filepath = $uploadDir . '/' . $filename;
+    
+    if (file_put_contents($filepath, $imageData) === false) {
+        Logger::error("Failed to save LINE image to disk");
+        return null;
+    }
+    
+    // Generate public URL
+    $domain = getenv('APP_URL') ?: 'https://autobot.boxdesign.in.th';
+    $publicUrl = rtrim($domain, '/') . '/uploads/line_images/' . $filename;
+    
+    return $publicUrl;
+}
+
+/**
+ * ✅ Check if message already processed (deduplication)
+ */
+function isMessageAlreadyProcessed(int $channelId, string $externalEventId): bool {
+    try {
+        $db = Database::getInstance();
+        
+        $sql = "SELECT COUNT(*) as cnt FROM gateway_message_events 
+                WHERE channel_id = ? AND external_event_id = ? 
+                AND created_at > NOW() - INTERVAL 24 HOUR";
+        
+        $result = $db->queryOne($sql, [$channelId, $externalEventId]);
+        return ($result && (int)$result['cnt'] > 0);
+    } catch (Exception $e) {
+        Logger::error("Deduplication check error: " . $e->getMessage());
+        return false;
+    }
+}
+
+/**
+ * ✅ Record message event for deduplication
+ */
+function recordMessageEvent(int $channelId, string $externalEventId, ?array $responsePayload): void {
+    try {
+        $db = Database::getInstance();
+        
+        $payloadJson = $responsePayload !== null ? json_encode($responsePayload, JSON_UNESCAPED_UNICODE) : null;
+        
+        $sql = "INSERT INTO gateway_message_events (channel_id, external_event_id, response_payload, created_at) 
+                VALUES (?, ?, ?, NOW())";
+        
+        $db->execute($sql, [$channelId, $externalEventId, $payloadJson]);
+    } catch (Exception $e) {
+        Logger::error("Failed to record message event: " . $e->getMessage());
+    }
+}
+
+/**
+ * Call internal message gateway
+ */
+function callGateway($message) {
+    $gatewayUrl = getenv('GATEWAY_URL');
+    if (!$gatewayUrl) {
+        // Use production domain (same as Facebook webhook)
+        $gatewayUrl = 'https://autobot.boxdesign.in.th/api/gateway/message.php';
+    }
+    
+    $ch = curl_init($gatewayUrl);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($message));
+    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+    
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    
+    if ($httpCode === 200 && $response) {
+        $data = json_decode($response, true);
+        return $data ?? null;
+    }
+    
+    return null;
+}
+
+/**
+ * ✅ Send reply to LINE user (text + images from actions)
+ */
+function sendLineReply($replyToken, $text, $actions, $channel) {
+    $config = json_decode($channel['config'] ?? '{}', true);
+    $channelAccessToken = $config['channel_access_token'] ?? '';
+    
+    if (empty($channelAccessToken)) {
+        Logger::error('LINE channel access token not configured for channel: ' . $channel['id']);
+        return false;
+    }
+    
+    $url = 'https://api.line.me/v2/bot/message/reply';
+    
+    // Build messages array
+    $messages = [];
+    
+    // Add text message if present
+    if ($text !== '') {
+        $messages[] = [
+            'type' => 'text',
+            'text' => $text
+        ];
+    }
+    
+    // ✅ Add image messages from actions
+    if (!empty($actions) && is_array($actions)) {
+        Logger::info("[LINE_WEBHOOK] Processing " . count($actions) . " actions");
+        
+        $imageCount = 0;
+        foreach ($actions as $idx => $action) {
+            if (is_array($action) && isset($action['type']) && $action['type'] === 'image' && !empty($action['url'])) {
+                $imageUrl = $action['url'];
+                
+                // Convert relative URL to absolute
+                if (strpos($imageUrl, 'http') !== 0) {
+                    $domain = getenv('APP_URL') ?: 'https://autobot.boxdesign.in.th';
+                    $imageUrl = rtrim($domain, '/') . '/' . ltrim($imageUrl, '/');
+                }
+                
+                // LINE requires both originalContentUrl and previewImageUrl
+                $messages[] = [
+                    'type' => 'image',
+                    'originalContentUrl' => $imageUrl,
+                    'previewImageUrl' => $imageUrl
+                ];
+                
+                $imageCount++;
+                Logger::info("[LINE_WEBHOOK] 📸 Added image #{$imageCount} to messages", [
+                    'action_index' => $idx,
+                    'image_url' => $imageUrl
+                ]);
+                
+                // LINE API limit: max 5 messages per reply
+                if (count($messages) >= 5) {
+                    Logger::warning("[LINE_WEBHOOK] Reached LINE API limit of 5 messages");
+                    break;
+                }
+            }
+        }
+        
+        Logger::info("[LINE_WEBHOOK] ✅ Built LINE messages array: text + {$imageCount} images");
+    }
+    
+    // If no messages to send, skip
+    if (empty($messages)) {
+        Logger::warning("[LINE_WEBHOOK] No messages to send");
+        return true;
+    }
+    
+    $payload = [
+        'replyToken' => $replyToken,
+        'messages' => $messages
+    ];
+    
+    Logger::info("[LINE_WEBHOOK] Sending to LINE API", [
+        'message_count' => count($messages),
+        'has_text' => $text !== '',
+        'image_count' => count($messages) - ($text !== '' ? 1 : 0)
+    ]);
+    
+    $ch = curl_init($url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/json',
+        'Authorization: Bearer ' . $channelAccessToken
+    ]);
+    
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    
+    if ($httpCode !== 200) {
+        Logger::error('[LINE_WEBHOOK] ❌ LINE API error', [
+            'http_code' => $httpCode,
+            'response' => substr((string)$response, 0, 500)
+        ]);
+        return false;
+    }
+    
+    Logger::info("[LINE_WEBHOOK] ✅ Reply sent successfully", [
+        'http_code' => $httpCode,
+        'message_count' => count($messages)
+    ]);
+    return true;
+}

@@ -1,0 +1,385 @@
+openapi: 3.0.0
+info:
+  title: AI Automation API Gateway
+  description: |
+    API Gateway for Google Cloud Vision and Natural Language APIs with built-in authentication, rate limiting, and usage tracking.
+    
+    ## Authentication
+    All endpoints require an API key in the `X-API-Key` header.
+    
+    Get your API key from the Customer Portal → API Docs page.
+    
+  version: 1.0.0
+  contact:
+    name: AI Automation Support
+    url: https://yourdomain.com
+    email: support@yourdomain.com
+  license:
+    name: Proprietary
+
+servers:
+  - url: http://localhost/autobot/api
+    description: Local Development
+  - url: https://api.yourdomain.com/autobot/api
+    description: Production
+
+security:
+  - ApiKeyAuth: []
+
+tags:
+  - name: Gateway - Vision
+    description: Google Cloud Vision API endpoints
+  - name: Gateway - Language
+    description: Google Cloud Natural Language API endpoints
+  - name: System
+    description: System health and monitoring
+
+paths:
+  /health.php:
+    get:
+      tags:
+        - System
+      summary: Health Check
+      description: Check system health and service availability
+      security: []
+      responses:
+        '200':
+          description: System is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: System is unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /gateway/vision/labels:
+    post:
+      tags:
+        - Gateway - Vision
+      summary: Label Detection
+      description: Detect and extract labels/tags from images
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VisionRequest'
+            example:
+              image:
+                content: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ..."
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VisionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /gateway/vision/text:
+    post:
+      tags:
+        - Gateway - Vision
+      summary: Text Detection (OCR)
+      description: Extract text from images using Optical Character Recognition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VisionRequest'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VisionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /gateway/vision/faces:
+    post:
+      tags:
+        - Gateway - Vision
+      summary: Face Detection
+      description: Detect faces in images
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VisionRequest'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VisionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /gateway/vision/objects:
+    post:
+      tags:
+        - Gateway - Vision
+      summary: Object Detection
+      description: Detect and localize objects in images
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VisionRequest'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VisionResponse'
+
+  /gateway/language/sentiment:
+    post:
+      tags:
+        - Gateway - Language
+      summary: Sentiment Analysis
+      description: Analyze sentiment of text
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LanguageRequest'
+            example:
+              text: "I love this product! It's amazing!"
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LanguageResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /gateway/language/entities:
+    post:
+      tags:
+        - Gateway - Language
+      summary: Entity Extraction
+      description: Extract entities (people, places, organizations) from text
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LanguageRequest'
+            example:
+              text: "Google was founded in California by Larry Page and Sergey Brin."
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LanguageResponse'
+
+  /gateway/language/syntax:
+    post:
+      tags:
+        - Gateway - Language
+      summary: Syntax Analysis
+      description: Analyze syntax and parts of speech in text
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LanguageRequest'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LanguageResponse'
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key for authentication. Get from Customer Portal → API Docs.
+
+  schemas:
+    VisionRequest:
+      type: object
+      required:
+        - image
+      properties:
+        image:
+          type: object
+          required:
+            - content
+          properties:
+            content:
+              type: string
+              format: byte
+              description: Base64 encoded image data
+              maxLength: 10485760
+
+    LanguageRequest:
+      type: object
+      required:
+        - text
+      properties:
+        text:
+          type: string
+          description: Text to analyze
+          maxLength: 100000
+          example: "I love this product!"
+
+    VisionResponse:
+      type: object
+      description: Response from Google Vision API
+      
+    LanguageResponse:
+      type: object
+      description: Response from Google Natural Language API
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, unhealthy]
+        timestamp:
+          type: string
+          format: date-time
+        services:
+          type: object
+          properties:
+            database:
+              type: string
+              enum: [connected, disconnected, error]
+            disk:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum: [ok, warning]
+                used_percent:
+                  type: number
+            google_vision_api:
+              type: string
+              enum: [configured, not_configured]
+            google_language_api:
+              type: string
+              enum: [configured, not_configured]
+
+    Error:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: "Error description"
+        error_code:
+          type: string
+          example: "RATE_LIMIT_EXCEEDED"
+        details:
+          type: object
+          additionalProperties: true
+
+  responses:
+    Unauthorized:
+      description: Invalid or missing API key
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            success: false
+            message: "Invalid or expired API key"
+            error_code: "UNAUTHORIZED"
+
+    Forbidden:
+      description: No access to this service
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            success: false
+            message: "You do not have access to this service"
+            error_code: "ACCESS_DENIED"
+
+    TooManyRequests:
+      description: Rate limit exceeded
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            success: false
+            message: "Daily rate limit exceeded"
+            error_code: "RATE_LIMIT_EXCEEDED"
+            details:
+              limit: 1000
+              used: 1000
+              reset_at: "2025-12-11T00:00:00Z"
+
+    PayloadTooLarge:
+      description: Request payload too large
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            success: false
+            message: "Image size exceeds maximum allowed (10MB)"
+            error_code: "PAYLOAD_TOO_LARGE"
+
+    ServiceUnavailable:
+      description: Service temporarily unavailable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            success: false
+            message: "This service is currently unavailable"
+            error_code: "SERVICE_UNAVAILABLE"
+
+x-tagGroups:
+  - name: API Gateway
+    tags:
+      - Gateway - Vision
+      - Gateway - Language
+  - name: Monitoring
+    tags:
+      - System
