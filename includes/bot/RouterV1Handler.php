@@ -100,15 +100,30 @@ class RouterV1Handler implements BotHandlerInterface
                 'trace_id' => $traceId,
             ]);
 
-            // ✅ detect message type from message fields OR attachments
-            $messageType = $this->detectMessageType($message);
-            $imageUrl = $this->extractFirstImageUrl($message);
-
             // ✅ ignore echo/system messages
             $isEcho = (bool)($message['is_echo'] ?? false);
             if ($isEcho) {
                 Logger::info("RouterV1 - Ignored echo message");
                 return ['reply_text' => null, 'actions' => [], 'meta' => ['reason' => 'ignore_echo']];
+            }
+
+            // ✅ Extract message type and image URL early
+            $messageType = $message['message_type'] ?? ($message['type'] ?? 'text');
+            $imageUrl = $message['attachments'][0]['url'] ?? null;
+
+            // =========================================================
+            // ✅ Session (MUST be created before admin command / handoff)
+            // =========================================================
+            $channel   = $context['channel'] ?? [];
+            $channelId = $channel['id'] ?? null;
+            $externalUserId = $context['external_user_id'] ?? ($context['user']['external_user_id'] ?? null);
+
+            $session = null;
+            $sessionId = null;
+            if ($channelId && $externalUserId) {
+                $session = $this->findOrCreateSession((int)$channelId, (string)$externalUserId);
+                $sessionId = $session['id'] ?? null;
+                if ($sessionId) $context['session_id'] = (int)$sessionId;
             }
 
             // ✅ Admin bypass
@@ -125,37 +140,74 @@ class RouterV1Handler implements BotHandlerInterface
                 $isAdmin = !empty($context['is_admin']) || !empty($context['user']['is_admin']);
             }
 
-            // ✅ NEW: Keyword-based admin detection (for LINE OA where is_echo not available)
-            // If message contains "admin" keyword → treat as admin intervention
-            if (!$isAdmin && $text !== '' && $messageType === 'text') {
-                $normalizedText = mb_strtolower(trim($text), 'UTF-8');
-                if (strpos($normalizedText, 'admin') !== false) {
-                    $isAdmin = true;
-                    Logger::info('[ADMIN_HANDOFF] Admin keyword detected in message', [
+            // ✅ Honor webhook-provided admin flag (Facebook is_echo / sender_is_page, LINE whitelist)
+            if (!$isAdmin && !empty($context['is_admin'])) {
+                $isAdmin = true;
+            }
+
+            // ✅ Manual admin handoff command (cross-platform fallback)
+            // Accept: "admin", "/admin", "#admin" at START of message (case-insensitive)
+            // Examples: "admin", "Admin มาตอบ", "/admin test", "#admin here"
+            // ✅ CRITICAL: Only works when message is FROM admin (not typed by customer)
+            $adminCmdMatched = false;
+            if ($isAdmin && $text !== '') {
+                $t = mb_strtolower(trim($text), 'UTF-8');
+                // Match if message STARTS with admin command (with or without text after)
+                if (preg_match('/^(?:\/admin|#admin|admin)(?:\s|$)/u', $t)) {
+                    $adminCmdMatched = true;
+                    Logger::info('[ADMIN_HANDOFF] Command pattern matched!', [
                         'trace_id' => $traceId,
-                        'text_preview' => substr($text, 0, 50),
-                        'platform' => $context['platform'] ?? ($context['channel']['platform'] ?? null),
+                        'text' => $text,
+                        'text_lower' => $t,
+                        'session_id' => $sessionId,
+                        'channel_id' => $channelId,
+                        'external_user_id' => $externalUserId,
                     ]);
                 }
+            }
+            if ($adminCmdMatched && $sessionId) {
+                Logger::info('[ADMIN_HANDOFF] Manual command detected', [
+                    'trace_id' => $traceId,
+                    'session_id' => $sessionId,
+                    'channel_id' => $channelId,
+                    'external_user_id' => $externalUserId,
+                    'platform' => $context['platform'] ?? ($context['channel']['platform'] ?? null),
+                ]);
+
+                try {
+                    $this->db->execute(
+                        'UPDATE chat_sessions SET last_admin_message_at = NOW(), updated_at = NOW() WHERE id = ?',
+                        [$sessionId]
+                    );
+                } catch (Exception $e) {
+                    Logger::error('[ADMIN_HANDOFF] Failed to update timestamp (manual cmd): ' . $e->getMessage(), [
+                        'trace_id' => $traceId,
+                        'session_id' => $sessionId,
+                    ]);
+                }
+
+                // Store marker for audit trail
+                $this->storeMessage($sessionId, 'system', '[admin_handoff] manual');
+
+                // Treat as admin handoff activation immediately
+                $isAdmin = true;
+
+                // Do not reply when command is used
+                return [
+                    'reply_text' => null,
+                    'actions' => [],
+                    'meta' => [
+                        'handler' => 'router_v1',
+                        'reason' => 'admin_handoff_manual_command',
+                        'trace_id' => $traceId,
+                    ]
+                ];
             }
 
             // Human-like delay (optional)
             $delayMs = (int)($config['llm']['reply_delay_ms'] ?? 0);
             if ($delayMs > 0 && $delayMs <= 5000) {
                 usleep($delayMs * 1000);
-            }
-
-            // Session
-            $channel   = $context['channel'] ?? [];
-            $channelId = $channel['id'] ?? null;
-            $externalUserId = $context['external_user_id'] ?? ($context['user']['external_user_id'] ?? null);
-
-            $session = null;
-            $sessionId = null;
-            if ($channelId && $externalUserId) {
-                $session = $this->findOrCreateSession((int)$channelId, (string)$externalUserId);
-                $sessionId = $session['id'] ?? null;
-                if ($sessionId) $context['session_id'] = (int)$sessionId;
             }
 
             // Load last state
@@ -169,12 +221,6 @@ class RouterV1Handler implements BotHandlerInterface
             }
             if ($session && !empty($session['last_intent'])) {
                 $lastIntent = $session['last_intent'];
-            }
-
-            // Normalize last_question_key
-            $lastQuestionKey = null;
-            if (is_array($lastSlots) && isset($lastSlots['last_question_key'])) {
-                $lastQuestionKey = (string)$lastSlots['last_question_key'];
             }
 
             // Box Design logic moved to RouterV2BoxDesignHandler
@@ -199,7 +245,7 @@ class RouterV1Handler implements BotHandlerInterface
                     'channel_id' => $channelId,
                     'text_preview' => substr($text, 0, 50),
                 ]);
-                
+
                 // Update last admin message timestamp
                 try {
                     $this->db->execute(
@@ -210,12 +256,12 @@ class RouterV1Handler implements BotHandlerInterface
                 } catch (Exception $e) {
                     Logger::error('[ADMIN_HANDOFF] Failed to update timestamp: ' . $e->getMessage());
                 }
-                
-                // Store admin message for context
+
+                // Store admin message for context (use supported role)
                 if ($text !== '') {
-                    $this->storeMessage($sessionId, 'admin', $text);
+                    $this->storeMessage($sessionId, 'system', '[admin] ' . $text);
                 }
-                
+
                 // Don't reply to admin messages
                 return [
                     'reply_text' => null,
@@ -233,15 +279,18 @@ class RouterV1Handler implements BotHandlerInterface
             // ✅ ADMIN HANDOFF: Check if admin is still active (1-hour timeout)
             // =========================================================
             if (!$isAdmin && $sessionId && $session) {
-                $lastAdminMsg = $session['last_admin_message_at'] ?? null;
-                
+                // NOTE: $session may be stale (it was loaded before we update it in other requests).
+                // Always read the latest timestamp for correctness.
+                $row = $this->db->queryOne('SELECT last_admin_message_at FROM chat_sessions WHERE id = ? LIMIT 1', [$sessionId]);
+                $lastAdminMsg = $row['last_admin_message_at'] ?? null;
+
                 if ($lastAdminMsg !== null) {
                     $adminActiveThreshold = 3600; // 1 hour in seconds
-                    $lastAdminTime = strtotime($lastAdminMsg);
+                    $lastAdminTime = strtotime((string)$lastAdminMsg);
                     $currentTime = time();
                     $timeSinceAdmin = $currentTime - $lastAdminTime;
-                    
-                    if ($timeSinceAdmin < $adminActiveThreshold) {
+
+                    if ($lastAdminTime && $timeSinceAdmin < $adminActiveThreshold) {
                         // Admin is still active - pause bot
                         Logger::info('[ADMIN_HANDOFF] Admin still active - bot paused', [
                             'trace_id' => $traceId,
@@ -250,12 +299,12 @@ class RouterV1Handler implements BotHandlerInterface
                             'threshold_sec' => $adminActiveThreshold,
                             'remaining_sec' => $adminActiveThreshold - $timeSinceAdmin,
                         ]);
-                        
+
                         // Store customer message but don't reply
                         if ($text !== '') {
                             $this->storeMessage($sessionId, 'user', $text);
                         }
-                        
+
                         return [
                             'reply_text' => null,
                             'actions' => [],
@@ -266,23 +315,23 @@ class RouterV1Handler implements BotHandlerInterface
                                 'trace_id' => $traceId,
                             ]
                         ];
-                    } else {
-                        // Timeout expired - clear flag and resume bot
-                        Logger::info('[ADMIN_HANDOFF] Timeout expired - resuming bot', [
-                            'trace_id' => $traceId,
-                            'session_id' => $sessionId,
-                            'time_since_admin_sec' => $timeSinceAdmin,
-                        ]);
-                        
-                        try {
-                            $this->db->execute(
-                                'UPDATE chat_sessions SET last_admin_message_at = NULL WHERE id = ?',
-                                [$sessionId]
-                            );
-                            Logger::info('[ADMIN_HANDOFF] Cleared last_admin_message_at', ['session_id' => $sessionId]);
-                        } catch (Exception $e) {
-                            Logger::error('[ADMIN_HANDOFF] Failed to clear timestamp: ' . $e->getMessage());
-                        }
+                    }
+
+                    // Timeout expired - clear flag and resume bot
+                    Logger::info('[ADMIN_HANDOFF] Timeout expired - resuming bot', [
+                        'trace_id' => $traceId,
+                        'session_id' => $sessionId,
+                        'time_since_admin_sec' => $timeSinceAdmin,
+                    ]);
+
+                    try {
+                        $this->db->execute(
+                            'UPDATE chat_sessions SET last_admin_message_at = NULL WHERE id = ?',
+                            [$sessionId]
+                        );
+                        Logger::info('[ADMIN_HANDOFF] Cleared last_admin_message_at', ['session_id' => $sessionId]);
+                    } catch (Exception $e) {
+                        Logger::error('[ADMIN_HANDOFF] Failed to clear timestamp: ' . $e->getMessage());
                     }
                 }
             }
@@ -616,7 +665,7 @@ class RouterV1Handler implements BotHandlerInterface
                         // ✅ Backend response - skip hallucination check
                         $backendWasUsed = !empty($meta['backend']);
                         $backendWorked = !empty($config['backend_api']['enabled']);
-                        $reply = $this->applyPolicyGuards($reply, $intent, $config, $templates, $backendWorked, $backendWasUsed);
+                        $reply = $this->applyPolicyGuards($reply, $intent, $config, $templates, $backendWorked, $backendWasUsed, $handled['slots'] ?? $slots);
 
                         if ($sessionId && $intent) {
                             $this->updateSessionState($sessionId, $intent, $handled['slots'] ?? $slots);
@@ -653,7 +702,7 @@ class RouterV1Handler implements BotHandlerInterface
 
                     // ✅ Apply policy guards - LLM reply (not from backend)
                     $backendEnabled = !empty($config['backend_api']['enabled']);
-                    $reply = $this->applyPolicyGuards($reply, $intent, $config, $templates, $backendEnabled, false);
+                    $reply = $this->applyPolicyGuards($reply, $intent, $config, $templates, $backendEnabled, false, $slots);
 
                     if ($sessionId && $reply !== '') $this->storeMessage($sessionId, 'assistant', $reply);
                     $this->logBotReply($context, $reply, 'text');
@@ -811,7 +860,7 @@ class RouterV1Handler implements BotHandlerInterface
                 
                 // ✅ Apply policy guards - LLM only
                 $backendEnabled = !empty($config['backend_api']['enabled']);
-                $reply = $this->applyPolicyGuards($reply, $intent, $config, $templates, $backendEnabled, false);
+                $reply = $this->applyPolicyGuards($reply, $intent, $config, $templates, $backendEnabled, false, $slots);
             } elseif ($llmIntegration && !empty($config['llm']['enabled'])) {
                 $llmResult = $this->handleWithLlm($llmIntegration, $config, $context, $text);
                 $reply = (string)($llmResult['reply_text'] ?? $fallback);
@@ -821,7 +870,7 @@ class RouterV1Handler implements BotHandlerInterface
                 
                 // ✅ Apply policy guards - LLM only
                 $backendEnabled = !empty($config['backend_api']['enabled']);
-                $reply = $this->applyPolicyGuards($reply, $llmResult['intent'] ?? null, $config, $templates, $backendEnabled, false);
+                $reply = $this->applyPolicyGuards($reply, $llmResult['intent'] ?? null, $config, $templates, $backendEnabled, false, $llmResult['slots'] ?? []);
             } else {
                 if ($googleNlp) {
                     $nlpResult = $this->analyzeTextWithGoogleNlp($googleNlp, $text);
@@ -1324,10 +1373,12 @@ class RouterV1Handler implements BotHandlerInterface
                     'customer_phone' => $phone ?: null
                 ];
 
+
                 $resp = $this->callBackendJson($backendCfg, $endpointGet, $payload);
                 if (!$resp['ok']) {
                     return ['handled' => false, 'reply_text' => $templates['payment_verify_pending'] ?? $fallback, 'reason' => 'backend_error', 'meta' => $resp, 'slots' => $slots];
                 }
+
 
                 $dueAmount = $resp['data']['due_amount'] ?? ($resp['data']['balance'] ?? '');
                 $nextDue = $resp['data']['next_due_date'] ?? ($resp['data']['next_date'] ?? '');
@@ -1877,6 +1928,10 @@ class RouterV1Handler implements BotHandlerInterface
         if (!empty($context['user']['is_admin'])) return true;
         if (!empty($context['sender_role']) && $context['sender_role'] === 'admin') return true;
         if (!empty($message['meta']['is_admin'])) return true;
+
+        // New: allow webhook metadata to carry sender_role
+        if (!empty($message['meta']['sender_role']) && $message['meta']['sender_role'] === 'admin') return true;
+
         return false;
     }
 
@@ -2731,6 +2786,30 @@ class RouterV1Handler implements BotHandlerInterface
         return $out;
     }
 
+    /**
+     * Replace single-brace template placeholders like {summary}, {business_type}
+     * with actual values from slots
+     */
+    protected function replaceTe​mplatePlaceholders(string $template, array $slots): string
+    {
+        if (empty($slots) || strpos($template, '{') === false) {
+            return $template;
+        }
+
+        $result = $template;
+
+        // Replace each slot value
+        foreach ($slots as $key => $value) {
+            // Only replace string/number values, skip arrays/objects
+            if (is_scalar($value) && $value !== null && $value !== '') {
+                $placeholder = '{' . $key . '}';
+                $result = str_replace($placeholder, (string)$value, $result);
+            }
+        }
+
+        return $result;
+    }
+
     protected function normalizePhone(string $s): string
     {
         $s = preg_replace('/[^\d]/', '', $s);
@@ -2789,15 +2868,81 @@ class RouterV1Handler implements BotHandlerInterface
     /**
      * Apply policy guards to prevent hallucination and enforce backend requirements
      */
-    protected function applyPolicyGuards(string $reply, ?string $intent, array $config, array $templates, bool $backendEnabled, bool $skipHallucinationCheck = false): string
+    protected function applyPolicyGuards(string $reply, ?string $intent, array $config, array $templates, bool $backendEnabled, bool $skipHallucinationCheck = false, array $slots = []): string
     {
         $policy = $this->getPolicy($config);
+
+        // =========================================================
+        // 🔒 PRICING POLICY GUARD (Box Design specific)
+        // =========================================================
+        $pricingPolicy = $config['policies']['pricing'] ?? [];
+        if (!empty($pricingPolicy['strict_pricing']) && !empty($pricingPolicy['enabled'])) {
+            // Define ONLY allowed pricing numbers from templates
+            $allowedPrices = [
+                '15,900', '15900', '3,900', '3900',  // Plan 1
+                '79,000', '79000',  // Plan 2
+                // Plan 3 is "ตามโปรเจกต์" no specific number
+            ];
+            
+            // Detect if reply contains pricing information
+            $hasPricingKeywords = (
+                mb_stripos($reply, 'ราคา') !== false ||
+                mb_stripos($reply, 'บาท') !== false ||
+                mb_stripos($reply, 'เดือน') !== false ||
+                mb_stripos($reply, 'plan') !== false ||
+                mb_stripos($reply, 'แพลน') !== false
+            );
+            
+            if ($hasPricingKeywords) {
+                // Extract all numbers from reply (including Thai number format with commas)
+                preg_match_all('/[\d,]+/', $reply, $matches);
+                $foundNumbers = $matches[0] ?? [];
+                
+                $hasUnauthorizedPrice = false;
+                foreach ($foundNumbers as $num) {
+                    // Skip small numbers (likely not prices)
+                    $cleanNum = str_replace(',', '', $num);
+                    if ($cleanNum < 100) continue;
+                    
+                    // Check if this number is NOT in allowed list
+                    if (!in_array($num, $allowedPrices) && !in_array($cleanNum, $allowedPrices)) {
+                        $hasUnauthorizedPrice = true;
+                        Logger::info("Pricing Policy: Detected unauthorized price '{$num}' in reply");
+                        break;
+                    }
+                }
+                
+                // If unauthorized pricing detected, replace with appropriate template
+                if ($hasUnauthorizedPrice) {
+                    // Determine which template to use based on context
+                    $useTemplate = 'pricing_only';  // Default
+                    
+                    // If reply mentions business/summary, use full template
+                    if (mb_stripos($reply, 'สรุป') !== false || mb_stripos($reply, 'ธุรกิจ') !== false) {
+                        $useTemplate = 'summary_with_all_plans';
+                    }
+                    
+                    $guardedReply = $templates[$useTemplate] ?? $templates['fallback'] ?? $reply;
+                    
+                    // ✅ Replace placeholders like {summary}, {business_type}
+                    $guardedReply = $this->replaceTe​mplatePlaceholders($guardedReply, $slots);
+                    
+                    Logger::info("Pricing Policy: Blocked hallucinated pricing - using template '{$useTemplate}'", [
+                        'original_reply_preview' => mb_substr($reply, 0, 100),
+                        'unauthorized_numbers' => $foundNumbers,
+                    ]);
+                    
+                    return $guardedReply;
+                }
+            }
+        }
 
         // 1) Hard gate: ถ้า intent ต้องใช้ backend แต่ backend ปิด/ไม่พร้อม => ตอบด้วย template ที่กำหนด
         $require = $policy['require_backend_for_intents'] ?? [];
         if (is_array($require) && $intent && in_array($intent, $require, true) && !$backendEnabled) {
             $k = (string)($policy['no_backend_reply_template_key'] ?? 'no_backend_product_check');
             $guardedReply = $templates[$k] ?? ($templates['fallback'] ?? $reply);
+            $guardedReply = $this->replaceTe​mplatePlaceholders($guardedReply, $slots);
             Logger::info("Policy: Intent '{$intent}' requires backend but backend disabled - using template '{$k}'");
             return $guardedReply;
         }
@@ -2812,6 +2957,7 @@ class RouterV1Handler implements BotHandlerInterface
                     if ($p !== '' && mb_strpos($reply, $p) !== false) {
                         $k = (string)($policy['no_backend_reply_template_key'] ?? 'no_backend_product_check');
                         $guardedReply = $templates[$k] ?? ($templates['fallback'] ?? $reply);
+                        $guardedReply = $this->replaceTe​mplatePlaceholders($guardedReply, $slots);
                         Logger::info("Policy: Blocked hallucination phrase '{$p}' in reply - using template '{$k}'");
                         return $guardedReply;
                     }
