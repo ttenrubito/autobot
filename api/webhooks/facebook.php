@@ -225,6 +225,57 @@ function processMessagingEvent(array $event, string $entryPageId): void
 
     if ($senderId === '' || $pageId === '') return;
 
+    // =========================================================
+    // ✅ AUTO-PAUSE: When Page sends ANY message (echo), pause bot for 1 hour
+    // This catches ALL admin interventions without requiring keywords
+    // =========================================================
+    if ($isEcho && $text !== '') {
+        // Find channel by page_id
+        $channel = findFacebookChannelByPageId($pageId);
+        if ($channel !== null) {
+            try {
+                $db = Database::getInstance();
+                
+                // Customer is the recipient when echo=true
+                $customerId = $recipientId;
+                
+                // Find or create session
+                $sessionSql = "SELECT id FROM chat_sessions 
+                              WHERE channel_id = ? AND external_user_id = ? 
+                              ORDER BY created_at DESC LIMIT 1";
+                $session = $db->queryOne($sessionSql, [(int)$channel['id'], $customerId]);
+                
+                if ($session) {
+                    $sessionId = (int)$session['id'];
+                    
+                    // ✅ PAUSE BOT: Update last_admin_message_at
+                    $db->execute(
+                        'UPDATE chat_sessions SET last_admin_message_at = NOW(), updated_at = NOW() WHERE id = ?',
+                        [$sessionId]
+                    );
+                    
+                    Logger::info('[FB_ECHO_AUTOPAUSE] ✅ Bot auto-paused (Page sent message)', [
+                        'session_id' => $sessionId,
+                        'channel_id' => $channel['id'],
+                        'customer_id' => $customerId,
+                        'text_preview' => substr($text, 0, 50),
+                        'paused_until' => date('Y-m-d H:i:s', strtotime('+1 hour')),
+                    ]);
+                } else {
+                    Logger::info('[FB_ECHO_AUTOPAUSE] No session found - will create on next customer message', [
+                        'channel_id' => $channel['id'],
+                        'customer_id' => $customerId,
+                    ]);
+                }
+            } catch (Exception $e) {
+                Logger::error('[FB_ECHO_AUTOPAUSE] Failed to pause bot: ' . $e->getMessage());
+            }
+        }
+        
+        // Don't process echo messages further
+        return;
+    }
+
     // ✅ CRITICAL FIX: Admin Handoff Detection at Webhook Level
     // When staff/admin sends a message from Facebook Business Suite containing "admin"
     // → Pause bot for 1 hour by updating last_admin_message_at in database
