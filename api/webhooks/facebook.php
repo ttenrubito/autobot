@@ -160,8 +160,52 @@ function verifySignatureMulti(string $payload, string $signature): ?string
  */
 function processMessagingEvent(array $event, string $entryPageId): void
 {
+    // ✅ DEBUG: Log ALL events (not just messages)
+    Logger::info('[FB_WEBHOOK_EVENT]', [
+        'event_keys' => array_keys($event),
+        'has_message' => isset($event['message']),
+        'has_delivery' => isset($event['delivery']),
+        'has_read' => isset($event['read']),
+        'has_postback' => isset($event['postback']),
+        'has_pass_thread_control' => isset($event['pass_thread_control']),
+        'has_take_thread_control' => isset($event['take_thread_control']),
+        'has_standby' => isset($event['standby']),
+        'sender_id' => $event['sender']['id'] ?? null,
+        'entry_page_id' => $entryPageId,
+    ]);
+
+    // =========================================================
+    // ✅ HANDOVER PROTOCOL: Detect admin takeover/return
+    // =========================================================
+    
+    // 1. Admin takes over conversation (from Page Inbox)
+    if (isset($event['pass_thread_control'])) {
+        handlePassThreadControl($event, $entryPageId);
+        return;
+    }
+    
+    // 2. Bot regains control (admin returns conversation to bot)
+    if (isset($event['take_thread_control'])) {
+        handleTakeThreadControl($event, $entryPageId);
+        return;
+    }
+    
+    // 3. Standby mode - bot receives copy of messages while admin has control
+    if (isset($event['standby'])) {
+        Logger::info('[FB_WEBHOOK] Standby event received (bot in standby mode)', [
+            'sender_id' => $event['sender']['id'] ?? null,
+            'entry_page_id' => $entryPageId,
+        ]);
+        return; // Ignore - admin has control
+    }
+    
     // Check for messages
-    if (!isset($event['message']) || !is_array($event['message'])) return;
+    if (!isset($event['message']) || !is_array($event['message'])) {
+        Logger::info('[FB_WEBHOOK] Event ignored (not a message)', [
+            'event_type' => array_keys($event)[0] ?? 'unknown',
+        ]);
+        return;
+    }
     
     // Extract IDs first
     $senderId    = isset($event['sender']['id']) ? (string)$event['sender']['id'] : '';
@@ -181,24 +225,93 @@ function processMessagingEvent(array $event, string $entryPageId): void
 
     if ($senderId === '' || $pageId === '') return;
 
+    // ✅ CRITICAL FIX: Admin Handoff Detection at Webhook Level
+    // When staff/admin sends a message from Facebook Business Suite containing "admin"
+    // → Pause bot for 1 hour by updating last_admin_message_at in database
+    // NOTE: Must find channel FIRST before checking admin command
+    
+    // Find channel by page_id (needed for admin handoff)
+    $channel = findFacebookChannelByPageId($pageId);
+    if ($channel === null) {
+        Logger::warning("No active Facebook channel found for page_id={$pageId}");
+        return;
+    }
+    
+    $isAdminCommand = false;
+    if ($isAdmin && $text !== '') {  // ✅ Check if message is FROM the page (human staff OR automation bot)
+        $textLower = mb_strtolower(trim($text), 'UTF-8');
+        if (preg_match('/^(?:\/admin|#admin|admin)(?:\s|$)/u', $textLower)) {
+            $isAdminCommand = true;
+            
+            Logger::info('[FB_WEBHOOK] 🚨 ADMIN HANDOFF TRIGGERED!', [
+                'text' => $text,
+                'sender_id' => $senderId,
+                'page_id' => $pageId,
+                'is_echo' => $isEcho,
+                'sender_is_page' => ($senderId === $pageId),
+                'is_admin' => $isAdmin,
+                'channel_id' => $channel['id'],
+                'action' => 'Pausing bot for 1 hour',
+            ]);
+            
+            // ✅ Update database immediately - pause bot for this user
+            // NOTE: We need to find the session for the RECIPIENT (customer), not sender (page)
+            // When is_echo=true, recipient is the customer who will receive the reply
+            try {
+                $db = Database::getInstance();
+                
+                // Get recipient from event (the customer)
+                $customerId = $recipientId; // When echo, recipient = customer
+                
+                // Find or create session for this customer
+                $sessionSql = "SELECT id FROM chat_sessions 
+                              WHERE channel_id = ? AND external_user_id = ? 
+                              ORDER BY created_at DESC LIMIT 1";
+                $session = $db->queryOne($sessionSql, [(int)$channel['id'], $customerId]);
+                
+                if ($session) {
+                    $sessionId = (int)$session['id'];
+                    $db->execute(
+                        'UPDATE chat_sessions SET last_admin_message_at = NOW(), updated_at = NOW() WHERE id = ?',
+                        [$sessionId]
+                    );
+                    
+                    Logger::info('[FB_WEBHOOK] ✅ Admin handoff activated', [
+                        'session_id' => $sessionId,
+                        'channel_id' => $channel['id'],
+                        'customer_id' => $customerId,
+                        'paused_until' => date('Y-m-d H:i:s', strtotime('+1 hour')),
+                    ]);
+                } else {
+                    Logger::warning('[FB_WEBHOOK] No session found for admin handoff - will create on next customer message', [
+                        'channel_id' => $channel['id'],
+                        'customer_id' => $customerId,
+                    ]);
+                }
+            } catch (Exception $e) {
+                Logger::error('[FB_WEBHOOK] Failed to activate admin handoff: ' . $e->getMessage());
+            }
+            
+            // Don't send this message to gateway - it's an admin command, not a real conversation
+            return;
+        }
+    }
+
     // ✅ DEBUG: Log admin detection
     Logger::info('[FB_WEBHOOK] Message received', [
         'page_id' => $pageId,
         'sender_id' => $senderId,
         'is_echo' => $isEcho,
         'sender_is_page' => ($senderId === $pageId),
-        'is_admin' => $isAdmin,  // Final result
+        'is_admin' => $isAdmin,
+        'is_admin_command' => $isAdminCommand,
         'text_preview' => substr($text, 0, 50),
     ]);
 
     Logger::info("Extracted page_id={$pageId}");
 
-    // Find channel by page_id
-    $channel = findFacebookChannelByPageId($pageId);
-    if ($channel === null) {
-        Logger::warning("No active Facebook channel found for page_id={$pageId}");
-        return;
-    }
+    // Channel already loaded above (for admin handoff check)
+    // No need to load again
 
     // ✅ Deduplication: Check if we've already processed this message
     // ใช้ gateway_message_events ที่มีอยู่แล้ว แทนการสร้างตารางใหม่
@@ -646,4 +759,145 @@ function sendFacebookImage(string $recipientPsid, string $imageUrl, array $chann
         'facebook_response' => json_decode($resp, true)
     ]);
     return true;
+}
+
+/**
+ * Handle pass_thread_control event (Admin takes over conversation)
+ * Facebook sends this when:
+ * - Admin clicks "Take Over" in Page Inbox
+ * - Conversation is manually assigned to Page Inbox
+ */
+function handlePassThreadControl(array $event, string $entryPageId): void
+{
+    $senderId = isset($event['sender']['id']) ? (string)$event['sender']['id'] : '';
+    $recipientId = isset($event['recipient']['id']) ? (string)$event['recipient']['id'] : '';
+    $pageId = $entryPageId !== '' ? $entryPageId : $recipientId;
+    
+    $passThreadControl = $event['pass_thread_control'] ?? [];
+    $newOwnerAppId = $passThreadControl['new_owner_app_id'] ?? null;
+    $previousOwnerAppId = $passThreadControl['previous_owner_app_id'] ?? null;
+    $metadata = $passThreadControl['metadata'] ?? '';
+    
+    Logger::info('[FB_HANDOVER] 🚨 pass_thread_control received - Admin taking over!', [
+        'sender_id' => $senderId,
+        'page_id' => $pageId,
+        'new_owner_app_id' => $newOwnerAppId,
+        'previous_owner_app_id' => $previousOwnerAppId,
+        'metadata' => $metadata,
+    ]);
+    
+    // Find channel
+    $channel = findFacebookChannelByPageId($pageId);
+    if ($channel === null) {
+        Logger::warning("[FB_HANDOVER] No active Facebook channel found for page_id={$pageId}");
+        return;
+    }
+    
+    // Find or create session for this customer
+    try {
+        $db = Database::getInstance();
+        
+        // Customer is the sender of the original message
+        $customerId = $senderId;
+        
+        // Find session
+        $sessionSql = "SELECT id FROM chat_sessions 
+                      WHERE channel_id = ? AND external_user_id = ? 
+                      ORDER BY created_at DESC LIMIT 1";
+        $session = $db->queryOne($sessionSql, [(int)$channel['id'], $customerId]);
+        
+        if ($session) {
+            $sessionId = (int)$session['id'];
+            
+            // ✅ PAUSE BOT: Update last_admin_message_at
+            $db->execute(
+                'UPDATE chat_sessions SET last_admin_message_at = NOW(), updated_at = NOW() WHERE id = ?',
+                [$sessionId]
+            );
+            
+            Logger::info('[FB_HANDOVER] ✅ Bot PAUSED (admin has control)', [
+                'session_id' => $sessionId,
+                'channel_id' => $channel['id'],
+                'customer_id' => $customerId,
+                'paused_until' => date('Y-m-d H:i:s', strtotime('+1 hour')),
+                'new_owner_app_id' => $newOwnerAppId,
+            ]);
+        } else {
+            Logger::warning('[FB_HANDOVER] No session found - will create on next customer message', [
+                'channel_id' => $channel['id'],
+                'customer_id' => $customerId,
+            ]);
+        }
+    } catch (Exception $e) {
+        Logger::error('[FB_HANDOVER] Failed to pause bot: ' . $e->getMessage());
+    }
+}
+
+/**
+ * Handle take_thread_control event (Bot regains control)
+ * Facebook sends this when:
+ * - Admin clicks "Return to Bot" in Page Inbox
+ * - Conversation is manually assigned back to bot
+ */
+function handleTakeThreadControl(array $event, string $entryPageId): void
+{
+    $senderId = isset($event['sender']['id']) ? (string)$event['sender']['id'] : '';
+    $recipientId = isset($event['recipient']['id']) ? (string)$event['recipient']['id'] : '';
+    $pageId = $entryPageId !== '' ? $entryPageId : $recipientId;
+    
+    $takeThreadControl = $event['take_thread_control'] ?? [];
+    $previousOwnerAppId = $takeThreadControl['previous_owner_app_id'] ?? null;
+    $metadata = $takeThreadControl['metadata'] ?? '';
+    
+    Logger::info('[FB_HANDOVER] ✅ take_thread_control received - Bot regaining control!', [
+        'sender_id' => $senderId,
+        'page_id' => $pageId,
+        'previous_owner_app_id' => $previousOwnerAppId,
+        'metadata' => $metadata,
+    ]);
+    
+    // Find channel
+    $channel = findFacebookChannelByPageId($pageId);
+    if ($channel === null) {
+        Logger::warning("[FB_HANDOVER] No active Facebook channel found for page_id={$pageId}");
+        return;
+    }
+    
+    // Find session for this customer
+    try {
+        $db = Database::getInstance();
+        
+        // Customer is the sender
+        $customerId = $senderId;
+        
+        // Find session
+        $sessionSql = "SELECT id FROM chat_sessions 
+                      WHERE channel_id = ? AND external_user_id = ? 
+                      ORDER BY created_at DESC LIMIT 1";
+        $session = $db->queryOne($sessionSql, [(int)$channel['id'], $customerId]);
+        
+        if ($session) {
+            $sessionId = (int)$session['id'];
+            
+            // ✅ RESUME BOT: Clear last_admin_message_at
+            $db->execute(
+                'UPDATE chat_sessions SET last_admin_message_at = NULL, updated_at = NOW() WHERE id = ?',
+                [$sessionId]
+            );
+            
+            Logger::info('[FB_HANDOVER] ✅ Bot RESUMED (bot has control)', [
+                'session_id' => $sessionId,
+                'channel_id' => $channel['id'],
+                'customer_id' => $customerId,
+                'previous_owner_app_id' => $previousOwnerAppId,
+            ]);
+        } else {
+            Logger::warning('[FB_HANDOVER] No session found for take_thread_control', [
+                'channel_id' => $channel['id'],
+                'customer_id' => $customerId,
+            ]);
+        }
+    } catch (Exception $e) {
+        Logger::error('[FB_HANDOVER] Failed to resume bot: ' . $e->getMessage());
+    }
 }
