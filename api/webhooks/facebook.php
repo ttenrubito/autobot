@@ -167,38 +167,10 @@ function processMessagingEvent(array $event, string $entryPageId): void
         'has_delivery' => isset($event['delivery']),
         'has_read' => isset($event['read']),
         'has_postback' => isset($event['postback']),
-        'has_pass_thread_control' => isset($event['pass_thread_control']),
-        'has_take_thread_control' => isset($event['take_thread_control']),
-        'has_standby' => isset($event['standby']),
         'sender_id' => $event['sender']['id'] ?? null,
         'entry_page_id' => $entryPageId,
     ]);
 
-    // =========================================================
-    // ✅ HANDOVER PROTOCOL: Detect admin takeover/return
-    // =========================================================
-    
-    // 1. Admin takes over conversation (from Page Inbox)
-    if (isset($event['pass_thread_control'])) {
-        handlePassThreadControl($event, $entryPageId);
-        return;
-    }
-    
-    // 2. Bot regains control (admin returns conversation to bot)
-    if (isset($event['take_thread_control'])) {
-        handleTakeThreadControl($event, $entryPageId);
-        return;
-    }
-    
-    // 3. Standby mode - bot receives copy of messages while admin has control
-    if (isset($event['standby'])) {
-        Logger::info('[FB_WEBHOOK] Standby event received (bot in standby mode)', [
-            'sender_id' => $event['sender']['id'] ?? null,
-            'entry_page_id' => $entryPageId,
-        ]);
-        return; // Ignore - admin has control
-    }
-    
     // Check for messages
     if (!isset($event['message']) || !is_array($event['message'])) {
         Logger::info('[FB_WEBHOOK] Event ignored (not a message)', [
@@ -224,57 +196,6 @@ function processMessagingEvent(array $event, string $entryPageId): void
     $messageId = (string)($event['message']['mid'] ?? '');
 
     if ($senderId === '' || $pageId === '') return;
-
-    // =========================================================
-    // ✅ AUTO-PAUSE: When Page sends ANY message (echo), pause bot for 1 hour
-    // This catches ALL admin interventions without requiring keywords
-    // =========================================================
-    if ($isEcho && $text !== '') {
-        // Find channel by page_id
-        $channel = findFacebookChannelByPageId($pageId);
-        if ($channel !== null) {
-            try {
-                $db = Database::getInstance();
-                
-                // Customer is the recipient when echo=true
-                $customerId = $recipientId;
-                
-                // Find or create session
-                $sessionSql = "SELECT id FROM chat_sessions 
-                              WHERE channel_id = ? AND external_user_id = ? 
-                              ORDER BY created_at DESC LIMIT 1";
-                $session = $db->queryOne($sessionSql, [(int)$channel['id'], $customerId]);
-                
-                if ($session) {
-                    $sessionId = (int)$session['id'];
-                    
-                    // ✅ PAUSE BOT: Update last_admin_message_at
-                    $db->execute(
-                        'UPDATE chat_sessions SET last_admin_message_at = NOW(), updated_at = NOW() WHERE id = ?',
-                        [$sessionId]
-                    );
-                    
-                    Logger::info('[FB_ECHO_AUTOPAUSE] ✅ Bot auto-paused (Page sent message)', [
-                        'session_id' => $sessionId,
-                        'channel_id' => $channel['id'],
-                        'customer_id' => $customerId,
-                        'text_preview' => substr($text, 0, 50),
-                        'paused_until' => date('Y-m-d H:i:s', strtotime('+1 hour')),
-                    ]);
-                } else {
-                    Logger::info('[FB_ECHO_AUTOPAUSE] No session found - will create on next customer message', [
-                        'channel_id' => $channel['id'],
-                        'customer_id' => $customerId,
-                    ]);
-                }
-            } catch (Exception $e) {
-                Logger::error('[FB_ECHO_AUTOPAUSE] Failed to pause bot: ' . $e->getMessage());
-            }
-        }
-        
-        // Don't process echo messages further
-        return;
-    }
 
     // ✅ CRITICAL FIX: Admin Handoff Detection at Webhook Level
     // When staff/admin sends a message from Facebook Business Suite containing "admin"
@@ -479,17 +400,69 @@ function processMessagingEvent(array $event, string $entryPageId): void
         }
     }
 
-    // Send text message
-    if ($replyText !== '') {
-        Logger::info('[FB_WEBHOOK] Sending text reply', [
+    // ✅ NEW: Support for multi-message replies (human-like conversation)
+    // Check for reply_texts array first, fallback to single reply_text
+    $replyTexts = [];
+    
+    if (is_array($data)) {
+        // Check for new format: reply_texts array
+        if (!empty($data['reply_texts']) && is_array($data['reply_texts'])) {
+            $replyTexts = $data['reply_texts'];
+            Logger::info('[FB_WEBHOOK] Multi-message reply detected', [
+                'trace_id' => $traceId,
+                'message_count' => count($replyTexts),
+            ]);
+        }
+        // Fallback to single message format
+        elseif (!empty($data['reply_text'])) {
+            $replyTexts = [(string)$data['reply_text']];
+            Logger::info('[FB_WEBHOOK] Single message reply (legacy format)', [
+                'trace_id' => $traceId,
+            ]);
+        }
+    }
+
+    // Send text messages with natural delays
+    if (!empty($replyTexts)) {
+        $messageCount = count($replyTexts);
+        Logger::info('[FB_WEBHOOK] Sending ' . $messageCount . ' message(s)', [
             'trace_id' => $traceId,
             'recipient_psid' => $senderId,
-            'reply_len' => mb_strlen((string)$replyText, 'UTF-8'),
         ]);
-        $ok = sendFacebookMessage($senderId, $replyText, $channel);
-        Logger::info('[FB_WEBHOOK] Send text reply result', [
+        
+        foreach ($replyTexts as $index => $messageText) {
+            $messageText = trim((string)$messageText);
+            if ($messageText === '') {
+                continue;
+            }
+            
+            // Add natural delay between messages (except for first message)
+            if ($index > 0) {
+                // Random delay between 500-800ms for human-like feel
+                $delayMicros = rand(500000, 800000);
+                Logger::info('[FB_WEBHOOK] Delay before message #' . ($index + 1), [
+                    'delay_ms' => round($delayMicros / 1000),
+                ]);
+                usleep($delayMicros);
+            }
+            
+            Logger::info('[FB_WEBHOOK] Sending message #' . ($index + 1) . '/' . $messageCount, [
+                'trace_id' => $traceId,
+                'message_len' => mb_strlen($messageText, 'UTF-8'),
+                'message_preview' => mb_substr($messageText, 0, 50, 'UTF-8'),
+            ]);
+            
+            $ok = sendFacebookMessage($senderId, $messageText, $channel);
+            
+            Logger::info('[FB_WEBHOOK] Message #' . ($index + 1) . ' send result', [
+                'trace_id' => $traceId,
+                'ok' => $ok,
+            ]);
+        }
+        
+        Logger::info('[FB_WEBHOOK] All messages sent', [
             'trace_id' => $traceId,
-            'ok' => $ok,
+            'total_sent' => $messageCount,
         ]);
     }
 
@@ -810,145 +783,4 @@ function sendFacebookImage(string $recipientPsid, string $imageUrl, array $chann
         'facebook_response' => json_decode($resp, true)
     ]);
     return true;
-}
-
-/**
- * Handle pass_thread_control event (Admin takes over conversation)
- * Facebook sends this when:
- * - Admin clicks "Take Over" in Page Inbox
- * - Conversation is manually assigned to Page Inbox
- */
-function handlePassThreadControl(array $event, string $entryPageId): void
-{
-    $senderId = isset($event['sender']['id']) ? (string)$event['sender']['id'] : '';
-    $recipientId = isset($event['recipient']['id']) ? (string)$event['recipient']['id'] : '';
-    $pageId = $entryPageId !== '' ? $entryPageId : $recipientId;
-    
-    $passThreadControl = $event['pass_thread_control'] ?? [];
-    $newOwnerAppId = $passThreadControl['new_owner_app_id'] ?? null;
-    $previousOwnerAppId = $passThreadControl['previous_owner_app_id'] ?? null;
-    $metadata = $passThreadControl['metadata'] ?? '';
-    
-    Logger::info('[FB_HANDOVER] 🚨 pass_thread_control received - Admin taking over!', [
-        'sender_id' => $senderId,
-        'page_id' => $pageId,
-        'new_owner_app_id' => $newOwnerAppId,
-        'previous_owner_app_id' => $previousOwnerAppId,
-        'metadata' => $metadata,
-    ]);
-    
-    // Find channel
-    $channel = findFacebookChannelByPageId($pageId);
-    if ($channel === null) {
-        Logger::warning("[FB_HANDOVER] No active Facebook channel found for page_id={$pageId}");
-        return;
-    }
-    
-    // Find or create session for this customer
-    try {
-        $db = Database::getInstance();
-        
-        // Customer is the sender of the original message
-        $customerId = $senderId;
-        
-        // Find session
-        $sessionSql = "SELECT id FROM chat_sessions 
-                      WHERE channel_id = ? AND external_user_id = ? 
-                      ORDER BY created_at DESC LIMIT 1";
-        $session = $db->queryOne($sessionSql, [(int)$channel['id'], $customerId]);
-        
-        if ($session) {
-            $sessionId = (int)$session['id'];
-            
-            // ✅ PAUSE BOT: Update last_admin_message_at
-            $db->execute(
-                'UPDATE chat_sessions SET last_admin_message_at = NOW(), updated_at = NOW() WHERE id = ?',
-                [$sessionId]
-            );
-            
-            Logger::info('[FB_HANDOVER] ✅ Bot PAUSED (admin has control)', [
-                'session_id' => $sessionId,
-                'channel_id' => $channel['id'],
-                'customer_id' => $customerId,
-                'paused_until' => date('Y-m-d H:i:s', strtotime('+1 hour')),
-                'new_owner_app_id' => $newOwnerAppId,
-            ]);
-        } else {
-            Logger::warning('[FB_HANDOVER] No session found - will create on next customer message', [
-                'channel_id' => $channel['id'],
-                'customer_id' => $customerId,
-            ]);
-        }
-    } catch (Exception $e) {
-        Logger::error('[FB_HANDOVER] Failed to pause bot: ' . $e->getMessage());
-    }
-}
-
-/**
- * Handle take_thread_control event (Bot regains control)
- * Facebook sends this when:
- * - Admin clicks "Return to Bot" in Page Inbox
- * - Conversation is manually assigned back to bot
- */
-function handleTakeThreadControl(array $event, string $entryPageId): void
-{
-    $senderId = isset($event['sender']['id']) ? (string)$event['sender']['id'] : '';
-    $recipientId = isset($event['recipient']['id']) ? (string)$event['recipient']['id'] : '';
-    $pageId = $entryPageId !== '' ? $entryPageId : $recipientId;
-    
-    $takeThreadControl = $event['take_thread_control'] ?? [];
-    $previousOwnerAppId = $takeThreadControl['previous_owner_app_id'] ?? null;
-    $metadata = $takeThreadControl['metadata'] ?? '';
-    
-    Logger::info('[FB_HANDOVER] ✅ take_thread_control received - Bot regaining control!', [
-        'sender_id' => $senderId,
-        'page_id' => $pageId,
-        'previous_owner_app_id' => $previousOwnerAppId,
-        'metadata' => $metadata,
-    ]);
-    
-    // Find channel
-    $channel = findFacebookChannelByPageId($pageId);
-    if ($channel === null) {
-        Logger::warning("[FB_HANDOVER] No active Facebook channel found for page_id={$pageId}");
-        return;
-    }
-    
-    // Find session for this customer
-    try {
-        $db = Database::getInstance();
-        
-        // Customer is the sender
-        $customerId = $senderId;
-        
-        // Find session
-        $sessionSql = "SELECT id FROM chat_sessions 
-                      WHERE channel_id = ? AND external_user_id = ? 
-                      ORDER BY created_at DESC LIMIT 1";
-        $session = $db->queryOne($sessionSql, [(int)$channel['id'], $customerId]);
-        
-        if ($session) {
-            $sessionId = (int)$session['id'];
-            
-            // ✅ RESUME BOT: Clear last_admin_message_at
-            $db->execute(
-                'UPDATE chat_sessions SET last_admin_message_at = NULL, updated_at = NOW() WHERE id = ?',
-                [$sessionId]
-            );
-            
-            Logger::info('[FB_HANDOVER] ✅ Bot RESUMED (bot has control)', [
-                'session_id' => $sessionId,
-                'channel_id' => $channel['id'],
-                'customer_id' => $customerId,
-                'previous_owner_app_id' => $previousOwnerAppId,
-            ]);
-        } else {
-            Logger::warning('[FB_HANDOVER] No session found for take_thread_control', [
-                'channel_id' => $channel['id'],
-                'customer_id' => $customerId,
-            ]);
-        }
-    } catch (Exception $e) {
-        Logger::error('[FB_HANDOVER] Failed to resume bot: ' . $e->getMessage());
-    }
 }

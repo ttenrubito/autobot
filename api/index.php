@@ -236,6 +236,43 @@ try {
         $_GET['messages'] = true;
         require __DIR__ . '/customer/conversations.php';
     }
+    
+    // Customer Savings routes
+    elseif ($path === '/customer/savings' && $method === 'GET') {
+        require __DIR__ . '/customer/savings.php';
+    }
+    elseif (preg_match('#^/customer/savings/([A-Za-z0-9\-]+)$#', $path, $matches) && $method === 'GET') {
+        $_GET['id'] = $matches[1];
+        require __DIR__ . '/customer/savings.php';
+    }
+    elseif (preg_match('#^/customer/savings/([A-Za-z0-9\-]+)/deposit$#', $path, $matches) && $method === 'POST') {
+        $_GET['id'] = $matches[1];
+        $_GET['action'] = 'deposit';
+        require __DIR__ . '/customer/savings.php';
+    }
+    
+    // Customer Installments routes
+    elseif ($path === '/customer/installments' && $method === 'GET') {
+        require __DIR__ . '/customer/installments.php';
+    }
+    elseif (preg_match('#^/customer/installments/([A-Za-z0-9\-]+)$#', $path, $matches) && $method === 'GET') {
+        $_GET['id'] = $matches[1];
+        require __DIR__ . '/customer/installments.php';
+    }
+    elseif (preg_match('#^/customer/installments/([A-Za-z0-9\-]+)/pay$#', $path, $matches) && $method === 'POST') {
+        $_GET['id'] = $matches[1];
+        $_GET['action'] = 'pay';
+        require __DIR__ . '/customer/installments.php';
+    }
+    
+    // Customer Cases routes
+    elseif ($path === '/customer/cases' && in_array($method, ['GET', 'POST'])) {
+        require __DIR__ . '/customer/cases.php';
+    }
+    elseif (preg_match('#^/customer/cases/(\d+)$#', $path, $matches) && $method === 'GET') {
+        $_GET['id'] = $matches[1];
+        require __DIR__ . '/customer/cases.php';
+    }
 
     // Health aliases
     elseif (($path === '/health' || $path === '/health.php') && $method === 'GET') {
@@ -268,6 +305,285 @@ try {
     }
     elseif ($path === '/gateway/knowledge-search' && $method === 'POST') {
         require __DIR__ . '/gateway/knowledge-search.php';
+    }
+
+    // =====================================================
+    // Bot API routes (for chatbot integration)
+    // =====================================================
+    
+    // Bot Cases API
+    elseif ($path === '/bot/cases' && $method === 'POST') {
+        require __DIR__ . '/bot/cases/index.php';
+    }
+    elseif (preg_match('#^/bot/cases/(\d+)$#', $path, $matches) && $method === 'GET') {
+        $_GET['case_id'] = $matches[1];
+        require __DIR__ . '/bot/cases/index.php';
+    }
+    elseif (preg_match('#^/bot/cases/(\d+)/update-slot$#', $path, $matches) && $method === 'POST') {
+        $_GET['case_id'] = $matches[1];
+        $_GET['action'] = 'update-slot';
+        require __DIR__ . '/bot/cases/index.php';
+    }
+    elseif (preg_match('#^/bot/cases/(\d+)/status$#', $path, $matches) && $method === 'POST') {
+        $_GET['case_id'] = $matches[1];
+        $_GET['action'] = 'status';
+        require __DIR__ . '/bot/cases/index.php';
+    }
+    
+    // Bot Savings API
+    elseif ($path === '/bot/savings' && $method === 'POST') {
+        require __DIR__ . '/bot/savings/index.php';
+    }
+    elseif ($path === '/bot/savings/by-user' && $method === 'GET') {
+        $_GET['action'] = 'by-user';
+        require __DIR__ . '/bot/savings/index.php';
+    }
+    elseif (preg_match('#^/bot/savings/(\d+)$#', $path, $matches) && $method === 'GET') {
+        $_GET['savings_id'] = $matches[1];
+        require __DIR__ . '/bot/savings/index.php';
+    }
+    elseif (preg_match('#^/bot/savings/(\d+)/status$#', $path, $matches) && $method === 'GET') {
+        $_GET['savings_id'] = $matches[1];
+        $_GET['action'] = 'status';
+        require __DIR__ . '/bot/savings/index.php';
+    }
+    elseif (preg_match('#^/bot/savings/(\d+)/deposit$#', $path, $matches) && $method === 'POST') {
+        $_GET['savings_id'] = $matches[1];
+        $_GET['action'] = 'deposit';
+        require __DIR__ . '/bot/savings/index.php';
+    }
+    
+    // Bot Payments API
+    elseif ($path === '/bot/payments/submit' && $method === 'POST') {
+        $_GET['action'] = 'submit';
+        require __DIR__ . '/bot/payments/index.php';
+    }
+    elseif ($path === '/bot/payments/draft-order' && $method === 'POST') {
+        $_GET['action'] = 'draft-order';
+        require __DIR__ . '/bot/payments/index.php';
+    }
+    elseif ($path === '/bot/payments/by-user' && $method === 'GET') {
+        $_GET['action'] = 'by-user';
+        require __DIR__ . '/bot/payments/index.php';
+    }
+    elseif (preg_match('#^/bot/payments/(\d+)$#', $path, $matches) && $method === 'GET') {
+        $_GET['payment_id'] = $matches[1];
+        require __DIR__ . '/bot/payments/index.php';
+    }
+    
+    // Product Search APIs
+    elseif ($path === '/products/npd-search' && $method === 'POST') {
+        require __DIR__ . '/products/npd-search.php';
+    }
+    elseif ($path === '/products/image-search' && $method === 'POST') {
+        require __DIR__ . '/products/image-search.php';
+    }
+
+    // =====================================================
+    // Bot Installments API
+    // =====================================================
+    elseif ($path === '/bot/installments' && $method === 'POST') {
+        require __DIR__ . '/bot/installments/index.php';
+    }
+    elseif ($path === '/bot/installments/by-user' && $method === 'GET') {
+        $_GET['action'] = 'by-user';
+        require __DIR__ . '/bot/installments/index.php';
+    }
+    elseif (preg_match('#^/bot/installments/(\d+)$#', $path, $matches) && $method === 'GET') {
+        $_GET['contract_id'] = $matches[1];
+        require __DIR__ . '/bot/installments/index.php';
+    }
+    elseif (preg_match('#^/bot/installments/(\d+)/status$#', $path, $matches) && $method === 'GET') {
+        $_GET['contract_id'] = $matches[1];
+        $_GET['action'] = 'status';
+        require __DIR__ . '/bot/installments/index.php';
+    }
+    elseif (preg_match('#^/bot/installments/(\d+)/pay$#', $path, $matches) && $method === 'POST') {
+        $_GET['contract_id'] = $matches[1];
+        $_GET['action'] = 'pay';
+        require __DIR__ . '/bot/installments/index.php';
+    }
+    elseif (preg_match('#^/bot/installments/(\d+)/extend$#', $path, $matches) && $method === 'POST') {
+        $_GET['contract_id'] = $matches[1];
+        $_GET['action'] = 'extend';
+        require __DIR__ . '/bot/installments/index.php';
+    }
+
+    // =====================================================
+    // Admin Cases API
+    // =====================================================
+    elseif ($path === '/admin/cases' && $method === 'GET') {
+        require __DIR__ . '/admin/cases/index.php';
+    }
+    elseif (preg_match('#^/admin/cases/(\d+)$#', $path, $matches) && $method === 'GET') {
+        $_GET['case_id'] = $matches[1];
+        require __DIR__ . '/admin/cases/index.php';
+    }
+    elseif (preg_match('#^/admin/cases/(\d+)/assign$#', $path, $matches) && $method === 'PUT') {
+        $_GET['case_id'] = $matches[1];
+        $_GET['action'] = 'assign';
+        require __DIR__ . '/admin/cases/index.php';
+    }
+    elseif (preg_match('#^/admin/cases/(\d+)/resolve$#', $path, $matches) && $method === 'PUT') {
+        $_GET['case_id'] = $matches[1];
+        $_GET['action'] = 'resolve';
+        require __DIR__ . '/admin/cases/index.php';
+    }
+    elseif (preg_match('#^/admin/cases/(\d+)/send-message$#', $path, $matches) && $method === 'POST') {
+        $_GET['case_id'] = $matches[1];
+        $_GET['action'] = 'send-message';
+        require __DIR__ . '/admin/cases/index.php';
+    }
+    elseif (preg_match('#^/admin/cases/(\d+)/note$#', $path, $matches) && $method === 'POST') {
+        $_GET['case_id'] = $matches[1];
+        $_GET['action'] = 'note';
+        require __DIR__ . '/admin/cases/index.php';
+    }
+
+    // =====================================================
+    // Admin Savings API
+    // =====================================================
+    elseif ($path === '/admin/savings' && $method === 'GET') {
+        require __DIR__ . '/admin/savings/index.php';
+    }
+    elseif (preg_match('#^/admin/savings/([A-Za-z0-9\-]+)$#', $path, $matches) && $method === 'GET') {
+        $_GET['savings_id'] = $matches[1];
+        require __DIR__ . '/admin/savings/index.php';
+    }
+    elseif (preg_match('#^/admin/savings/(\d+)/approve-deposit$#', $path, $matches) && $method === 'POST') {
+        $_GET['savings_id'] = $matches[1];
+        $_GET['action'] = 'approve-deposit';
+        require __DIR__ . '/admin/savings/index.php';
+    }
+    elseif (preg_match('#^/admin/savings/(\d+)/cancel$#', $path, $matches) && $method === 'POST') {
+        $_GET['savings_id'] = $matches[1];
+        $_GET['action'] = 'cancel';
+        require __DIR__ . '/admin/savings/index.php';
+    }
+    elseif (preg_match('#^/admin/savings/(\d+)/complete$#', $path, $matches) && $method === 'POST') {
+        $_GET['savings_id'] = $matches[1];
+        $_GET['action'] = 'complete';
+        require __DIR__ . '/admin/savings/index.php';
+    }
+    elseif (preg_match('#^/admin/savings/(\d+)/deposit$#', $path, $matches) && $method === 'POST') {
+        $_GET['savings_id'] = $matches[1];
+        $_GET['action'] = 'deposit';
+        require __DIR__ . '/admin/savings/index.php';
+    }
+    elseif (preg_match('#^/admin/savings/([^/]+)$#', $path, $matches) && $method === 'PUT') {
+        $_GET['savings_id'] = $matches[1];
+        require __DIR__ . '/admin/savings/index.php';
+    }
+    // Savings Transactions - Approve/Reject pending deposits
+    elseif (preg_match('#^/admin/savings/transactions/(\d+)/approve$#', $path, $matches) && $method === 'POST') {
+        require __DIR__ . '/admin/savings/transactions.php';
+    }
+    elseif (preg_match('#^/admin/savings/transactions/(\d+)/reject$#', $path, $matches) && $method === 'POST') {
+        require __DIR__ . '/admin/savings/transactions.php';
+    }
+
+    // =====================================================
+    // Admin Installments API
+    // =====================================================
+    elseif ($path === '/admin/installments' && $method === 'GET') {
+        require __DIR__ . '/admin/installments/index.php';
+    }
+    elseif (preg_match('#^/admin/installments/(\d+)$#', $path, $matches) && $method === 'GET') {
+        $_GET['contract_id'] = $matches[1];
+        require __DIR__ . '/admin/installments/index.php';
+    }
+    elseif (preg_match('#^/admin/installments/(\d+)/approve$#', $path, $matches) && $method === 'POST') {
+        $_GET['contract_id'] = $matches[1];
+        $_GET['action'] = 'approve';
+        require __DIR__ . '/admin/installments/index.php';
+    }
+    elseif (preg_match('#^/admin/installments/(\d+)/verify-payment$#', $path, $matches) && $method === 'POST') {
+        $_GET['contract_id'] = $matches[1];
+        $_GET['action'] = 'verify-payment';
+        require __DIR__ . '/admin/installments/index.php';
+    }
+    elseif (preg_match('#^/admin/installments/(\d+)/reject-payment$#', $path, $matches) && $method === 'POST') {
+        $_GET['contract_id'] = $matches[1];
+        $_GET['action'] = 'reject-payment';
+        require __DIR__ . '/admin/installments/index.php';
+    }
+    elseif (preg_match('#^/admin/installments/(\d+)/manual-payment$#', $path, $matches) && $method === 'POST') {
+        $_GET['contract_id'] = $matches[1];
+        $_GET['action'] = 'manual-payment';
+        require __DIR__ . '/admin/installments/index.php';
+    }
+    elseif (preg_match('#^/admin/installments/(\d+)/update-due-date$#', $path, $matches) && $method === 'POST') {
+        $_GET['contract_id'] = $matches[1];
+        $_GET['action'] = 'update-due-date';
+        require __DIR__ . '/admin/installments/index.php';
+    }
+    elseif (preg_match('#^/admin/installments/(\d+)/cancel$#', $path, $matches) && $method === 'POST') {
+        $_GET['contract_id'] = $matches[1];
+        $_GET['action'] = 'cancel';
+        require __DIR__ . '/admin/installments/index.php';
+    }
+
+    // =====================================================
+    // Admin Payments - Verify/Reject with Push Notification
+    // =====================================================
+    elseif (preg_match('#^/admin/payments/(\d+)/verify$#', $path, $matches) && $method === 'POST') {
+        $_GET['id'] = $matches[1];
+        $_GET['action'] = 'verify';
+        require __DIR__ . '/admin/payments.php';
+    }
+    elseif (preg_match('#^/admin/payments/(\d+)/reject$#', $path, $matches) && $method === 'POST') {
+        $_GET['id'] = $matches[1];
+        $_GET['action'] = 'reject';
+        require __DIR__ . '/admin/payments.php';
+    }
+    elseif ($path === '/admin/payments/manual' && $method === 'POST') {
+        $_GET['action'] = 'manual';
+        require __DIR__ . '/admin/payments.php';
+    }
+    
+    // =====================================================
+    // Unified Payment Management (Classification + Sync)
+    // =====================================================
+    elseif ($path === '/admin/payments/unified' && $method === 'GET') {
+        require __DIR__ . '/admin/payments/unified.php';
+    }
+    elseif (preg_match('#^/admin/payments/unified/(\d+)$#', $path, $matches) && $method === 'GET') {
+        $_GET['id'] = $matches[1];
+        require __DIR__ . '/admin/payments/unified.php';
+    }
+    elseif (preg_match('#^/admin/payments/unified/(\d+)/classify$#', $path, $matches) && $method === 'POST') {
+        $_GET['id'] = $matches[1];
+        $_GET['action'] = 'classify';
+        require __DIR__ . '/admin/payments/unified.php';
+    }
+    elseif (preg_match('#^/admin/payments/unified/(\d+)/reject$#', $path, $matches) && $method === 'POST') {
+        $_GET['id'] = $matches[1];
+        $_GET['action'] = 'reject';
+        require __DIR__ . '/admin/payments/unified.php';
+    }
+
+    // =====================================================
+    // Push Notification Webhook API
+    // =====================================================
+    elseif ($path === '/webhook/push-notify/send' && $method === 'POST') {
+        $_GET['action'] = 'send';
+        require __DIR__ . '/webhook/push-notify.php';
+    }
+    elseif ($path === '/webhook/push-notify/queue' && $method === 'POST') {
+        $_GET['action'] = 'queue';
+        require __DIR__ . '/webhook/push-notify.php';
+    }
+    elseif ($path === '/webhook/push-notify/process' && $method === 'POST') {
+        $_GET['action'] = 'process';
+        require __DIR__ . '/webhook/push-notify.php';
+    }
+    elseif ($path === '/webhook/push-notify/status' && $method === 'GET') {
+        $_GET['action'] = 'status';
+        require __DIR__ . '/webhook/push-notify.php';
+    }
+    elseif ($path === '/webhook/push-notify/stats' && $method === 'GET') {
+        $_GET['action'] = 'stats';
+        require __DIR__ . '/webhook/push-notify.php';
     }
 
     // 404 Not Found

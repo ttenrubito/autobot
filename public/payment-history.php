@@ -60,6 +60,10 @@ include('../includes/customer/sidebar.php');
                     <span class="tab-icon">📅</span>
                     <span class="tab-label">ผ่อนชำระ</span>
                 </button>
+                <button class="filter-tab" onclick="filterPayments('savings', event)" data-filter="savings">
+                    <span class="tab-icon">🐷</span>
+                    <span class="tab-label">ออมเงิน</span>
+                </button>
                 <button class="filter-tab" onclick="filterPayments('pending', event)" data-filter="pending">
                     <span class="tab-icon">⏳</span>
                     <span class="tab-label">รอตรวจสอบ</span>
@@ -113,13 +117,33 @@ include('../includes/customer/sidebar.php');
             <h3 class="card-title">รายการชำระเงิน</h3>
         </div>
         <div class="card-body">
-            <div id="paymentsContainer" class="payments-grid">
-                <!-- Loading -->
-                <div class="loading-state">
-                    <div class="spinner"></div>
-                    <p>กำลังโหลดข้อมูล...</p>
-                </div>
+            <!-- Desktop Table View -->
+            <div class="table-container" id="paymentsTableContainer">
+                <table class="payments-table">
+                    <thead>
+                        <tr>
+                            <th>เลขที่ชำระ</th>
+                            <th>วันที่</th>
+                            <th>ลูกค้า</th>
+                            <th style="text-align:right;">จำนวนเงิน</th>
+                            <th>ประเภท</th>
+                            <th>สถานะ</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="paymentsTableBody">
+                        <tr>
+                            <td colspan="7" style="text-align:center;padding:2rem;">
+                                <div class="spinner" style="margin:0 auto 1rem;"></div>
+                                กำลังโหลดข้อมูล...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
             </div>
+            
+            <!-- Mobile Card View (hidden on desktop) -->
+            <div id="paymentsMobileContainer" class="payments-mobile-list" style="display:none;"></div>
         </div>
     </div>
 
@@ -151,6 +175,98 @@ include('../includes/customer/sidebar.php');
 <div id="toast" class="toast"></div>
 
 <style>
+/* Classification UI Styles */
+.classification-section {
+    background: #f9fafb;
+    border-radius: 12px;
+    padding: 1.25rem;
+    margin-bottom: 1rem;
+    border: 1px solid #e5e7eb;
+}
+
+.classify-row {
+    margin-bottom: 1rem;
+}
+
+.classify-row label {
+    display: block;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #374151;
+    margin-bottom: 0.5rem;
+}
+
+.classify-select {
+    width: 100%;
+    padding: 0.75rem 1rem;
+    border: 2px solid #e5e7eb;
+    border-radius: 10px;
+    font-size: 1rem;
+    background: #ffffff;
+    color: #111827;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.classify-select:hover {
+    border-color: #d1d5db;
+}
+
+.classify-select:focus {
+    outline: none;
+    border-color: #6366f1;
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+
+.classify-input {
+    width: 100%;
+    padding: 0.75rem 1rem;
+    border: 2px solid #e5e7eb;
+    border-radius: 10px;
+    font-size: 1rem;
+    background: #ffffff;
+    color: #111827;
+    transition: all 0.2s ease;
+}
+
+.classify-input:focus {
+    outline: none;
+    border-color: #6366f1;
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+
+.reference-section {
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px dashed #d1d5db;
+}
+
+.reference-section label {
+    display: block;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #374151;
+    margin-bottom: 0.5rem;
+}
+
+.period-input {
+    width: 100px;
+    padding: 0.5rem 0.75rem;
+    border: 2px solid #e5e7eb;
+    border-radius: 8px;
+    font-size: 1rem;
+    margin-top: 0.5rem;
+}
+
+.period-input:focus {
+    outline: none;
+    border-color: #6366f1;
+}
+
+#periodSection-* {
+    margin-top: 0.75rem;
+}
+
 /* Filter Tabs */
 .filter-tabs {
     display: flex;
@@ -436,6 +552,21 @@ include('../includes/customer/sidebar.php');
     font-size: 0.8rem;
     font-weight: 500;
     margin-top: 0.75rem;
+}
+
+.payment-type-badge.type-full {
+    background: #e0f2fe;
+    color: #0369a1;
+}
+
+.payment-type-badge.type-installment {
+    background: #fef3c7;
+    color: #b45309;
+}
+
+.payment-type-badge.type-savings {
+    background: #dcfce7;
+    color: #15803d;
 }
 
 /* Loading State */
@@ -750,9 +881,23 @@ include('../includes/customer/sidebar.php');
 }
 
 .platform-badge svg {
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
 }
+
+/* Platform icon SVG in modal - inline with text */
+.platform-icon-svg {
+    width: 14px;
+    height: 14px;
+    display: inline-block;
+    vertical-align: middle;
+    flex-shrink: 0;
+}
+
+.platform-icon-svg.line { color: #06c755; }
+.platform-icon-svg.facebook { color: #1877f2; }
+.platform-icon-svg.instagram { color: #e4405f; }
+.platform-icon-svg.web { color: #6b7280; }
 
 .platform-line {
     color: white;
@@ -1316,7 +1461,307 @@ include('../includes/customer/sidebar.php');
         min-width:600px;
     }
 }
+
+/* ============================================
+   PAYMENTS TABLE STYLES - Data Table Layout
+   ============================================ */
+.table-container {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+.payments-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+.payments-table thead {
+    background: #f9fafb;
+    border-bottom: 2px solid #e5e7eb;
+}
+
+.payments-table th {
+    padding: 1rem 0.75rem;
+    text-align: left;
+    font-weight: 600;
+    color: #374151;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+
+.payments-table tbody tr {
+    border-bottom: 1px solid #e5e7eb;
+    transition: background-color 0.2s ease;
+    cursor: pointer;
+}
+
+.payments-table tbody tr:hover {
+    background: #f3f4f6;
+}
+
+.payments-table td {
+    padding: 0.875rem 0.75rem;
+    vertical-align: middle;
+    color: #374151;
+}
+
+/* Payment No */
+.payment-no-link {
+    font-weight: 600;
+    color: #1f2937;
+    font-size: 0.95rem;
+}
+
+/* Date cell */
+.payment-date-cell {
+    color: #6b7280;
+    font-size: 0.85rem;
+    white-space: nowrap;
+}
+
+/* Customer Profile Cell */
+.customer-cell {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+}
+
+.customer-avatar-sm {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid #e5e7eb;
+    flex-shrink: 0;
+}
+
+.customer-avatar-placeholder-sm {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-weight: 600;
+    font-size: 0.75rem;
+    flex-shrink: 0;
+}
+
+.customer-info-sm {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+}
+
+.customer-name-sm {
+    font-weight: 500;
+    color: #1f2937;
+    font-size: 0.9rem;
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+}
+
+.customer-name-sm .platform-icon {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+}
+
+.customer-id-sm {
+    font-size: 0.75rem;
+    color: #9ca3af;
+}
+
+/* Amount cell */
+.amount-cell {
+    font-weight: 600;
+    color: #059669;
+    font-size: 1rem;
+    text-align: right;
+    white-space: nowrap;
+}
+
+/* Type Badge */
+.type-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.25rem 0.625rem;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.type-badge.type-full {
+    background: #dbeafe;
+    color: #1d4ed8;
+}
+
+.type-badge.type-installment {
+    background: #fef3c7;
+    color: #b45309;
+}
+
+.type-badge.type-savings {
+    background: #dcfce7;
+    color: #15803d;
+}
+
+/* Status Badge */
+.status-badge-sm {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.25rem 0.75rem;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.status-badge-sm.status-verified {
+    background: #dcfce7;
+    color: #15803d;
+}
+
+.status-badge-sm.status-pending {
+    background: #fef3c7;
+    color: #b45309;
+}
+
+.status-badge-sm.status-rejected {
+    background: #fee2e2;
+    color: #b91c1c;
+}
+
+/* View Button */
+.view-btn {
+    padding: 0.375rem 0.75rem;
+    background: #f3f4f6;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    color: #374151;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+.view-btn:hover {
+    background: #e5e7eb;
+    color: #111827;
+}
+
+/* Highlighted Row (from deep link) */
+.payments-table tbody tr.highlighted {
+    background: #eef2ff;
+    box-shadow: inset 0 0 0 2px rgba(99, 102, 241, 0.3);
+}
+
+/* Mobile Card View */
+.payments-mobile-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.payment-mobile-card {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 1rem;
+    cursor: pointer;
+    transition: box-shadow 0.2s ease;
+}
+
+.payment-mobile-card:hover {
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+.payment-mobile-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 0.75rem;
+}
+
+.payment-mobile-no {
+    font-weight: 600;
+    color: #1f2937;
+}
+
+.payment-mobile-amount {
+    font-weight: 700;
+    color: #059669;
+    font-size: 1.1rem;
+}
+
+.payment-mobile-customer {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid #f3f4f6;
+}
+
+.payment-mobile-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+/* Show/Hide based on screen size */
+@media (max-width: 768px) {
+    .table-container {
+        display: none !important;
+    }
+    
+    .payments-mobile-list {
+        display: flex !important;
+    }
+}
+
+@media (min-width: 769px) {
+    .table-container {
+        display: block !important;
+    }
+    
+    .payments-mobile-list {
+        display: none !important;
+    }
+}
+
+/* Empty State */
+.payments-empty-state {
+    text-align: center;
+    padding: 3rem 2rem;
+    color: #6b7280;
+}
+
+.payments-empty-state .empty-icon {
+    font-size: 3rem;
+    margin-bottom: 1rem;
+}
+
+.payments-empty-state .empty-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #374151;
+    margin-bottom: 0.5rem;
+}
 </style>
+
+<!-- Customer Profile Component -->
+<link rel="stylesheet" href="<?php echo asset('css/components/customer-profile.css'); ?>?v=<?php echo time(); ?>">
+<script src="<?php echo asset('js/components/customer-profile.js'); ?>?v=<?php echo time(); ?>"></script>
 
 <?php
 $extra_scripts = [

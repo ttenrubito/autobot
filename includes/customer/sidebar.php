@@ -96,6 +96,36 @@ if (!isset($current_page)) {
                     <span>ประวัติการชำระ / ตรวจสลิป</span>
                 </a>
             </li>
+            <li class="sidebar-nav-item" data-menu="campaigns">
+                <a href="campaigns.php" class="sidebar-nav-link <?php echo ($current_page === 'campaigns') ? 'active' : ''; ?>">
+                    <span class="sidebar-nav-icon">🎯</span>
+                    <span>จัดการแคมเปญ</span>
+                </a>
+            </li>
+            <li class="sidebar-nav-item" data-menu="line_applications">
+                <a href="line-applications.php" class="sidebar-nav-link <?php echo ($current_page === 'line_applications') ? 'active' : ''; ?>">
+                    <span class="sidebar-nav-icon">📋</span>
+                    <span>ใบสมัคร LINE</span>
+                </a>
+            </li>
+            <li class="sidebar-nav-item" data-menu="cases">
+                <a href="cases.php" class="sidebar-nav-link <?php echo ($current_page === 'cases') ? 'active' : ''; ?>">
+                    <span class="sidebar-nav-icon">📥</span>
+                    <span>Case Inbox</span>
+                </a>
+            </li>
+            <li class="sidebar-nav-item" data-menu="savings">
+                <a href="savings.php" class="sidebar-nav-link <?php echo ($current_page === 'savings') ? 'active' : ''; ?>">
+                    <span class="sidebar-nav-icon">🐷</span>
+                    <span>ออมเงิน</span>
+                </a>
+            </li>
+            <li class="sidebar-nav-item" data-menu="installments">
+                <a href="installments.php" class="sidebar-nav-link <?php echo ($current_page === 'installments') ? 'active' : ''; ?>">
+                    <span class="sidebar-nav-icon">📅</span>
+                    <span>ผ่อนชำระ</span>
+                </a>
+            </li>
             <li class="sidebar-nav-item" data-menu="profile">
                 <a href="profile.php" class="sidebar-nav-link <?php echo ($current_page === 'profile') ? 'active' : ''; ?>">
                     <span class="sidebar-nav-icon">👤</span>
@@ -122,6 +152,105 @@ if (!isset($current_page)) {
         }
     }
 
-    // NOTE: Previously we hid some menus (including payment_history) for specific emails.
-    // That policy has been removed so that all users can see and use the payment history / slip review page.
+    // ========================================
+    // Dynamic Menu Configuration Loading
+    // ========================================
+    async function loadUserMenuConfig() {
+        try {
+            console.log('🔍 [MENU] Starting menu config load...');
+            
+            // Check if user has auth token first - skip if not logged in
+            const authToken = localStorage.getItem('auth_token');
+            const sessionToken = sessionStorage.getItem('auth_token');
+            const adminToken = localStorage.getItem('admin_token');
+            const adminSessionToken = sessionStorage.getItem('admin_token');
+            
+            console.log('🔑 [MENU] Token check:', {
+                localStorage_auth: authToken ? '✅ EXISTS' : '❌ MISSING',
+                sessionStorage_auth: sessionToken ? '✅ EXISTS' : '❌ MISSING',
+                localStorage_admin: adminToken ? '✅ EXISTS' : '❌ MISSING',
+                sessionStorage_admin: adminSessionToken ? '✅ EXISTS' : '❌ MISSING'
+            });
+            
+            const token = authToken || sessionToken || adminToken || adminSessionToken;
+            
+            if (!token) {
+                console.log('⚠️ [MENU] No auth token found, skipping menu config');
+                return; // User not logged in, don't call API
+            }
+            
+            console.log('✅ [MENU] Token found, proceeding with API call');
+
+            const apiUrl = (typeof PATH !== 'undefined' && PATH.api) 
+                ? PATH.api('api/user/menu-config.php')
+                : '/api/user/menu-config.php';
+            
+            console.log('📡 [MENU] Calling API:', apiUrl);
+            
+            const response = await fetch(apiUrl, {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                credentials: 'include'
+            });
+            
+            console.log('📥 [MENU] Response status:', response.status);
+            
+            if (!response.ok) {
+                console.warn('⚠️ [MENU] API returned non-OK status:', response.status);
+                const errorText = await response.text();
+                console.log('📄 [MENU] Error response:', errorText);
+                return;
+            }
+            
+            const result = await response.json();
+            console.log('✅ [MENU] API response:', result);
+            
+            if (result.success && result.data && result.data.menus) {
+                applyMenuVisibility(result.data.menus);
+                console.log('Menu config loaded:', result.data.custom_config ? 'Custom' : 'Default');
+            } else {
+                console.warn('Invalid menu config response:', result);
+            }
+        } catch (error) {
+            console.error('Failed to load menu config:', error);
+            // Fallback: show all menus (do nothing)
+        }
+    }
+
+    function applyMenuVisibility(menus) {
+        // Get list of enabled menu IDs
+        const enabledMenuIds = menus
+            .filter(m => m.enabled === true)
+            .map(m => m.id);
+        
+        console.log('Enabled menus:', enabledMenuIds);
+        
+        // Hide menu items that are not enabled
+        const sidebarItems = document.querySelectorAll('.sidebar-nav-item');
+        sidebarItems.forEach(item => {
+            const menuId = item.getAttribute('data-menu');
+            
+            // Skip logout and items without data-menu
+            if (!menuId || menuId === 'logout') {
+                return;
+            }
+            
+            if (!enabledMenuIds.includes(menuId)) {
+                item.style.display = 'none';
+                console.log('Hiding menu:', menuId);
+            } else {
+                item.style.display = '';
+            }
+        });
+    }
+
+    // Load menu config when DOM is ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', loadUserMenuConfig);
+    } else {
+        loadUserMenuConfig();
+    }
 </script>

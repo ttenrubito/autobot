@@ -94,7 +94,7 @@ RedirectMatch 404 /\.hg
     RewriteCond %{REQUEST_FILENAME} !-f
     RewriteCond %{REQUEST_FILENAME} !-d
     RewriteCond %{REQUEST_URI} !^/autobot/public/
-    RewriteRule ^(login|dashboard|profile|billing|payment|services|usage|api-docs|payment-test|omise-test|chat-history|addresses|orders|payment-history)\.php$ public/$1.php [L]
+    RewriteRule ^(login|dashboard|profile|billing|payment|services|usage|api-docs|payment-test|omise-test|chat-history|addresses|orders|payment-history|campaigns|line-applications|cases|savings|installments|conversations)\.php$ public/$1.php [L]
     
     # PRIORITY 4b: URL rewrite for clean user-facing URLs (map root HTML files to /public)
     # /autobot/login.html -> /autobot/public/login.html

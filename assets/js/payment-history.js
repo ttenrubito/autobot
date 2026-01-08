@@ -42,15 +42,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Load payments from API
 async function loadPayments() {
-    const container = document.getElementById('paymentsContainer');
+    const tableBody = document.getElementById('paymentsTableBody');
+    const mobileContainer = document.getElementById('paymentsMobileContainer');
     
     // Show loading state
-    container.innerHTML = `
-        <div class="loading-state">
-            <div class="spinner"></div>
+    const loadingHtml = `
+        <div class="loading-state" style="text-align:center;padding:2rem;">
+            <div class="spinner" style="margin:0 auto 1rem;"></div>
             <p>กำลังโหลดประวัติการชำระเงิน...</p>
         </div>
     `;
+    
+    if (tableBody) {
+        tableBody.innerHTML = `<tr><td colspan="7">${loadingHtml}</td></tr>`;
+    }
+    if (mobileContainer) {
+        mobileContainer.innerHTML = loadingHtml;
+    }
     
     try {
         const result = await apiCall(API_ENDPOINTS.CUSTOMER_PAYMENTS);
@@ -79,9 +87,10 @@ async function loadPayments() {
     }
 }
 
-// Render payments as cards with pagination
+// Render payments as table with pagination
 function renderPayments() {
-    const container = document.getElementById('paymentsContainer');
+    const tableBody = document.getElementById('paymentsTableBody');
+    const mobileContainer = document.getElementById('paymentsMobileContainer');
 
     // Empty state
     if (!filteredPayments || filteredPayments.length === 0) {
@@ -91,8 +100,8 @@ function renderPayments() {
                 ? 'ไม่พบรายการในหมวดนี้'
                 : 'ไม่พบรายการชำระเงิน';
         
-        container.innerHTML = `
-            <div class="empty-state">
+        const emptyHtml = `
+            <div class="payments-empty-state">
                 <div class="empty-icon">💰</div>
                 <p class="empty-title">${emptyMessage}</p>
                 ${searchQuery || currentFilter ? `
@@ -102,6 +111,13 @@ function renderPayments() {
                 ` : ''}
             </div>
         `;
+        
+        if (tableBody) {
+            tableBody.innerHTML = `<tr><td colspan="7">${emptyHtml}</td></tr>`;
+        }
+        if (mobileContainer) {
+            mobileContainer.innerHTML = emptyHtml;
+        }
         
         // Hide pagination
         const paginationEl = document.getElementById('paymentPagination');
@@ -117,54 +133,153 @@ function renderPayments() {
     const endIndex = Math.min(startIndex + ITEMS_PER_PAGE, totalItems);
     const currentItems = filteredPayments.slice(startIndex, endIndex);
 
-    container.innerHTML = currentItems.map(payment => {
-        const statusClass = payment.status === 'verified' ? 'verified' :
-            payment.status === 'pending' ? 'pending' : 'rejected';
-        const statusText = payment.status === 'verified' ? 'อนุมัติแล้ว' :
-            payment.status === 'pending' ? 'รอตรวจสอบ' : 'ปฏิเสธ';
+    // Render Desktop Table
+    if (tableBody) {
+        tableBody.innerHTML = currentItems.map(payment => {
+            const statusClass = payment.status === 'verified' ? 'verified' :
+                payment.status === 'pending' ? 'pending' : 'rejected';
+            const statusText = payment.status === 'verified' ? 'อนุมัติแล้ว' :
+                payment.status === 'pending' ? 'รอตรวจสอบ' : 'ปฏิเสธ';
 
-        const typeIcon = payment.payment_type === 'full' ? '💳' : '📅';
-        const typeText = payment.payment_type === 'full' ? 'จ่ายเต็ม' :
-            `ผ่อน งวด ${payment.current_period}/${payment.installment_period}`;
+            const typeClass = payment.payment_type === 'full' ? 'full' : 
+                payment.payment_type === 'savings' ? 'savings' : 'installment';
+            const typeIcon = payment.payment_type === 'full' ? '💳' : 
+                payment.payment_type === 'savings' ? '🐷' : '📅';
+            const typeText = payment.payment_type === 'full' ? 'จ่ายเต็ม' :
+                payment.payment_type === 'savings' ? 'ออมเงิน' :
+                `งวด ${payment.current_period || 1}/${payment.installment_period || 1}`;
 
-        const orderNo = payment.order_no || '';
-        const orderLink = orderNo
-            ? `<a href="${pageUrlSafe('orders.php')}?order_no=${encodeURIComponent(orderNo)}" onclick="event.stopPropagation();" style="color:var(--color-primary);text-decoration:underline;">${orderNo}</a>`
-            : '-';
+            const orderNo = payment.order_no || '';
+            const isHighlighted = targetOrderNoFromQuery && String(orderNo) === String(targetOrderNoFromQuery);
+            const highlightClass = isHighlighted ? 'highlighted' : '';
 
-        const isHighlighted = targetOrderNoFromQuery && String(orderNo) === String(targetOrderNoFromQuery);
-        const highlightStyle = isHighlighted ? 'outline:2px solid rgba(59,130,246,.55); box-shadow:0 0 0 4px rgba(59,130,246,.12);' : '';
+            // Customer profile
+            const customerName = payment.customer_name || 'ลูกค้า';
+            const customerPlatform = payment.customer_platform || 'web';
+            const customerAvatar = validatePaymentAvatarUrl(payment.customer_avatar);
+            const platformIcon = getPaymentPlatformIcon(customerPlatform);
+            
+            const avatarHtml = customerAvatar 
+                ? `<img src="${customerAvatar}" alt="${customerName}" class="customer-avatar-sm" onerror="this.outerHTML='<div class=\\'customer-avatar-placeholder-sm\\'>${customerName.charAt(0).toUpperCase()}</div>'">`
+                : `<div class="customer-avatar-placeholder-sm">${customerName.charAt(0).toUpperCase()}</div>`;
 
-        return `
-            <div class="payment-card" onclick="viewPaymentDetail(${payment.id})" tabindex="0" role="button" aria-label="ดูรายละเอียดการชำระเงิน ${payment.payment_no}" style="${highlightStyle}">
-                <div class="payment-header">
-                    <div class="payment-no">${payment.payment_no}</div>
-                    <span class="payment-status status-${statusClass}">${statusText}</span>
-                </div>
-                <div class="payment-amount">฿${formatNumber(payment.amount)}</div>
-                <div class="payment-details">
-                    <div class="payment-detail-row">
-                        <span>คำสั่งซื้อ:</span>
-                        <span><strong>${orderLink}</strong></span>
+            return `
+                <tr class="${highlightClass}" onclick="viewPaymentDetail(${payment.id})" tabindex="0" role="button">
+                    <td><span class="payment-no-link">${payment.payment_no}</span></td>
+                    <td class="payment-date-cell">${formatDate(payment.payment_date)}</td>
+                    <td>
+                        <div class="customer-cell">
+                            ${avatarHtml}
+                            <div class="customer-info-sm">
+                                <span class="customer-name-sm">
+                                    ${customerName}
+                                    ${platformIcon}
+                                </span>
+                            </div>
+                        </div>
+                    </td>
+                    <td class="amount-cell">฿${formatNumber(payment.amount)}</td>
+                    <td><span class="type-badge type-${typeClass}">${typeIcon} ${typeText}</span></td>
+                    <td><span class="status-badge-sm status-${statusClass}">${statusText}</span></td>
+                    <td><button class="view-btn" onclick="event.stopPropagation(); viewPaymentDetail(${payment.id})">ดู</button></td>
+                </tr>
+            `;
+        }).join('');
+    }
+
+    // Render Mobile Cards
+    if (mobileContainer) {
+        mobileContainer.innerHTML = currentItems.map(payment => {
+            const statusClass = payment.status === 'verified' ? 'verified' :
+                payment.status === 'pending' ? 'pending' : 'rejected';
+            const statusText = payment.status === 'verified' ? 'อนุมัติแล้ว' :
+                payment.status === 'pending' ? 'รอตรวจสอบ' : 'ปฏิเสธ';
+
+            const typeClass = payment.payment_type === 'full' ? 'full' : 
+                payment.payment_type === 'savings' ? 'savings' : 'installment';
+            const typeIcon = payment.payment_type === 'full' ? '💳' : 
+                payment.payment_type === 'savings' ? '🐷' : '📅';
+            const typeText = payment.payment_type === 'full' ? 'จ่ายเต็ม' :
+                payment.payment_type === 'savings' ? 'ออมเงิน' :
+                `งวด ${payment.current_period || 1}/${payment.installment_period || 1}`;
+
+            // Customer profile
+            const customerName = payment.customer_name || 'ลูกค้า';
+            const customerPlatform = payment.customer_platform || 'web';
+            const customerAvatar = validatePaymentAvatarUrl(payment.customer_avatar);
+            const platformIcon = getPaymentPlatformIcon(customerPlatform);
+            
+            const avatarHtml = customerAvatar 
+                ? `<img src="${customerAvatar}" alt="${customerName}" class="customer-avatar-sm" onerror="this.outerHTML='<div class=\\'customer-avatar-placeholder-sm\\'>${customerName.charAt(0).toUpperCase()}</div>'">`
+                : `<div class="customer-avatar-placeholder-sm">${customerName.charAt(0).toUpperCase()}</div>`;
+
+            return `
+                <div class="payment-mobile-card" onclick="viewPaymentDetail(${payment.id})">
+                    <div class="payment-mobile-header">
+                        <span class="payment-mobile-no">${payment.payment_no}</span>
+                        <span class="payment-mobile-amount">฿${formatNumber(payment.amount)}</span>
                     </div>
-                    <div class="payment-detail-row">
-                        <span>วันที่ชำระ:</span>
-                        <span>${formatDate(payment.payment_date)}</span>
+                    <div class="payment-mobile-customer">
+                        ${avatarHtml}
+                        <span class="customer-name-sm">${customerName} ${platformIcon}</span>
                     </div>
-                    <div class="payment-detail-row">
-                        <span>วิธีชำระ:</span>
-                        <span>${getPaymentMethodText(payment.payment_method)}</span>
+                    <div class="payment-mobile-meta">
+                        <span class="payment-date-cell">${formatDate(payment.payment_date)}</span>
+                        <span class="type-badge type-${typeClass}">${typeIcon} ${typeText}</span>
+                        <span class="status-badge-sm status-${statusClass}">${statusText}</span>
                     </div>
                 </div>
-                <div class="payment-type-badge">
-                    ${typeIcon} ${typeText}
-                </div>
-            </div>
-        `;
-    }).join('');
+            `;
+        }).join('');
+    }
     
     // Render pagination
     renderPaginationPayment(totalItems, totalPages, startIndex, endIndex);
+}
+
+// Helper: Validate avatar URL for payments
+function validatePaymentAvatarUrl(url) {
+    if (!url) return null;
+    if (url.includes('default_avatar') || url.includes('placeholder')) return null;
+    if (!url.startsWith('http')) return null;
+    return url;
+}
+
+// Helper: Get platform SVG icon for payments
+function getPaymentPlatformIcon(platform) {
+    const p = String(platform || '').toLowerCase();
+    
+    if (p === 'line') {
+        return `<svg class="platform-icon" viewBox="0 0 24 24" fill="#06C755" width="14" height="14">
+            <path d="M12 2C6.48 2 2 5.88 2 10.54c0 3.77 3.02 6.96 7.12 7.93.28.06.66.19.75.44.09.23.06.59.03.83l-.12.74c-.04.23-.18.91.79.5.97-.42 5.22-3.07 7.12-5.26C19.42 13.69 22 12.26 22 10.54 22 5.88 17.52 2 12 2zm-4.5 11.5h-2a.5.5 0 01-.5-.5v-4a.5.5 0 011 0v3.5h1.5a.5.5 0 010 1zm2-4.5a.5.5 0 011 0v4a.5.5 0 01-1 0v-4zm5.5 4a.5.5 0 01-.5.5h-2a.5.5 0 01-.5-.5v-4a.5.5 0 011 0v3.5h1.5a.5.5 0 01.5.5zm3.35.35a.5.5 0 01-.7 0L16 11.71V13a.5.5 0 01-1 0V9a.5.5 0 011 0v1.29l1.65-1.64a.5.5 0 01.7.7L16.71 11l1.64 1.65a.5.5 0 010 .7z"/>
+        </svg>`;
+    }
+    
+    if (p === 'facebook' || p === 'messenger') {
+        return `<svg class="platform-icon" viewBox="0 0 24 24" fill="#1877F2" width="14" height="14">
+            <path d="M12 2C6.477 2 2 6.145 2 11.259c0 2.913 1.454 5.512 3.726 7.21V22l3.405-1.869c.909.252 1.871.388 2.869.388 5.523 0 10-4.145 10-9.259S17.523 2 12 2zm1.008 12.476l-2.548-2.72-4.973 2.72 5.47-5.806 2.612 2.72 4.909-2.72-5.47 5.806z"/>
+        </svg>`;
+    }
+    
+    if (p === 'instagram') {
+        return `<svg class="platform-icon" viewBox="0 0 24 24" width="14" height="14">
+            <defs>
+                <linearGradient id="ig-grad" x1="0%" y1="100%" x2="100%" y2="0%">
+                    <stop offset="0%" style="stop-color:#FFDC80"/>
+                    <stop offset="25%" style="stop-color:#F77737"/>
+                    <stop offset="50%" style="stop-color:#E1306C"/>
+                    <stop offset="75%" style="stop-color:#C13584"/>
+                    <stop offset="100%" style="stop-color:#833AB4"/>
+                </linearGradient>
+            </defs>
+            <path fill="url(#ig-grad)" d="M12 2c2.717 0 3.056.01 4.122.06 1.065.05 1.79.217 2.428.465.66.254 1.216.598 1.772 1.153.509.5.902 1.105 1.153 1.772.247.637.415 1.363.465 2.428.047 1.066.06 1.405.06 4.122s-.013 3.056-.06 4.122c-.05 1.065-.218 1.79-.465 2.428a4.883 4.883 0 01-1.153 1.772c-.5.508-1.105.902-1.772 1.153-.637.247-1.363.415-2.428.465-1.066.047-1.405.06-4.122.06s-3.056-.013-4.122-.06c-1.065-.05-1.79-.218-2.428-.465a4.89 4.89 0 01-1.772-1.153 4.904 4.904 0 01-1.153-1.772c-.248-.637-.415-1.363-.465-2.428C2.013 15.056 2 14.717 2 12s.01-3.056.06-4.122c.05-1.066.217-1.79.465-2.428a4.88 4.88 0 011.153-1.772A4.897 4.897 0 015.45 2.525c.638-.248 1.362-.415 2.428-.465C8.944 2.013 9.283 2 12 2zm0 5a5 5 0 100 10 5 5 0 000-10zm0 8.25a3.25 3.25 0 110-6.5 3.25 3.25 0 010 6.5zm5.25-8.5a1 1 0 11-2 0 1 1 0 012 0z"/>
+        </svg>`;
+    }
+    
+    // Default web/other
+    return `<svg class="platform-icon" viewBox="0 0 24 24" fill="#6B7280" width="14" height="14">
+        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+    </svg>`;
 }
 
 // Filter payments
@@ -491,37 +606,57 @@ function renderPaymentDetails(payment) {
             </div>
 
             <div class="detail-section slip-chat-box">
-                <h3>💬 สรุปการคุย / หมายเหตุจากระบบ</h3>
+                <h3>💬 ประวัติการสนทนา</h3>
                 <div class="slip-chat-bubbles">
-                    <div class="bubble bubble-bot">
-                        <div class="bubble-label">Bot</div>
-                        <div class="bubble-text">
-                            ตรวจพบการชำระยอด <strong>฿${formatNumber(payment.amount || 0)}</strong> สำหรับคำสั่งซื้อ <strong>${payment.order_no || '-'}</strong><br>
-                            ช่องทางชำระ: ${getPaymentMethodText(payment.payment_method)}
-                        </div>
-                    </div>
-                    <div class="bubble bubble-user">
-                        <div class="bubble-label">${customerName}</div>
-                        <div class="bubble-text">
-                            ส่งสลิปการโอนเพื่อยืนยันการชำระเงินเรียบร้อยแล้วค่ะ
-                        </div>
-                    </div>
-                    <div class="bubble bubble-bot">
-                        <div class="bubble-label">System</div>
-                        <div class="bubble-text">
-                            ${reviewHint}
-                        </div>
-                    </div>
+                    ${renderChatMessages(payment.chat_messages, customerName, payment, reviewHint)}
                 </div>
             </div>
 
             ${canModerate ? `
             <div class="detail-section slip-approve-panel">
-                <h3>✅ ตรวจสอบและอนุมัติสลิป</h3>
-                <p class="hint">ปุ่มนี้ใช้สำหรับเดโม: ผู้ใช้ทุกคนที่เข้าหน้านี้สามารถลองกดอนุมัติ/ปฏิเสธได้</p>
+                <h3>✅ ตรวจสอบและจัดประเภทการชำระเงิน</h3>
+                
+                <!-- Classification Section -->
+                <div class="classification-section">
+                    <div class="classify-row">
+                        <label for="paymentType-${payment.id}">ประเภทการชำระ</label>
+                        <select id="paymentType-${payment.id}" class="classify-select" onchange="onPaymentTypeChange(${payment.id})">
+                            <option value="">-- เลือกประเภท --</option>
+                            <option value="full" ${payment.payment_type === 'full' ? 'selected' : ''}>💳 จ่ายเต็ม (Full Payment)</option>
+                            <option value="installment" ${payment.payment_type === 'installment' ? 'selected' : ''}>📅 ผ่อนชำระ (Installment)</option>
+                            <option value="savings_deposit" ${payment.payment_type === 'savings_deposit' ? 'selected' : ''}>🐷 ฝากออม (Savings)</option>
+                        </select>
+                    </div>
+                    
+                    <!-- Installment Period (shown only when installment selected) -->
+                    <div id="periodSection-${payment.id}" class="reference-section" style="display: ${payment.payment_type === 'installment' ? 'block' : 'none'};">
+                        <label>งวดที่ชำระ</label>
+                        <div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem;">
+                            <input type="number" id="currentPeriod-${payment.id}" class="period-input" 
+                                   value="${payment.current_period || 1}" min="1" max="12" placeholder="งวดที่">
+                            <span>/</span>
+                            <input type="number" id="totalPeriod-${payment.id}" class="period-input" 
+                                   value="${payment.installment_period || 3}" min="1" max="12" placeholder="รวม">
+                            <span>งวด</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Note -->
+                    <div class="classify-row" style="margin-top: 1rem;">
+                        <label for="classifyNote-${payment.id}">หมายเหตุ (ถ้ามี)</label>
+                        <input type="text" id="classifyNote-${payment.id}" class="classify-input" 
+                               placeholder="เช่น ลูกค้าโอนเกิน, ตรวจสอบกับบัญชี..."
+                               value="">
+                    </div>
+                </div>
+                
                 <div class="action-row">
-                    <button class="btn btn-success" onclick="approvePayment(${payment.id})" ${payment.status === 'verified' ? 'disabled' : ''}>อนุมัติสลิป</button>
-                    <button class="btn btn-danger" onclick="rejectPayment(${payment.id})" ${payment.status === 'rejected' ? 'disabled' : ''}>ปฏิเสธสลิป</button>
+                    <button class="btn btn-success" onclick="classifyAndApprovePayment(${payment.id})" ${payment.status === 'verified' ? 'disabled' : ''}>
+                        ✅ อนุมัติและบันทึก
+                    </button>
+                    <button class="btn btn-danger" onclick="rejectPayment(${payment.id})" ${payment.status === 'rejected' ? 'disabled' : ''}>
+                        ❌ ปฏิเสธสลิป
+                    </button>
                 </div>
             </div>` : ''}
         </div>
@@ -554,6 +689,91 @@ async function approvePayment(paymentId) {
     } catch (e) {
         console.error(e);
         showToast('❌ เกิดข้อผิดพลาดในการอนุมัติ', 'error');
+    }
+}
+
+/**
+ * ✅ Toggle installment period section visibility
+ */
+function onPaymentTypeChange(paymentId) {
+    const typeSelect = document.getElementById(`paymentType-${paymentId}`);
+    const periodSection = document.getElementById(`periodSection-${paymentId}`);
+    
+    if (typeSelect && periodSection) {
+        periodSection.style.display = typeSelect.value === 'installment' ? 'block' : 'none';
+    }
+}
+
+/**
+ * ✅ Classify and approve payment with type selection
+ */
+async function classifyAndApprovePayment(paymentId) {
+    const typeSelect = document.getElementById(`paymentType-${paymentId}`);
+    const noteInput = document.getElementById(`classifyNote-${paymentId}`);
+    const currentPeriodInput = document.getElementById(`currentPeriod-${paymentId}`);
+    const totalPeriodInput = document.getElementById(`totalPeriod-${paymentId}`);
+    
+    const paymentType = typeSelect ? typeSelect.value : '';
+    const note = noteInput ? noteInput.value.trim() : '';
+    const currentPeriod = currentPeriodInput ? parseInt(currentPeriodInput.value) || 1 : 1;
+    const totalPeriod = totalPeriodInput ? parseInt(totalPeriodInput.value) || 3 : 3;
+    
+    // Validate
+    if (!paymentType) {
+        showToast('⚠️ กรุณาเลือกประเภทการชำระก่อน', 'error');
+        if (typeSelect) typeSelect.focus();
+        return;
+    }
+    
+    // Confirm
+    const typeLabels = {
+        'full': 'จ่ายเต็ม',
+        'installment': `ผ่อนชำระ งวดที่ ${currentPeriod}/${totalPeriod}`,
+        'savings_deposit': 'ฝากออม'
+    };
+    
+    const confirmMsg = `ยืนยันอนุมัติการชำระเงินนี้เป็น "${typeLabels[paymentType] || paymentType}"?`;
+    if (!confirm(confirmMsg)) return;
+    
+    showToast('กำลังบันทึก...', 'info');
+    
+    try {
+        // Build request body
+        const body = {
+            payment_id: paymentId,
+            payment_type: paymentType,
+            classification_notes: note
+        };
+        
+        // Add installment info if applicable
+        if (paymentType === 'installment') {
+            body.current_period = currentPeriod;
+            body.installment_period = totalPeriod;
+        }
+        
+        // Call classify API
+        const url = (typeof API_ENDPOINTS !== 'undefined' && API_ENDPOINTS.CUSTOMER_PAYMENTS)
+            ? `${API_ENDPOINTS.CUSTOMER_PAYMENTS}?action=classify`
+            : `/api/customer/payments.php?action=classify`;
+        
+        const result = await apiCall(url, { 
+            method: 'POST', 
+            body: body 
+        });
+        
+        if (result && result.success) {
+            showToast('✅ บันทึกและอนุมัติเรียบร้อย', 'success');
+            await loadPayments();
+            const updated = allPayments.find(p => String(p.id) === String(paymentId));
+            if (updated) {
+                document.getElementById('paymentDetailsContent').innerHTML = renderPaymentDetails(updated);
+            }
+        } else {
+            showToast('❌ ไม่สามารถบันทึกได้: ' + (result && result.message ? result.message : 'ไม่ทราบสาเหตุ'), 'error');
+        }
+    } catch (e) {
+        console.error('Classify error:', e);
+        showToast('❌ เกิดข้อผิดพลาด', 'error');
     }
 }
 
@@ -717,13 +937,99 @@ function getPaymentMethodText(method) {
     return methods[method] || method;
 }
 
+/**
+ * ✅ Render chat messages from database or show fallback
+ */
+function renderChatMessages(chatMessages, customerName, payment, reviewHint) {
+    // If we have real chat messages from database, render them
+    if (chatMessages && Array.isArray(chatMessages) && chatMessages.length > 0) {
+        let html = '';
+        
+        chatMessages.forEach(msg => {
+            const isBot = msg.sender_type === 'bot' || msg.direction === 'outgoing';
+            const bubbleClass = isBot ? 'bubble-bot' : 'bubble-user';
+            const label = isBot ? 'Bot' : customerName;
+            
+            let content = '';
+            
+            // Handle different message types
+            if (msg.message_type === 'image') {
+                // Check for image URL in message_data
+                let imageUrl = '';
+                if (msg.message_data && msg.message_data.attachments && msg.message_data.attachments[0]) {
+                    imageUrl = msg.message_data.attachments[0].url;
+                }
+                
+                if (imageUrl) {
+                    content = `<img src="${imageUrl}" alt="รูปภาพ" style="max-width: 200px; border-radius: 8px; cursor: pointer;" onclick="window.open('${imageUrl}', '_blank')">`;
+                } else {
+                    content = '<em>[รูปภาพ]</em>';
+                }
+            } else {
+                content = escapeHtml(msg.message_text || '');
+            }
+            
+            const timestamp = msg.sent_at ? formatDateTime(msg.sent_at) : '';
+            
+            html += `
+                <div class="bubble ${bubbleClass}">
+                    <div class="bubble-label">${label} ${timestamp ? `<small style="color:#999;font-weight:normal;">${timestamp}</small>` : ''}</div>
+                    <div class="bubble-text">${content}</div>
+                </div>
+            `;
+        });
+        
+        // Add system status message at the end
+        html += `
+            <div class="bubble bubble-bot">
+                <div class="bubble-label">System</div>
+                <div class="bubble-text">${reviewHint}</div>
+            </div>
+        `;
+        
+        return html;
+    }
+    
+    // Fallback: Show mock data if no real messages
+    return `
+        <div class="bubble bubble-bot">
+            <div class="bubble-label">Bot</div>
+            <div class="bubble-text">
+                ตรวจพบการชำระยอด <strong>฿${formatNumber(payment.amount || 0)}</strong> สำหรับคำสั่งซื้อ <strong>${payment.order_no || '-'}</strong><br>
+                ช่องทางชำระ: ${getPaymentMethodText(payment.payment_method)}
+            </div>
+        </div>
+        <div class="bubble bubble-user">
+            <div class="bubble-label">${customerName}</div>
+            <div class="bubble-text">
+                ส่งสลิปการโอนเพื่อยืนยันการชำระเงินเรียบร้อยแล้วค่ะ
+            </div>
+        </div>
+        <div class="bubble bubble-bot">
+            <div class="bubble-label">System</div>
+            <div class="bubble-text">${reviewHint}</div>
+        </div>
+    `;
+}
+
+/**
+ * Helper: Escape HTML to prevent XSS
+ */
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
 function showError(message, details, canRetry = false) {
-    const container = document.getElementById('paymentsContainer');
-    container.innerHTML = `
-        <div class="error-state">
-            <div class="error-icon">⚠️</div>
-            <h3 class="error-title">${message}</h3>
-            ${details ? `<p class="error-details">${details}</p>` : ''}
+    const tableBody = document.getElementById('paymentsTableBody');
+    const mobileContainer = document.getElementById('paymentsMobileContainer');
+    
+    const errorHtml = `
+        <div class="error-state" style="text-align:center;padding:2rem;">
+            <div class="error-icon" style="font-size:2.5rem;margin-bottom:1rem;">⚠️</div>
+            <h3 class="error-title" style="color:#dc2626;margin-bottom:0.5rem;">${message}</h3>
+            ${details ? `<p class="error-details" style="color:#6b7280;margin-bottom:1rem;">${details}</p>` : ''}
             ${canRetry ? `
                 <button class="btn btn-primary" onclick="loadPayments()">
                     <i class="fas fa-redo"></i> ลองใหม่อีกครั้ง
@@ -731,6 +1037,13 @@ function showError(message, details, canRetry = false) {
             ` : ''}
         </div>
     `;
+    
+    if (tableBody) {
+        tableBody.innerHTML = `<tr><td colspan="7">${errorHtml}</td></tr>`;
+    }
+    if (mobileContainer) {
+        mobileContainer.innerHTML = errorHtml;
+    }
     
     // Hide pagination
     const paginationEl = document.getElementById('paymentPagination');

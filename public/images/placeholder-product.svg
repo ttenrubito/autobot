@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
+  <rect width="200" height="200" fill="#f0f0f0"/>
+  <g fill="#cccccc">
+    <!-- Package/Box icon -->
+    <path d="M100 40L40 75v50l60 35 60-35V75L100 40zm0 12l44 26-44 26-44-26 44-26zm-48 36l44 26v44l-44-26V88zm96 44l-44 26v-44l44-26v44z"/>
+  </g>
+  <text x="100" y="175" text-anchor="middle" fill="#999999" font-family="Arial, sans-serif" font-size="12">ไม่มีรูปภาพ</text>
+</svg>

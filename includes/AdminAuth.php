@@ -8,7 +8,48 @@ require_once __DIR__ . '/JWT.php';
 
 class AdminAuth {
     /**
-     * Check if current user is an admin
+     * Verify admin token and return admin data (returns null if invalid)
+     * Use this when you want to handle auth failure yourself
+     */
+    public static function verify() {
+        $token = self::getToken();
+        
+        if (!$token) {
+            return null;
+        }
+        
+        try {
+            $decoded = JWT::verify($token);
+            
+            if (!$decoded) {
+                return null;
+            }
+            
+            // Check if it's an admin token
+            if (!isset($decoded['type']) || $decoded['type'] !== 'admin') {
+                return null;
+            }
+            
+            if (!isset($decoded['admin_id'])) {
+                return null;
+            }
+            
+            // Return admin data with normalized id field
+            return [
+                'id' => $decoded['admin_id'],
+                'admin_id' => $decoded['admin_id'],
+                'role' => $decoded['role'] ?? null,
+                'email' => $decoded['email'] ?? null,
+                'tenant_id' => $decoded['tenant_id'] ?? 'default'
+            ];
+            
+        } catch (Exception $e) {
+            return null;
+        }
+    }
+    
+    /**
+     * Check if current user is an admin (exits on failure)
      */
     public static function require() {
         $token = self::getToken();

@@ -6,13 +6,50 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Admin Login - AI Automation</title>
 
-    <!-- Load CSS immediately using relative paths (works on both localhost (/autobot) and prod) -->
-    <link rel="stylesheet" href="../../assets/css/style.css?v=1.0.1">
-    <link rel="stylesheet" href="../../assets/css/responsive-fixes.css?v=1.0.1">
+    <!-- Font Awesome CDN -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 
-    <!-- Load path-config.js for API endpoints -->
-    <script src="../../assets/js/path-config.js?v=1.0.1"></script>
+    <!-- Dynamic Path Detection Script (runs BEFORE anything else) -->
+    <script>
+        // Auto-detect base path for localhost vs production
+        (function () {
+            var currentPath = window.location.pathname;
+            var basePath = '';
+
+            // If URL contains /autobot/, we're on localhost
+            if (currentPath.indexOf('/autobot/') !== -1) {
+                basePath = '/autobot';
+            }
+            // Otherwise we're on production (Cloud Run) with DocumentRoot = /public
+            // basePath stays as ''
+
+            // Store for later use
+            window.BASE_PATH = basePath;
+
+            // Helper function to create correct asset path
+            window.getAssetPath = function (path) {
+                return basePath + '/' + path.replace(/^\//, '');
+            };
+
+            // Inject CSS files dynamically
+            var cssFiles = [
+                'assets/css/style.css?v=1.0.1',
+                'assets/css/responsive-fixes.css?v=1.0.1'
+            ];
+
+            cssFiles.forEach(function (file) {
+                var link = document.createElement('link');
+                link.rel = 'stylesheet';
+                link.href = window.getAssetPath(file);
+                document.head.appendChild(link);
+            });
+
+            // Inject path-config.js
+            var script = document.createElement('script');
+            script.src = window.getAssetPath('assets/js/path-config.js?v=1.0.1');
+            document.head.appendChild(script);
+        })();
+    </script>
 </head>
 
 <body class="auth-page auth-page--admin">

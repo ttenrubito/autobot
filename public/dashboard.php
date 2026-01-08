@@ -32,7 +32,7 @@ include('../includes/customer/sidebar.php');
                 <div class="stat-icon primary">🤖</div>
                 <div class="stat-content">
                     <div class="stat-label">บริการทั้งหมด</div>
-                    <div class="stat-value" id="totalServices">-</div>
+                    <div class="stat-value" id="totalServices">-</div> ช
                 </div>
             </div>
         </div>
@@ -127,21 +127,29 @@ include('../includes/customer/sidebar.php');
 <?php
 $extra_scripts = [
     'https://cdn.jsdelivr.net/npm/chart.js',
-    'assets/js/dashboard.js'
+    '../assets/js/dashboard.js'
 ];
 
 $inline_script = <<<'JAVASCRIPT'
 // Load subscription status
 async function loadSubscriptionStatus() {
-    try {
-        if (typeof apiCall !== 'function' || !API_ENDPOINTS?.PAYMENT_SUBSCRIPTION_STATUS) return;
+    const token = localStorage.getItem('auth_token');
+    if (!token) return;
 
-        const result = await apiCall(API_ENDPOINTS.PAYMENT_SUBSCRIPTION_STATUS);
-        if (!result || !result.success || !result.data || !result.data.has_subscription) return;
+    try {
+        const response = await fetch(API_ENDPOINTS.PAYMENT_SUBSCRIPTION_STATUS, {
+            headers: {
+                'Authorization': 'Bearer ' + token
+            }
+        });
+
+        if (!response.ok) return;
+
+        const result = await response.json();
+        if (!result.success || !result.data.has_subscription) return;
 
         const data = result.data;
         const statusEl = document.getElementById('subscriptionStatus');
-        if (!statusEl) return;
 
         let html = '';
 
@@ -177,13 +185,14 @@ async function loadSubscriptionStatus() {
 
         if (html) {
             statusEl.innerHTML = html;
+            statusEl.style.display = 'block';
         }
-    } catch (e) {
-        console.warn('[dashboard] loadSubscriptionStatus failed:', e);
+
+    } catch (error) {
+        console.error('Failed to load subscription status:', error);
     }
 }
 
-// Run
 document.addEventListener('DOMContentLoaded', loadSubscriptionStatus);
 JAVASCRIPT;
 

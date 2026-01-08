@@ -46,6 +46,9 @@ include('../includes/customer/sidebar.php');
                     <p>กำลังโหลดข้อมูล...</p>
                 </div>
             </div>
+            
+            <!-- Pagination -->
+            <div id="addressesPagination" class="pagination-container"></div>
         </div>
     </div>
 </main>
@@ -135,6 +138,37 @@ include('../includes/customer/sidebar.php');
 </div>
 
 <style>
+/* Pagination */
+.pagination-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 1rem;
+    margin-top: 1rem;
+}
+.btn-pagination {
+    padding: 0.5rem 1rem;
+    border: 1px solid #e5e7eb;
+    background: white;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.btn-pagination:hover:not([disabled]) {
+    background: #f3f4f6;
+    border-color: #3b82f6;
+}
+.btn-pagination[disabled] {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.page-indicator {
+    padding: 0.5rem 1rem;
+    color: #6b7280;
+    font-size: 0.9rem;
+}
+
 .addresses-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
@@ -233,6 +267,10 @@ include('../includes/customer/sidebar.php');
     box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.14);
 }
 </style>
+
+<!-- Customer Profile Component -->
+<link rel="stylesheet" href="<?php echo asset('css/components/customer-profile.css'); ?>?v=<?php echo time(); ?>">
+<script src="<?php echo asset('js/components/customer-profile.js'); ?>?v=<?php echo time(); ?>"></script>
 
 <?php
 $extra_scripts = [

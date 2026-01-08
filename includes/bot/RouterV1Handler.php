@@ -4,6 +4,7 @@
 require_once __DIR__ . '/BotHandlerInterface.php';
 require_once __DIR__ . '/../Database.php';
 require_once __DIR__ . '/../Logger.php';
+require_once __DIR__ . '/CaseEngine.php';
 
 class RouterV1Handler implements BotHandlerInterface
 {
@@ -1476,6 +1477,188 @@ class RouterV1Handler implements BotHandlerInterface
             return ['handled' => true, 'reply_text' => $reply, 'reason' => 'backend_order_status', 'meta' => $resp, 'slots' => $slots];
         }
 
+        // -------------------------
+        // Intent: savings_new / savings_deposit / savings_inquiry
+        // -------------------------
+        if (in_array($intent, ['savings_new', 'savings_deposit', 'savings_inquiry'])) {
+            $actionType = null;
+            if ($intent === 'savings_new') $actionType = 'new';
+            elseif ($intent === 'savings_deposit') $actionType = 'deposit';
+            elseif ($intent === 'savings_inquiry') $actionType = 'inquiry';
+            
+            // Get action_type from slots if provided
+            if (!empty($slots['action_type'])) {
+                $actionType = $slots['action_type'];
+            }
+            
+            $askSavingsProduct = $templates['ask_savings_product'] ?? 'สนใจออมสินค้าตัวไหนคะ? 🎁 ส่งชื่อหรือรหัสสินค้ามาได้เลยค่ะ';
+            $askSlipMissing = $templates['ask_slip_missing'] ?? 'รบกวนส่งรูปสลิปการโอนด้วยนะคะ 📷';
+            
+            // Handle savings_new
+            if ($actionType === 'new') {
+                $productRefId = trim((string)($slots['product_ref_id'] ?? ''));
+                $productName = trim((string)($slots['product_name'] ?? ''));
+                
+                if ($productRefId === '' && $productName === '') {
+                    return ['handled' => false, 'reply_text' => $askSavingsProduct, 'reason' => 'missing_product_for_savings', 'slots' => $slots];
+                }
+                
+                $endpoint = $ep(['savings_create']);
+                if (!$endpoint) return ['handled' => false, 'reason' => 'missing_endpoint_savings_create'];
+                
+                $payload = [
+                    'channel_id' => $channelId,
+                    'external_user_id' => $externalUserId,
+                    'platform' => $context['platform'] ?? ($context['channel']['platform'] ?? 'unknown'),
+                    'product_ref_id' => $productRefId ?: null,
+                    'product_name' => $productName ?: 'Unknown Product',
+                    'product_price' => (float)($slots['product_price'] ?? ($slots['target_amount'] ?? 0))
+                ];
+                
+                $resp = $this->callBackendJson($backendCfg, $endpoint, $payload);
+                if (!$resp['ok']) {
+                    return ['handled' => false, 'reply_text' => $templates['fallback'] ?? 'ขออภัยค่ะ มีปัญหาในการเปิดบัญชีออม', 'reason' => 'backend_error', 'meta' => $resp, 'slots' => $slots];
+                }
+                
+                $data = $resp['data'] ?? [];
+                $tpl = $templates['savings_created'] ?? "เปิดบัญชีออมให้แล้วค่ะ ✅\nสินค้า: {{product_name}}\nเป้าหมาย: {{target_amount}} บาท\nสินค้ากันไว้ให้แล้วนะคะ 🎯";
+                $reply = $this->renderTemplate($tpl, [
+                    'product_name' => $data['product_name'] ?? $productName,
+                    'target_amount' => number_format((float)($data['target_amount'] ?? 0)),
+                    'account_no' => $data['account_no'] ?? ''
+                ]);
+                
+                $slots['savings_id'] = $data['id'] ?? null;
+                $slots['savings_account_no'] = $data['account_no'] ?? null;
+                
+                return ['handled' => true, 'reply_text' => $reply, 'reason' => 'backend_savings_created', 'meta' => $resp, 'slots' => $slots];
+            }
+            
+            // Handle savings_deposit
+            if ($actionType === 'deposit') {
+                $savingsId = trim((string)($slots['savings_id'] ?? ($slots['savings_account_id'] ?? '')));
+                $slipImageUrl = $extra['slip_image_url'] ?? ($context['message']['attachments'][0]['url'] ?? null);
+                
+                // Try to find savings account if not provided
+                if ($savingsId === '') {
+                    $existingSavings = $this->db->queryOne(
+                        "SELECT id FROM savings_accounts WHERE channel_id = ? AND external_user_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1",
+                        [$channelId, $externalUserId]
+                    );
+                    if ($existingSavings) {
+                        $savingsId = (string)$existingSavings['id'];
+                        $slots['savings_id'] = $savingsId;
+                    }
+                }
+                
+                if ($savingsId === '') {
+                    return ['handled' => false, 'reply_text' => 'ไม่พบบัญชีออมที่เปิดไว้ค่ะ ต้องการเปิดบัญชีออมใหม่ไหมคะ? 🏦', 'reason' => 'no_savings_account', 'slots' => $slots];
+                }
+                
+                if (!$slipImageUrl) {
+                    return ['handled' => false, 'reply_text' => $askSlipMissing, 'reason' => 'missing_slip_image', 'slots' => $slots];
+                }
+                
+                $endpoint = $ep(['savings_deposit']);
+                if (!$endpoint) return ['handled' => false, 'reason' => 'missing_endpoint_savings_deposit'];
+                
+                // Replace {id} placeholder in endpoint
+                $endpoint = str_replace('{id}', $savingsId, $endpoint);
+                
+                $payload = [
+                    'amount' => (float)($slots['amount'] ?? 0),
+                    'slip_image_url' => $slipImageUrl,
+                    'payment_time' => $slots['time'] ?? null,
+                    'sender_name' => $slots['sender_name'] ?? null
+                ];
+                
+                $resp = $this->callBackendJson($backendCfg, $endpoint, $payload);
+                if (!$resp['ok']) {
+                    return ['handled' => false, 'reply_text' => $templates['payment_verify_pending'] ?? 'บันทึกยอดฝากให้แล้วค่ะ รอเจ้าหน้าที่ตรวจสอบนะคะ', 'reason' => 'backend_error', 'meta' => $resp, 'slots' => $slots];
+                }
+                
+                $tpl = $templates['savings_deposit_pending'] ?? 'ได้รับยอดฝากแล้วค่ะ 💰 รอเจ้าหน้าที่ตรวจสอบนะคะ';
+                return ['handled' => true, 'reply_text' => $tpl, 'reason' => 'backend_savings_deposit', 'meta' => $resp, 'slots' => $slots];
+            }
+            
+            // Handle savings_inquiry
+            if ($actionType === 'inquiry') {
+                $savingsId = trim((string)($slots['savings_id'] ?? ($slots['savings_account_id'] ?? '')));
+                
+                // Try to find savings account if not provided
+                if ($savingsId === '') {
+                    $existingSavings = $this->db->queryAll(
+                        "SELECT * FROM savings_accounts WHERE channel_id = ? AND external_user_id = ? AND status = 'active' ORDER BY created_at DESC",
+                        [$channelId, $externalUserId]
+                    );
+                    
+                    if (empty($existingSavings)) {
+                        return ['handled' => true, 'reply_text' => 'ไม่มีบัญชีออมที่กำลังดำเนินการอยู่ค่ะ 📭', 'reason' => 'no_savings_account', 'slots' => $slots];
+                    }
+                    
+                    // Format multiple savings accounts
+                    if (count($existingSavings) === 1) {
+                        $sa = $existingSavings[0];
+                        $current = (float)$sa['current_amount'];
+                        $target = (float)$sa['target_amount'];
+                        $remaining = $target - $current;
+                        $progress = $target > 0 ? round(($current / $target) * 100) : 0;
+                        
+                        $tpl = $templates['savings_status'] ?? "ยอดออมปัจจุบัน: {{current_amount}} บาท\nเป้าหมาย: {{target_amount}} บาท\nเหลืออีก: {{remaining}} บาท\nความคืบหน้า: {{progress}}% 📊";
+                        $reply = $this->renderTemplate($tpl, [
+                            'current_amount' => number_format($current),
+                            'target_amount' => number_format($target),
+                            'remaining' => number_format($remaining),
+                            'progress' => $progress
+                        ]);
+                        return ['handled' => true, 'reply_text' => $reply, 'reason' => 'savings_inquiry_single', 'slots' => $slots];
+                    }
+                    
+                    // Multiple accounts
+                    $lines = [];
+                    foreach ($existingSavings as $i => $sa) {
+                        $current = (float)$sa['current_amount'];
+                        $target = (float)$sa['target_amount'];
+                        $progress = $target > 0 ? round(($current / $target) * 100) : 0;
+                        $lines[] = ($i + 1) . ") {$sa['product_name']}: " . number_format($current) . "/" . number_format($target) . " บาท ({$progress}%)";
+                    }
+                    
+                    $reply = "บัญชีออมที่มีค่ะ 📋\n" . implode("\n", $lines);
+                    return ['handled' => true, 'reply_text' => $reply, 'reason' => 'savings_inquiry_multiple', 'slots' => $slots];
+                }
+                
+                // Get specific savings account
+                $endpoint = $ep(['savings_status']);
+                if ($endpoint) {
+                    $endpoint = str_replace('{id}', $savingsId, $endpoint);
+                    $resp = $this->callBackendJson($backendCfg, $endpoint, []);
+                    
+                    if ($resp['ok'] && !empty($resp['data'])) {
+                        $sa = $resp['data'];
+                        $current = (float)($sa['current_amount'] ?? 0);
+                        $target = (float)($sa['target_amount'] ?? 0);
+                        $remaining = $target - $current;
+                        $progress = $target > 0 ? round(($current / $target) * 100) : 0;
+                        
+                        $tpl = $templates['savings_status'] ?? "ยอดออมปัจจุบัน: {{current_amount}} บาท\nเป้าหมาย: {{target_amount}} บาท\nเหลืออีก: {{remaining}} บาท\nความคืบหน้า: {{progress}}% 📊";
+                        $reply = $this->renderTemplate($tpl, [
+                            'current_amount' => number_format($current),
+                            'target_amount' => number_format($target),
+                            'remaining' => number_format($remaining),
+                            'progress' => $progress
+                        ]);
+                        return ['handled' => true, 'reply_text' => $reply, 'reason' => 'backend_savings_status', 'meta' => $resp, 'slots' => $slots];
+                    }
+                }
+                
+                return ['handled' => false, 'reply_text' => 'ไม่พบข้อมูลบัญชีออมค่ะ 😅', 'reason' => 'savings_not_found', 'slots' => $slots];
+            }
+            
+            // Default: ask what action they want
+            $tpl = $templates['savings_choose_action'] ?? 'ต้องการ "เปิดออมใหม่ / ฝากเงิน / เช็คยอด" แบบไหนคะ 😊';
+            return ['handled' => false, 'reply_text' => $tpl, 'reason' => 'missing_savings_action_type', 'slots' => $slots];
+        }
+
         return ['handled' => false, 'reason' => 'intent_not_supported'];
     }
 
@@ -2123,6 +2306,39 @@ class RouterV1Handler implements BotHandlerInterface
     // =========================================================
     // Vision / NLP / LLM
     // =========================================================
+    
+    /**
+     * Split reply text into multiple messages for human-like conversation
+     * @param string $text Reply text from LLM (may contain ||SPLIT|| delimiter)
+     * @return array Array of message strings
+     */
+    protected function splitReplyMessages(string $text): array
+    {
+        $text = trim($text);
+        if ($text === '') {
+            return [];
+        }
+        
+        // If no delimiter found, return single message
+        if (strpos($text, '||SPLIT||') === false) {
+            return [$text];
+        }
+        
+        // Split by delimiter and clean up
+        $messages = explode('||SPLIT||', $text);
+        $cleaned = [];
+        
+        foreach ($messages as $msg) {
+            $msg = trim($msg);
+            if ($msg !== '') {
+                $cleaned[] = $msg;
+            }
+        }
+        
+        // If split resulted in empty array, return original
+        return empty($cleaned) ? [$text] : $cleaned;
+    }
+    
     protected function containsAny(string $haystackLower, array $needles): bool
     {
         foreach ($needles as $n) {
@@ -2245,6 +2461,21 @@ class RouterV1Handler implements BotHandlerInterface
                 . "\n3. NEVER ask about goal if user already stated what they want"  
                 . "\n4. NEVER repeat questions - check history first"
                 . "\n5. If user complains about repeat questions, acknowledge and move forward";
+        }
+        
+        // ✅ NEW: Add message splitting instructions for human-like multi-message responses
+        if (stripos($systemPrompt, 'SPLIT') === false && stripos($systemPrompt, 'แบ่งข้อความ') === false) {
+            $system .= "\n\n📨 MESSAGE SPLITTING RULES (ตอบแบบคนจริง):"
+                . "\n- หากคำตอบสั้น (< 150 ตัวอักษร): ส่ง 1 ข้อความเดียว"
+                . "\n- หากคำตอบยาว (≥ 150 ตัวอักษร): แบ่งเป็น 2-3 ข้อความ โดยใส่ ||SPLIT|| คั่น"
+                . "\n\n✅ วิธีแบ่งที่ดี:"
+                . "\n- แบ่งที่จุดจบของความคิด/ประโยค"
+                . "\n- แต่ละข้อความควรสมบูรณ์ในตัวเอง"
+                . "\n- ❌ ห้ามตัดกลางประโยค ห้ามตัดกลางคำ"
+                . "\n\nตัวอย่างสั้น (1 ข้อความ):"
+                . "\n\"สวัสดีครับ เรามีบริการออกแบบกล่องครับ สนใจแบบไหนครับ?\""
+                . "\n\nตัวอย่างยาว (3 ข้อความ):"
+                . "\n\"เรามีบริการออกแบบกล่อง 3 ประเภทหลักครับ||SPLIT||1. กล่องลูกฟูก เหมาะสำหรับสินค้าทั่วไป ราคาประหยัด\n2. กล่องแข็ง เหมาะกับสินค้าพรีเมียม\n3. กล่องสกรีน สำหรับแบรนด์ที่ต้องการดีไซน์พิเศษ||SPLIT||ลูกค้าสนใจแบบไหนครับ? หรืออยากให้แนะนำเพิ่มเติมไหมครับ?\"";
         }
         
         // Add intent/slots instructions if not already present

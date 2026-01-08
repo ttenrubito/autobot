@@ -26,8 +26,8 @@ if (!isset($page_title)) {
     <title><?php echo $page_title; ?></title>
 
     <?php
-    // Cache version (static is fine; can be bumped on deploy)
-    $version = '1.0.1';
+    // Cache version - add timestamp to force refresh
+    $version = '1.0.4.' . time();
 
     // Ensure JS sees the same base path as PHP
     inject_base_path();
@@ -42,6 +42,9 @@ if (!isset($page_title)) {
 
     <!-- Load path-config.js for API endpoints + PATH helpers -->
     <script src="<?php echo asset('js/path-config.js'); ?>?v=<?php echo $version; ?>"></script>
+    
+    <!-- Load auth.js synchronously to ensure it's available before page scripts -->
+    <script src="<?php echo asset('js/auth.js'); ?>?v=<?php echo $version; ?>"></script>
 </head>
 
 <body>

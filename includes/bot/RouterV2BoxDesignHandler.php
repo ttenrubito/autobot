@@ -69,6 +69,15 @@ class RouterV2BoxDesignHandler extends RouterV1Handler
             $text = trim((string)($message['text'] ?? ''));
             $messageType = $message['message_type'] ?? 'text';
 
+            // ✅ DEBUG: Log incoming text for admin command detection
+            Logger::info('[V2_BOXDESIGN_TEXT]', [
+                'trace_id' => $traceId,
+                'text' => $text,
+                'text_len' => mb_strlen($text, 'UTF-8'),
+                'text_lower' => mb_strtolower($text, 'UTF-8'),
+                'text_bytes' => bin2hex($text),
+            ]);
+
             // Get session
             $channel = $context['channel'] ?? [];
             $channelId = $channel['id'] ?? null;
@@ -100,6 +109,133 @@ class RouterV2BoxDesignHandler extends RouterV1Handler
             $lastQuestionKey = null;
             if (is_array($lastSlots) && isset($lastSlots['last_question_key'])) {
                 $lastQuestionKey = (string)$lastSlots['last_question_key'];
+            }
+
+            // =========================================================
+            // ✅ ADMIN HANDOFF: Check BEFORE Box Design rules
+            // =========================================================
+            $isAdmin = false;
+            if (is_callable([$this, 'isAdminContext'])) {
+                $isAdmin = $this->isAdminContext($context, $message);
+            } else {
+                // Fallback
+                $isAdmin = !empty($context['is_admin']) || !empty($context['user']['is_admin']);
+            }
+
+            // Honor webhook-provided admin flag
+            if (!$isAdmin && !empty($context['is_admin'])) {
+                $isAdmin = true;
+            }
+
+            // ✅ Manual admin handoff command (cross-platform fallback)
+            // Accept: "admin", "/admin", "#admin" at START of message (case-insensitive)
+            // Examples: "admin", "Admin มาตอบ", "/admin test", "#admin here"
+            // ✅ CRITICAL: Only works when message is FROM admin (not typed by customer)
+            $adminCmdMatched = false;
+            if ($isAdmin && $text !== '') {
+                $t = mb_strtolower(trim($text), 'UTF-8');
+                // Match if message STARTS with admin command (with or without text after)
+                if (preg_match('/^(?:\/admin|#admin|admin)(?:\s|$)/u', $t)) {
+                    $adminCmdMatched = true;
+                    Logger::info('[V2_BOXDESIGN] Admin command pattern matched!', [
+                        'trace_id' => $traceId,
+                        'text' => $text,
+                        'text_lower' => $t,
+                        'session_id' => $sessionId,
+                        'channel_id' => $channelId,
+                        'external_user_id' => $externalUserId,
+                    ]);
+                }
+            }
+            
+            if ($adminCmdMatched && $sessionId) {
+                Logger::info('[V2_BOXDESIGN] Manual admin command detected', [
+                    'trace_id' => $traceId,
+                    'session_id' => $sessionId,
+                    'channel_id' => $channelId,
+                    'text' => $text,
+                ]);
+
+                try {
+                    $this->db->execute(
+                        'UPDATE chat_sessions SET last_admin_message_at = NOW(), updated_at = NOW() WHERE id = ?',
+                        [$sessionId]
+                    );
+                } catch (Exception $e) {
+                    Logger::error('[V2_BOXDESIGN] Failed to update admin timestamp: ' . $e->getMessage(), [
+                        'trace_id' => $traceId,
+                        'session_id' => $sessionId,
+                    ]);
+                }
+
+                // Store marker
+                $this->storeMessage($sessionId, 'system', '[admin_handoff] manual command');
+
+                // Mark as admin to trigger pause
+                $isAdmin = true;
+
+                // Do not reply when command is used
+                return [
+                    'reply_text' => null,
+                    'actions' => [],
+                    'meta' => [
+                        'handler' => 'router_v2_boxdesign',
+                        'reason' => 'admin_handoff_manual_command',
+                        'trace_id' => $traceId,
+                    ]
+                ];
+            }
+
+            // If admin message, delegate to parent for proper handling
+            if ($isAdmin) {
+                Logger::info('[V2_BOXDESIGN] Admin message detected - delegating to parent', [
+                    'trace_id' => $traceId,
+                    'session_id' => $sessionId,
+                    'channel_id' => $channelId,
+                    'text_preview' => substr($text, 0, 50),
+                ]);
+                
+                // Let parent handle admin message (will update last_admin_message_at and return null)
+                return parent::handleMessage($context);
+            }
+
+            // ✅ Check if bot should pause due to recent admin activity (1 hour)
+            if ($sessionId) {
+                $pauseMinutes = 60; // 1 hour pause
+                $pauseUntil = date('Y-m-d H:i:s', strtotime("-{$pauseMinutes} minutes"));
+                
+                $adminRecent = $this->db->queryOne(
+                    "SELECT last_admin_message_at FROM chat_sessions 
+                     WHERE id = ? AND last_admin_message_at IS NOT NULL AND last_admin_message_at >= ?",
+                    [$sessionId, $pauseUntil]
+                );
+                
+                if ($adminRecent) {
+                    Logger::info('[V2_BOXDESIGN] Bot paused - admin handoff active', [
+                        'trace_id' => $traceId,
+                        'session_id' => $sessionId,
+                        'last_admin_at' => $adminRecent['last_admin_message_at'] ?? null,
+                        'pause_until' => $pauseUntil,
+                    ]);
+                    
+                    $elapsedMs = (int)round((microtime(true) - $t0) * 1000);
+                    Logger::info('[V2_BOXDESIGN_END]', [
+                        'trace_id' => $traceId,
+                        'elapsed_ms' => $elapsedMs,
+                        'reason' => 'admin_handoff_bot_paused',
+                    ]);
+                    
+                    return [
+                        'reply_text' => null,
+                        'actions' => [],
+                        'meta' => [
+                            'handler' => 'router_v2_boxdesign',
+                            'reason' => 'admin_handoff_bot_paused',
+                            'trace_id' => $traceId,
+                            'pause_minutes' => $pauseMinutes,
+                        ]
+                    ];
+                }
             }
 
             // Meta for response

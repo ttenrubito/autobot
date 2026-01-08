@@ -420,8 +420,38 @@ try {
             : null,
     ]);
 
+    // ✅ NEW: Auto-split reply_text into reply_texts array for human-like conversation
+    // This allows LLM to split long responses using ||SPLIT|| delimiter
+    // without modifying every return point in handlers
+    $replyText = $result['reply_text'] ?? null;
+    $replyTexts = [];
+    
+    if ($replyText !== null && $replyText !== '') {
+        // Check if response contains split delimiter
+        if (strpos($replyText, '||SPLIT||') !== false) {
+            // Split and clean
+            $messages = explode('||SPLIT||', $replyText);
+            foreach ($messages as $msg) {
+                $msg = trim($msg);
+                if ($msg !== '') {
+                    $replyTexts[] = $msg;
+                }
+            }
+            
+            Logger::info('[GATEWAY] Multi-message detected', [
+                'trace_id' => $traceId,
+                'original_len' => mb_strlen($replyText, 'UTF-8'),
+                'split_count' => count($replyTexts),
+            ]);
+        } else {
+            // Single message
+            $replyTexts = [$replyText];
+        }
+    }
+
     $payload = [
-        'reply_text' => $result['reply_text'] ?? null,
+        'reply_text' => $replyText,  // Keep original for backward compatibility
+        'reply_texts' => $replyTexts, // ✅ NEW: Array for multi-message support
         'actions' => $result['actions'] ?? [],
         'meta' => $result['meta'] ?? [],
     ];

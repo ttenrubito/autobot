@@ -1,0 +1,303 @@
+<?php
+// filepath: /opt/lampp/htdocs/autobot/includes/bot/RouterV3LineAppHandler.php
+
+require_once __DIR__ . '/BotHandlerInterface.php';
+require_once __DIR__ . '/../Database.php';
+require_once __DIR__ . '/../Logger.php';
+
+/**
+ * RouterV3LineAppHandler
+ * 
+ * LINE Application Automation System Handler
+ * Manages conversation flow for LINE-based application/registration system
+ * 
+ * Key Features:
+ * - Check application status for LINE user
+ * - Guide through multi-step form process
+ * - Handle document uploads
+ * - Send status updates
+ * - Re-upload workflow for incomplete applications
+ * 
+ * @version 3.0
+ * @production-ready
+ */
+class RouterV3LineAppHandler implements BotHandlerInterface
+{
+    private $db;
+    
+    public function __construct()
+    {
+        $this->db = Database::getInstance()->getPdo();
+    }
+    
+    /**
+     * Handle incoming message
+     * 
+     * @param array $context {
+     *   'channel_id' => int,
+     *   'external_user_id' => string, // LINE userId
+     *   'platform' => string, // 'line'
+     *   'message' => array,
+     *   'config' => array,
+     *   'meta' => array
+     * }
+     * @return array Response with 'text' or 'messages'
+     */
+    public function handleMessage(array $context): array
+    {
+        try {
+            Logger::info('[ROUTER_V3_LINEAPP] Start', [
+                'channel_id' => $context['channel_id'] ?? null,
+                'external_user_id' => $context['external_user_id'] ?? null,
+                'platform' => $context['platform'] ?? null
+            ]);
+            
+            $lineUserId = $context['external_user_id'] ?? null;
+            $message = $context['message'] ?? [];
+            $messageText = $message['text'] ?? '';
+            
+            if (!$lineUserId) {
+                return [
+                    'text' => 'ไม่สามารถระบุตัวตนได้ กรุณาลองใหม่อีกครั้ง'
+                ];
+            }
+            
+            // Check if user has any active applications
+            $stmt = $this->db->prepare("
+                SELECT id, application_no, campaign_id, campaign_name, status, substatus
+                FROM line_applications
+                WHERE line_user_id = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+            ");
+            
+            $stmt->execute([$lineUserId]);
+            $latestApplication = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            // If no application exists, show campaign list
+            if (!$latestApplication) {
+                return $this->showCampaignList($lineUserId);
+            }
+            
+            // Route based on current application status
+            $status = $latestApplication['status'];
+            
+            switch ($status) {
+                case 'RECEIVED':
+                case 'FORM_INCOMPLETE':
+                    return $this->handleFormFlow($latestApplication, $messageText);
+                    
+                case 'DOC_PENDING':
+                    return $this->handleDocumentRequest($latestApplication);
+                    
+                case 'INCOMPLETE':
+                    return $this->handleReuploadFlow($latestApplication, $message);
+                    
+                case 'OCR_PROCESSING':
+                    return [
+                        'text' => sprintf(
+                            "กำลังตรวจสอบเอกสารของคุณ ⏳\n\nเลขที่: %s\nสถานะ: กำลังประมวลผล OCR\n\nจะแจ้งผลให้ทราบเร็วๆ นี้ค่ะ",
+                            $latestApplication['application_no']
+                        )
+                    ];
+                    
+                case 'NEED_REVIEW':
+                    return [
+                        'text' => sprintf(
+                            "ใบสมัครของคุณอยู่ระหว่างตรวจสอบ 👀\n\nเลขที่: %s\nสถานะ: กำลังตรวจสอบโดยเจ้าหน้าที่\n\nกรุณารอผลการพิจารณาค่ะ",
+                            $latestApplication['application_no']
+                        )
+                    ];
+                    
+                case 'APPROVED':
+                    return [
+                        'text' => sprintf(
+                            "ยินดีด้วยค่ะ! 🎉\n\nใบสมัครของคุณได้รับการอนุมัติแล้ว\nเลขที่: %s\n\nกรุณานำเลขนี้มาในวันนัดหมายค่ะ",
+                            $latestApplication['application_no']
+                        )
+                    ];
+                    
+                case 'REJECTED':
+                    return [
+                        'text' => sprintf(
+                            "ขออภัยค่ะ 😔\n\nใบสมัครเลขที่ %s ไม่ผ่านการพิจารณา\n\nหากต้องการสมัครใหม่ กรุณาส่งข้อความ \"สมัครใหม่\" ค่ะ",
+                            $latestApplication['application_no']
+                        )
+                    ];
+                    
+                default:
+                    return $this->showApplicationStatus($latestApplication);
+            }
+            
+        } catch (Exception $e) {
+            Logger::error('[ROUTER_V3_LINEAPP] Error', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            return [
+                'text' => 'ขออภัยค่ะ เกิดข้อผิดพลาดในระบบ กรุณาลองใหม่อีกครั้งหรือติดต่อเจ้าหน้าที่ค่ะ'
+            ];
+        }
+    }
+    
+    /**
+     * Show available campaigns for user to apply
+     */
+    private function showCampaignList(string $lineUserId): array
+    {
+        $stmt = $this->db->prepare("
+            SELECT id, code, name, description
+            FROM campaigns
+            WHERE is_active = 1
+                AND (start_date IS NULL OR start_date <= CURDATE())
+                AND (end_date IS NULL OR end_date >= CURDATE())
+            ORDER BY created_at DESC
+            LIMIT 5
+        ");
+        
+        $stmt->execute();
+        $campaigns = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        if (empty($campaigns)) {
+            return [
+                'text' => 'ขณะนี้ยังไม่มีแคมเปญที่เปิดรับสมัครค่ะ กรุณาตรวจสอบอีกครั้งในภายหลัง'
+            ];
+        }
+        
+        $text = "สวัสดีค่ะ! 👋\n\nแคมเปญที่เปิดรับสมัครขณะนี้:\n\n";
+        
+        foreach ($campaigns as $idx => $campaign) {
+            $text .= sprintf(
+                "%d. %s\n   %s\n\n",
+                $idx + 1,
+                $campaign['name'],
+                $campaign['description'] ?? ''
+            );
+        }
+        
+        $text .= "กรุณาเข้าไปสมัครผ่านเมนูด้านล่างค่ะ 📱";
+        
+        return ['text' => $text];
+    }
+    
+    /**
+     * Handle form filling flow
+     */
+    private function handleFormFlow(array $application, string $messageText): array
+    {
+        // This is a simplified version
+        // In production, you would track which question user is on
+        // and validate their answer before moving to next question
+        
+        return [
+            'text' => sprintf(
+                "กรุณากรอกข้อมูลให้ครบถ้วนผ่านฟอร์มออนไลน์ค่ะ\n\nเลขที่: %s\nแคมเปญ: %s\n\nคุณสามารถกรอกฟอร์มได้ที่เมนูด้านล่าง หรือคลิก Rich Menu ค่ะ",
+                $application['application_no'],
+                $application['campaign_name']
+            )
+        ];
+    }
+    
+    /**
+     * Handle document upload request
+     */
+    private function handleDocumentRequest(array $application): array
+    {
+        return [
+            'text' => sprintf(
+                "กรุณาอัปโหลดเอกสารผ่านฟอร์มออนไลน์ค่ะ 📄\n\nเลขที่: %s\n\nคลิกเมนู \"อัปโหลดเอกสาร\" ด้านล่างเพื่อดำเนินการค่ะ",
+                $application['application_no']
+            )
+        ];
+    }
+    
+    /**
+     * Handle re-upload flow for incomplete applications
+     */
+    private function handleReuploadFlow(array $application, array $message): array
+    {
+        $substatus = $application['substatus'] ?? '';
+        
+        return [
+            'text' => sprintf(
+                "กรุณาส่งเอกสารเพิ่มเติมค่ะ 📄\n\nเลขที่: %s\nข้อความจากเจ้าหน้าที่: %s\n\nคลิกเมนู \"ส่งเอกสารเพิ่ม\" เพื่ออัปโหลดค่ะ",
+                $application['application_no'],
+                $substatus ?: 'กรุณาส่งเอกสารเพิ่มเติม'
+            )
+        ];
+    }
+    
+    /**
+     * Show current application status
+     */
+    private function showApplicationStatus(array $application): array
+    {
+        $statusMap = [
+            'RECEIVED' => 'ได้รับใบสมัครแล้ว',
+            'FORM_INCOMPLETE' => 'กรอกฟอร์มยังไม่ครบ',
+            'DOC_PENDING' => 'รอการอัปโหลดเอกสาร',
+            'OCR_PROCESSING' => 'กำลังประมวลผลเอกสาร',
+            'OCR_DONE' => 'ประมวลผลเสร็จสิ้น',
+            'NEED_REVIEW' => 'อยู่ระหว่างตรวจสอบ',
+            'APPROVED' => 'อนุมัติแล้ว',
+            'REJECTED' => 'ไม่ผ่านการพิจารณา',
+            'INCOMPLETE' => 'ต้องการเอกสารเพิ่มเติม',
+            'EXPIRED' => 'หมดอายุ'
+        ];
+        
+        $statusText = $statusMap[$application['status']] ?? $application['status'];
+        
+        return [
+            Logger::error('[ROUTER_V3_LINEAPP] Notification error', [
+                'error' => $e->getMessage()
+            ]);
+            return false;
+        }
+    }
+    
+    /**
+     * Build notification message based on status
+     */
+    private function buildNotificationMessage(string $applicationNo, string $status, array $options = []): string
+    {
+        $templates = [
+            'APPROVED' => "🎉 ยินดีด้วยค่ะ!\n\nใบสมัครเลขที่ %s ได้รับการอนุมัติแล้ว\n\nกรุณานำเลขนี้มาในวันนัดหมายค่ะ",
+            
+            'REJECTED' => "😔 ขออภัยค่ะ\n\nใบสมัครเลขที่ %s ไม่ผ่านการพิจารณา\n\nเหตุผล: %s\n\nหากต้องการสมัครใหม่ สามารถติดต่อเจ้าหน้าที่ได้ค่ะ",
+            
+            'INCOMPLETE' => "📄 ขอเอกสารเพิ่มเติมค่ะ\n\nใบสมัครเลขที่ %s\n\n%s\n\nกรุณาอัปโหลดเอกสารผ่านเมนู 'ส่งเอกสารเพิ่ม' ค่ะ",
+            
+            'APPOINTMENT' => "📅 นัดหมาย\n\nใบสมัครเลขที่ %s\n\nวันเวลา: %s\nสถานที่: %s\n\n%s\n\nกรุณามาตรงเวลาค่ะ",
+        ];
+        
+        switch ($status) {
+            case 'APPROVED':
+                return sprintf($templates['APPROVED'], $applicationNo);
+                
+            case 'REJECTED':
+                $reason = $options['reason'] ?? 'ไม่ระบุเหตุผล';
+                return sprintf($templates['REJECTED'], $applicationNo, $reason);
+                
+            case 'INCOMPLETE':
+                $message = $options['message'] ?? 'กรุณาส่งเอกสารเพิ่มเติม';
+                return sprintf($templates['INCOMPLETE'], $applicationNo, $message);
+                
+            case 'APPOINTMENT':
+                return sprintf(
+                    $templates['APPOINTMENT'],
+                    $applicationNo,
+                    $options['appointment_date'] ?? '-',
+                    $options['appointment_location'] ?? '-',
+                    $options['appointment_note'] ?? ''
+                );
+                
+            default:
+                return sprintf(
+                    "📋 อัปเดตสถานะใบสมัคร\n\nเลขที่: %s\nสถานะ: %s",
+                    $applicationNo,
+                    $status
+                );
+        }
+    }
+}

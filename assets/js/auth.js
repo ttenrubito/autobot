@@ -121,10 +121,15 @@ function logout() {
     sessionStorage.removeItem('admin_data');
 
     // Redirect based on current location using PAGES constants
-    if (window.location.pathname.includes('/admin/')) {
-        window.location.href = PAGES.ADMIN_LOGIN;
-    } else {
-        window.location.href = PAGES.USER_LOGIN;
+    try {
+        if (window.location.pathname.includes('/admin/')) {
+            window.location.href = (typeof PAGES !== 'undefined' && PAGES.ADMIN_LOGIN) ? PAGES.ADMIN_LOGIN : 'admin/login.html';
+        } else {
+            window.location.href = (typeof PAGES !== 'undefined' && PAGES.USER_LOGIN) ? PAGES.USER_LOGIN : 'login.html';
+        }
+    } catch (e) {
+        // Fallback
+        window.location.href = window.location.pathname.includes('/admin/') ? 'admin/login.html' : 'login.html';
     }
 }
 
@@ -250,7 +255,13 @@ async function apiCall(endpoint, options = {}) {
 function requireAuth() {
     const token = getAuthToken();
     if (!token) {
-        window.location.href = PAGES.USER_LOGIN;
+        console.warn('No auth token, redirecting to login...');
+        // Try with PAGES first, fallback to direct path
+        try {
+            window.location.href = (typeof PAGES !== 'undefined' && PAGES.USER_LOGIN) ? PAGES.USER_LOGIN : 'login.html';
+        } catch (e) {
+            window.location.href = 'login.html';
+        }
         return false;
     }
     return true;
@@ -350,4 +361,57 @@ function hideLoading() {
 function showToast(message, type = 'success') {
     // Simple alert for now, can be enhanced with a toast library
     alert(message);
+}
+
+/**
+ * Admin API call - wrapper for apiCall that uses admin_token
+ * Used by public/admin pages (admin ร้าน)
+ */
+async function adminApiCall(endpoint, options = {}) {
+    const token = localStorage.getItem('admin_token');
+    
+    if (!token) {
+        console.error('No admin token found');
+        window.location.href = 'login.html';
+        return { success: false, message: 'Unauthorized' };
+    }
+
+    const headers = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        ...options.headers
+    };
+
+    const fetchOptions = {
+        method: options.method || 'GET',
+        headers
+    };
+
+    if (options.body !== undefined) {
+        if (typeof options.body === 'string') {
+            fetchOptions.body = options.body;
+        } else if (typeof FormData !== 'undefined' && options.body instanceof FormData) {
+            fetchOptions.body = options.body;
+            delete fetchOptions.headers['Content-Type'];
+        } else {
+            fetchOptions.body = JSON.stringify(options.body);
+        }
+    }
+
+    try {
+        const response = await fetch(endpoint, fetchOptions);
+        const data = await response.json();
+        
+        if (response.status === 401) {
+            console.error('Admin session expired');
+            localStorage.removeItem('admin_token');
+            window.location.href = 'login.html';
+            return { success: false, message: 'Session expired' };
+        }
+        
+        return data;
+    } catch (error) {
+        console.error('Admin API call error:', error);
+        return { success: false, message: error.message };
+    }
 }

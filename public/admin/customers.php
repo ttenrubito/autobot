@@ -637,6 +637,41 @@ include('../../includes/admin/sidebar.php');
         </div>
     </div>
 
+    <!-- Extend Subscription Modal -->
+    <div id="extendSubscriptionModal" class="modal-backdrop hidden">
+        <div class="modal-content">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title"><i class="fas fa-calendar-plus"></i> เพิ่มวันใช้งาน</h3>
+                    <button class="modal-close-btn" onclick="hideExtendSubscriptionModal()"><i class="fas fa-times"></i></button>
+                </div>
+                <div class="card-body">
+                    <div style="margin-bottom: 1rem;">
+                        <strong>ลูกค้า:</strong> <span id="extendSubCustomerInfo"></span>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">จำนวนวันที่ต้องการเพิ่ม</label>
+                        <input type="number" id="extendSubDays" class="form-control" min="1" max="3650" value="30" placeholder="ใส่จำนวนวัน (1-3650)">
+                        <small style="color: var(--color-gray);">ระบบจะเพิ่มวันต่อจากวันหมดอายุปัจจุบัน หรือเริ่มจากวันนี้หากไม่มีแพ็กเกจ</small>
+                    </div>
+
+                    <div id="extendSubError" class="alert alert-danger" style="display: none; margin-top: 1rem;"></div>
+                    <div id="extendSubSuccess" class="alert alert-success" style="display: none; margin-top: 1rem;"></div>
+
+                    <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
+                        <button id="extendSubSaveBtn" class="btn btn-success" style="flex: 1;" onclick="saveExtendSubscription()">
+                            <i class="fas fa-calendar-plus"></i> เพิ่มวันใช้งาน
+                        </button>
+                        <button type="button" class="btn btn-outline" style="flex: 1;" onclick="hideExtendSubscriptionModal()">
+                            <i class="fas fa-times"></i> ยกเลิก
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Edit Customer Modal -->
     <div id="editCustomerModal" class="modal-backdrop hidden">
         <div class="modal-content">
@@ -1877,6 +1912,9 @@ async function loadCustomers() {
                                     <button class="btn btn-sm btn-secondary" onclick="openAssignPlanModal(${c.id}, '${safeEmail}')" title="กำหนดแพ็กเกจ">
                                         <i class="fas fa-box"></i>
                                     </button>
+                                    <button class="btn btn-sm btn-success" onclick="openExtendSubscriptionModal(${c.id}, '${safeEmail}')" title="เพิ่มวันใช้งาน">
+                                        <i class="fas fa-calendar-plus"></i>
+                                    </button>
                                     <button class="btn btn-sm btn-danger" onclick="deleteCustomer(${c.id})" title="ลบลูกค้า">
                                         <i class="fas fa-trash"></i>
                                     </button>
@@ -2512,6 +2550,69 @@ async function saveBotProfile() {
 function hideAssignPlanModal() {
     document.getElementById('assignPlanModal').classList.add('hidden');
     assignPlanUserId = null;
+}
+
+// Extend subscription modal logic
+let extendSubUserId = null;
+
+function hideExtendSubscriptionModal() {
+    document.getElementById('extendSubscriptionModal').classList.add('hidden');
+    extendSubUserId = null;
+}
+
+function openExtendSubscriptionModal(userId, email) {
+    extendSubUserId = userId;
+    document.getElementById('extendSubCustomerInfo').textContent = email;
+    document.getElementById('extendSubDays').value = 30;
+    document.getElementById('extendSubError').style.display = 'none';
+    document.getElementById('extendSubSuccess').style.display = 'none';
+    document.getElementById('extendSubscriptionModal').classList.remove('hidden');
+}
+
+async function saveExtendSubscription() {
+    const errorBox = document.getElementById('extendSubError');
+    const successBox = document.getElementById('extendSubSuccess');
+    const btn = document.getElementById('extendSubSaveBtn');
+    errorBox.style.display = 'none';
+    successBox.style.display = 'none';
+
+    const days = parseInt(document.getElementById('extendSubDays').value, 10);
+    if (!extendSubUserId || !days || days < 1 || days > 3650) {
+        errorBox.textContent = 'กรุณาระบุจำนวนวันที่ถูกต้อง (1-3650 วัน)';
+        errorBox.style.display = 'block';
+        return;
+    }
+
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> กำลังบันทึก...';
+
+    try {
+        const res = await apiCall(API_ENDPOINTS.ADMIN_SUBSCRIPTIONS_EXTEND, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                user_id: extendSubUserId,
+                days: days
+            })
+        });
+
+        if (!res.success) {
+            errorBox.textContent = res.message || 'ไม่สามารถเพิ่มวันใช้งานได้';
+            errorBox.style.display = 'block';
+        } else {
+            const newEnd = res.data?.new_end_date || '';
+            successBox.textContent = `เพิ่มวันใช้งานสำเร็จ ${days} วัน` + (newEnd ? ` (หมดอายุ: ${newEnd})` : '');
+            successBox.style.display = 'block';
+            loadCustomers();
+        }
+    } catch (error) {
+        console.error('Error extending subscription:', error);
+        errorBox.textContent = 'เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์';
+        errorBox.style.display = 'block';
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-calendar-plus"></i> เพิ่มวันใช้งาน';
+    }
 }
 
 async function openAssignPlanModal(userId, email) {

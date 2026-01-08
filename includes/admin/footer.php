@@ -5,6 +5,7 @@
  */
 
 require_once __DIR__ . '/../config-paths.php';
+$cache_version = '1.0.3.' . time(); // Force refresh
 ?>
     <!-- Note: path-config.js + auth.js + admin.js are loaded in admin/header.php -->
 
@@ -21,7 +22,7 @@ require_once __DIR__ . '/../config-paths.php';
                 if (strpos($normalized, 'assets/') === 0) {
                     $normalized = substr($normalized, strlen('assets/'));
                 }
-                echo '<script src="' . asset($normalized) . '"></script>' . "\n";
+                echo '<script src="' . asset($normalized) . '?v=' . $cache_version . '"></script>' . "\n";
             }
             ?>
         <?php endforeach; ?>

@@ -2,6 +2,10 @@
 /**
  * Simple Logger with Structured Logging
  */
+
+// Skip if Logger already defined (e.g., in tests)
+if (!class_exists('Logger')) {
+    
 class Logger {
     const DEBUG = 'DEBUG';
     const INFO = 'INFO';
@@ -118,3 +122,5 @@ class Logger {
         }
     }
 }
+
+} // End of class_exists check

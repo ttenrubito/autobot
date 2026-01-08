@@ -169,7 +169,7 @@ async function loadPayments() {
     const type = document.getElementById('typeFilter').value;
     const search = document.getElementById('searchFilter').value;
     
-    let url = '/api/admin/payments?limit=50';
+    let url = '/api/admin/payments.php?limit=50';
     if (status) url += `&status=${status}`;
     if (type) url += `&payment_type=${type}`;
     if (search) url += `&search=${search}`;
@@ -222,7 +222,7 @@ async function viewPayment(paymentId) {
     details.innerHTML = '<p style="text-align: center;">กำลังโหลด...</p>';
 
     try {
-        const response = await fetch(`/api/admin/payments/${paymentId}`, {
+        const response = await fetch(`/api/admin/payments.php/${paymentId}`, {
             headers: { 'Authorization': 'Bearer ' + token }
         });
 

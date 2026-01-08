@@ -94,22 +94,8 @@ if (!isset($current_page)) {
                 </a>
             </li>
             <li class="sidebar-nav-item">
-                <a href="#" onclick="window.location.href = PAGES.ADMIN_ORDERS; return false;" 
-                   class="sidebar-nav-link <?php echo ($current_page === 'orders') ? 'active' : ''; ?>">
-                    <span class="sidebar-nav-icon"><i class="fas fa-shopping-cart"></i></span>
-                    <span>คำสั่งซื้อ</span>
-                </a>
-            </li>
-            <li class="sidebar-nav-item">
-                <a href="#" onclick="window.location.href = PAGES.ADMIN_PAYMENTS; return false;" 
-                   class="sidebar-nav-link <?php echo ($current_page === 'payments') ? 'active' : ''; ?>">
-                    <span class="sidebar-nav-icon"><i class="fas fa-money-check-alt"></i></span>
-                    <span>การชำระเงิน</span>
-                </a>
-            </li>
-            <li class="sidebar-nav-item">
-                <a href="#" onclick="window.location.href = PAGES.ADMIN_MENU_CONFIG; return false;" 
-                   class="sidebar-nav-link <?php echo ($current_page === 'menu-config') ? 'active' : ''; ?>">
+                <a href="#" onclick="window.location.href = (typeof PAGES !== 'undefined' && PAGES.ADMIN_MENU_CONFIG) ? PAGES.ADMIN_MENU_CONFIG : 'menu-manager.php'; return false;" 
+                   class="sidebar-nav-link <?php echo ($current_page === 'menu-config' || $current_page === 'menu_manager') ? 'active' : ''; ?>">
                     <span class="sidebar-nav-icon"><i class="fas fa-sliders-h"></i></span>
                     <span>Menu Customization</span>
                 </a>

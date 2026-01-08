@@ -56,13 +56,23 @@ try {
             echo json_encode(['success' => true, 'data' => $address]);
             
         } else {
-            // GET /api/customer/addresses - List all
+            // GET /api/customer/addresses - List all with pagination
+            $page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
+            $limit = isset($_GET['limit']) ? min(100, max(1, (int)$_GET['limit'])) : 20;
+            $offset = ($page - 1) * $limit;
+            
+            // Get total count
+            $countStmt = $pdo->prepare("SELECT COUNT(*) FROM customer_addresses WHERE customer_id = ?");
+            $countStmt->execute([$user_id]);
+            $total = (int)$countStmt->fetchColumn();
+            
             $stmt = $pdo->prepare("
                 SELECT * FROM customer_addresses
                 WHERE customer_id = ?
                 ORDER BY is_default DESC, created_at DESC
+                LIMIT ? OFFSET ?
             ");
-            $stmt->execute([$user_id]);
+            $stmt->execute([$user_id, $limit, $offset]);
             $addresses = $stmt->fetchAll(PDO::FETCH_ASSOC);
             
             foreach ($addresses as &$addr) {
@@ -74,7 +84,13 @@ try {
                 'success' => true,
                 'data' => [
                     'addresses' => $addresses,
-                    'count' => count($addresses)
+                    'count' => count($addresses),
+                    'pagination' => [
+                        'page' => $page,
+                        'limit' => $limit,
+                        'total' => $total,
+                        'total_pages' => ceil($total / $limit)
+                    ]
                 ]
             ]);
         }

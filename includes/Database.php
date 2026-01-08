@@ -5,6 +5,9 @@
  * Supports both localhost (dev) and Cloud SQL (production)
  */
 
+// Skip if Database already defined (e.g., in tests with mock)
+if (!class_exists('Database')) {
+
 class Database
 {
     private static $instance = null;
@@ -90,6 +93,13 @@ class Database
     }
 
     /**
+     * Execute a SELECT query and return all rows (alias for query())
+     */
+    public function queryAll($sql, $params = []) {
+        return $this->query($sql, $params);
+    }
+
+    /**
      * Execute an INSERT/UPDATE/DELETE query
      */
     public function execute($sql, $params = []) {
@@ -157,3 +167,5 @@ class Database
         return $this->conn;
     }
 }
+
+} // End of class_exists check

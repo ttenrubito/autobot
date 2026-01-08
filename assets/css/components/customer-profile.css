@@ -1,0 +1,607 @@
+/**
+ * Customer Profile Component Styles
+ * 
+ * Shared styles for displaying customer profile from LINE/Facebook
+ */
+
+/* ===========================================
+   CUSTOMER BADGE (Compact Version)
+   =========================================== */
+.customer-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.375rem 0.75rem;
+    border-radius: 24px;
+    background: #f3f4f6;
+    border: 1px solid #e5e7eb;
+    font-size: 0.875rem;
+    transition: all 0.2s ease;
+}
+
+.customer-badge:hover {
+    background: #e5e7eb;
+    transform: translateY(-1px);
+}
+
+.customer-badge.platform-line {
+    background: linear-gradient(135deg, #e8f8ec 0%, #d4f0db 100%);
+    border-color: #06c755;
+}
+
+.customer-badge.platform-facebook {
+    background: linear-gradient(135deg, #e8f0ff 0%, #dce6ff 100%);
+    border-color: #1877f2;
+}
+
+.customer-badge.platform-instagram {
+    background: linear-gradient(135deg, #ffeef2 0%, #ffe4ea 100%);
+    border-color: #e4405f;
+}
+
+.badge-avatar-container {
+    position: relative;
+    width: 32px;
+    height: 32px;
+}
+
+.badge-avatar-img {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid white;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.badge-avatar-fallback {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    font-weight: 700;
+    border: 2px solid white;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.badge-platform-icon {
+    position: absolute;
+    bottom: -2px;
+    right: -2px;
+    background: white;
+    border-radius: 50%;
+    padding: 2px;
+    line-height: 1;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+}
+
+/* SVG Platform Icons */
+.platform-svg-icon {
+    width: 12px !important;
+    height: 12px !important;
+    display: inline-block;
+    vertical-align: middle;
+    flex-shrink: 0;
+}
+
+/* Ensure SVG icons inside badge are small */
+.badge-platform-icon .platform-svg-icon,
+.customer-badge .platform-svg-icon {
+    width: 12px !important;
+    height: 12px !important;
+}
+
+.platform-svg-icon.line-icon {
+    color: #06c755;
+}
+
+.platform-svg-icon.fb-icon {
+    color: #1877f2;
+}
+
+.platform-svg-icon.ig-icon {
+    color: #e4405f;
+}
+
+.platform-svg-icon.web-icon {
+    color: #6b7280;
+}
+
+.badge-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+}
+
+.badge-name {
+    font-weight: 600;
+    color: #1f2937;
+    white-space: nowrap;
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.badge-phone {
+    font-size: 0.75rem;
+    color: #6b7280;
+}
+
+.customer-badge-unknown {
+    background: #f9fafb;
+    border-color: #e5e7eb;
+    color: #9ca3af;
+}
+
+/* ===========================================
+   CUSTOMER PROFILE CARD (Full Version)
+   =========================================== */
+.customer-profile-card {
+    padding: 1.25rem;
+    border-radius: 16px;
+    border: 1px solid #e5e7eb;
+    background: #ffffff;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    margin-bottom: 1rem;
+}
+
+.customer-profile-card.platform-line {
+    background: linear-gradient(135deg, #06c755 0%, #00b900 100%);
+    border: none;
+    color: white;
+}
+
+.customer-profile-card.platform-line .profile-name,
+.customer-profile-card.platform-line .profile-phone,
+.customer-profile-card.platform-line .profile-email,
+.customer-profile-card.platform-line .profile-id {
+    color: white;
+}
+
+.customer-profile-card.platform-line .profile-phone i,
+.customer-profile-card.platform-line .profile-email i {
+    opacity: 0.9;
+}
+
+.customer-profile-card.platform-facebook {
+    background: linear-gradient(135deg, #1877f2 0%, #0d5bbd 100%);
+    border: none;
+    color: white;
+}
+
+.customer-profile-card.platform-facebook .profile-name,
+.customer-profile-card.platform-facebook .profile-phone,
+.customer-profile-card.platform-facebook .profile-email,
+.customer-profile-card.platform-facebook .profile-id {
+    color: white;
+}
+
+.customer-profile-card.platform-instagram {
+    background: linear-gradient(135deg, #e4405f 0%, #c32aa3 100%);
+    border: none;
+    color: white;
+}
+
+.customer-profile-card .profile-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.customer-profile-card .profile-avatar {
+    flex-shrink: 0;
+}
+
+.customer-profile-card .profile-avatar-img {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 3px solid rgba(255,255,255,0.3);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+.customer-profile-card .profile-avatar-fallback {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.25);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.5rem;
+    font-weight: 700;
+    border: 3px solid rgba(255,255,255,0.3);
+}
+
+.customer-profile-card .profile-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+}
+
+.customer-profile-card .profile-name {
+    font-size: 1.25rem;
+    font-weight: 700;
+    margin: 0;
+    color: #1f2937;
+}
+
+.customer-profile-card .profile-phone,
+.customer-profile-card .profile-email {
+    font-size: 0.875rem;
+    color: #4b5563;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.customer-profile-card .profile-phone i,
+.customer-profile-card .profile-email i {
+    width: 16px;
+    text-align: center;
+    color: #6b7280;
+}
+
+.customer-profile-card .profile-platform {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.375rem;
+    flex-wrap: wrap;
+}
+
+.customer-profile-card .platform-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.25rem 0.75rem;
+    background: rgba(255,255,255,0.25);
+    border-radius: 20px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    backdrop-filter: blur(8px);
+}
+
+.customer-profile-card .profile-status {
+    font-size: 0.75rem;
+    opacity: 0.85;
+    font-style: italic;
+}
+
+.customer-profile-card .profile-id {
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid rgba(255,255,255,0.2);
+    font-size: 0.75rem;
+    color: #6b7280;
+    opacity: 0.8;
+}
+
+.customer-profile-empty {
+    padding: 2rem;
+    text-align: center;
+    background: #f9fafb;
+    border-radius: 12px;
+    border: 1px dashed #d1d5db;
+}
+
+.customer-profile-empty .empty-icon {
+    font-size: 2rem;
+    display: block;
+    margin-bottom: 0.5rem;
+    opacity: 0.5;
+}
+
+.customer-profile-empty .empty-text {
+    color: #9ca3af;
+    font-size: 0.875rem;
+}
+
+/* ===========================================
+   RESPONSIVE
+   =========================================== */
+@media (max-width: 576px) {
+    .customer-badge {
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .badge-name {
+        max-width: 100px;
+    }
+    
+    .customer-profile-card .profile-header {
+        flex-direction: column;
+        text-align: center;
+    }
+    
+    .customer-profile-card .profile-info {
+        align-items: center;
+    }
+}
+
+/* ===========================================
+   INLINE BADGE FOR TABLE/LIST
+   =========================================== */
+.customer-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.customer-inline-avatar {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+.customer-inline-platform {
+    font-size: 0.875rem;
+}
+
+.customer-inline-name {
+    font-weight: 500;
+    color: #1f2937;
+}
+
+/* ===========================================
+   CUSTOMER PROFILE IN MODAL (Payment Detail)
+   =========================================== */
+.customer-profile-section {
+    margin-bottom: 1.5rem;
+}
+
+.customer-profile-section h3 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #374151;
+    margin-bottom: 0.75rem;
+}
+
+.customer-profile-section.platform-line {
+    border-left: 4px solid #06c755;
+    padding-left: 1rem;
+}
+
+.customer-profile-section.platform-facebook {
+    border-left: 4px solid #1877f2;
+    padding-left: 1rem;
+}
+
+.customer-profile-section.platform-instagram {
+    border-left: 4px solid #e4405f;
+    padding-left: 1rem;
+}
+
+.customer-profile-section.platform-web {
+    border-left: 4px solid #6b7280;
+    padding-left: 1rem;
+}
+
+.customer-profile-card-detail {
+    background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+    padding: 1.25rem;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+
+.customer-profile-section.platform-line .customer-profile-card-detail {
+    background: linear-gradient(135deg, #e8f8ec 0%, #d4f0db 100%);
+    border-color: #06c755;
+}
+
+.customer-profile-section.platform-facebook .customer-profile-card-detail {
+    background: linear-gradient(135deg, #e8f0ff 0%, #dce6ff 100%);
+    border-color: #1877f2;
+}
+
+.customer-profile-section.platform-instagram .customer-profile-card-detail {
+    background: linear-gradient(135deg, #ffeef2 0%, #ffe4ea 100%);
+    border-color: #e4405f;
+}
+
+.profile-card-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.profile-card-avatar-container {
+    position: relative;
+    flex-shrink: 0;
+}
+
+.profile-card-avatar {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 3px solid white;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+.profile-card-avatar-fallback {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.5rem;
+    font-weight: 700;
+    border: 3px solid white;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+.profile-card-platform-icon {
+    position: absolute;
+    bottom: -2px;
+    right: -2px;
+    background: white;
+    border-radius: 50%;
+    padding: 4px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+}
+
+.profile-card-platform-icon .platform-icon-svg {
+    width: 14px;
+    height: 14px;
+}
+
+.profile-card-platform-icon .platform-icon-svg.line {
+    color: #06c755;
+}
+
+.profile-card-platform-icon .platform-icon-svg.facebook {
+    color: #1877f2;
+}
+
+.profile-card-platform-icon .platform-icon-svg.instagram {
+    color: #e4405f;
+}
+
+.profile-card-platform-icon .platform-icon-svg.web {
+    color: #6b7280;
+}
+
+.profile-card-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.profile-card-name {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #1f2937;
+    margin: 0 0 0.5rem 0;
+    line-height: 1.3;
+}
+
+.profile-card-platform {
+    margin-bottom: 0.5rem;
+}
+
+.platform-badge-detail {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.25rem 0.75rem;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    background: rgba(0,0,0,0.08);
+    color: #374151;
+}
+
+.platform-badge-detail.line {
+    background: rgba(6, 199, 85, 0.15);
+    color: #059669;
+}
+
+.platform-badge-detail.facebook {
+    background: rgba(24, 119, 242, 0.15);
+    color: #1d4ed8;
+}
+
+.platform-badge-detail.instagram {
+    background: rgba(228, 64, 95, 0.15);
+    color: #dc2626;
+}
+
+.platform-badge-detail .platform-icon-svg {
+    width: 12px;
+    height: 12px;
+}
+
+.profile-card-contact {
+    font-size: 0.875rem;
+    color: #4b5563;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.375rem;
+}
+
+.profile-card-contact i {
+    width: 16px;
+    text-align: center;
+    color: #6b7280;
+}
+
+.profile-card-id {
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid rgba(0,0,0,0.08);
+    font-size: 0.75rem;
+    color: #6b7280;
+}
+
+/* Empty state in modal */
+.customer-profile-section .customer-profile-empty {
+    padding: 1.25rem;
+    text-align: center;
+    background: #f9fafb;
+    border-radius: 12px;
+    border: 1px dashed #d1d5db;
+}
+
+.customer-profile-section .empty-avatar {
+    font-size: 2.5rem;
+    display: block;
+    margin-bottom: 0.5rem;
+    opacity: 0.4;
+}
+
+.customer-profile-section .empty-text {
+    color: #9ca3af;
+    font-size: 0.875rem;
+}
+
+/* Responsive for modal */
+@media (max-width: 576px) {
+    .profile-card-header {
+        flex-direction: column;
+        text-align: center;
+    }
+    
+    .profile-card-info {
+        text-align: center;
+    }
+    
+    .profile-card-contact {
+        justify-content: center;
+    }
+    
+    .profile-card-avatar,
+    .profile-card-avatar-fallback {
+        width: 56px;
+        height: 56px;
+        font-size: 1.25rem;
+    }
+    
+    .profile-card-name {
+        font-size: 1.1rem;
+    }
+}

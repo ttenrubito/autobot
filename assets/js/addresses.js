@@ -4,6 +4,9 @@ let filteredAddresses = [];
 let addressSearchQuery = '';
 let addressFilter = ''; // '' | 'default'
 let targetAddressIdFromQuery = '';
+let currentPage = 1;
+let totalPages = 1;
+const ITEMS_PER_PAGE = 20;
 
 function getQueryParam(name) {
     try {
@@ -113,14 +116,19 @@ function highlightAddressCardById(addressId) {
     card.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
-async function loadAddresses() {
+async function loadAddresses(page = 1) {
+    currentPage = page;
     try {
-        const result = await apiCall(API_ENDPOINTS.CUSTOMER_ADDRESSES);
+        const result = await apiCall(API_ENDPOINTS.CUSTOMER_ADDRESSES + `?page=${currentPage}&limit=${ITEMS_PER_PAGE}`);
 
         if (result && result.success) {
-            // API returns { data: { addresses: [...] } }
+            // API returns { data: { addresses: [...], pagination: {...} } }
             allAddresses = (result.data && Array.isArray(result.data.addresses)) ? result.data.addresses : (result.data || []);
             filteredAddresses = [...allAddresses];
+            
+            const pagination = result.data?.pagination || {};
+            totalPages = pagination.total_pages || 1;
+            renderPagination(pagination.total || allAddresses.length, totalPages);
 
             // Apply filters (also triggers deep-link highlight)
             applyAddressFilters();
@@ -131,6 +139,32 @@ async function loadAddresses() {
         console.error('Error:', error);
         showError('เกิดข้อผิดพลาดในการโหลดข้อมูล');
     }
+}
+
+function renderPagination(total, pages) {
+    const container = document.getElementById('addressesPagination');
+    if (!container || pages <= 1) {
+        if (container) container.innerHTML = '';
+        return;
+    }
+    
+    const prevDisabled = currentPage === 1 ? 'disabled' : '';
+    const nextDisabled = currentPage === pages ? 'disabled' : '';
+    
+    container.innerHTML = `
+        <button class="btn-pagination" onclick="goToPage(${currentPage - 1})" ${prevDisabled}>
+            <i class="fas fa-chevron-left"></i>
+        </button>
+        <span class="page-indicator">หน้า ${currentPage} / ${pages} (${total} รายการ)</span>
+        <button class="btn-pagination" onclick="goToPage(${currentPage + 1})" ${nextDisabled}>
+            <i class="fas fa-chevron-right"></i>
+        </button>
+    `;
+}
+
+function goToPage(page) {
+    if (page < 1 || page > totalPages) return;
+    loadAddresses(page);
 }
 
 function renderAddresses(addresses) {

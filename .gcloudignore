@@ -1,41 +1,14 @@
-# This file specifies files that are *not* uploaded to Google Cloud
-# using gcloud. It follows the same syntax as .gitignore
-
-.git
+# Ignore files for Cloud Build/Run deployment
+.git/
 .gitignore
-
-# IDE
 .vscode/
-.idea/
-*.swp
-*.swo
-
-# Node
 node_modules/
-npm-debug.log
-
-# Environment
-.env
-.env.local
-
-# Mac
-.DS_Store
-
-# Logs
+vendor/phpunit/
+tests/
 *.log
-storage/logs/*
-
-# Cache
-.cache
-
-# Documentation (upload only essential)
-README.md
-
-# Development
-docker-compose.yml
-
-# Build
+*.md
+.env.example
 .dockerignore
-Dockerfile.bak.*
-*.bak.*
-apache-config.conf.bak.*
+test_*.php
+debug_*.php
+check_*.php

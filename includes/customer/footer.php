@@ -6,10 +6,7 @@
 
 require_once __DIR__ . '/../config-paths.php';
 ?>
-    <!-- Note: path-config.js is already loaded in header.php -->
-
-    <!-- Load auth.js synchronously to ensure it's available before page scripts -->
-    <script src="<?php echo asset('js/auth.js'); ?>?v=<?php echo time(); ?>"></script>
+    <!-- Note: path-config.js and auth.js are already loaded in header.php -->
 
     <?php if (isset($extra_scripts) && is_array($extra_scripts)): ?>
         <?php foreach ($extra_scripts as $script): ?>

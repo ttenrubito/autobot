@@ -208,36 +208,3 @@ try {
     ]);
     Response::error('Gateway error', 500);
 }
-    
-    // Log usage
-    $customerService = $db->queryOne(
-        "SELECT id FROM customer_services WHERE user_id = ? LIMIT 1",
-        [$userId]
-    );
-    
-    if ($customerService) {
-        $db->execute(
-            "INSERT INTO api_usage_logs (customer_service_id, api_type, endpoint, request_count, response_time, status_code, cost, created_at)
-             VALUES (?, ?, ?, 1, ?, ?, ?, NOW())",
-            [
-                $customerService['id'],
-                $serviceCode,
-                $feature,
-                round($responseTime, 2),
-                $httpCode,
-                $serviceConfig['cost_per_request']
-            ]
-        );
-    }
-    
-    // Update API key last used
-    $db->execute("UPDATE api_keys SET last_used_at = NOW() WHERE api_key = ?", [$apiKey]);
-    
-    // Return response from Google
-    http_response_code($httpCode);
-    echo $response;
-    
-} catch (Exception $e) {
-    error_log("API Gateway Language Error: " . $e->getMessage());
-    Response::error('Gateway error', 500);
-}

@@ -1,0 +1,55 @@
+# Dependencies
+vendor/
+node_modules/
+
+# Environment files (sensitive)
+.env
+.env.local
+.env.*.local
+.env.deploy
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+nohup.out
+
+# Cache
+.phpunit.result.cache
+cache/
+*.cache
+
+# Build artifacts
+build/
+dist/
+
+# Temporary files
+tmp/
+*.tmp
+
+# Uploaded files (use GCS in production)
+uploads/*
+!uploads/.gitkeep
+
+# Credentials (NEVER commit)
+config/gcp/service-account.json
+*credentials*.json
+*service-account*.json
+*.pem
+*.key
+
+# Local config overrides
+config-local.php
+
+# Backup files
+*.bak

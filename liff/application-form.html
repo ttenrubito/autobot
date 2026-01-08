@@ -1,0 +1,980 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ฟอร์มสมัคร - Autobot</title>
+    
+    <!-- LIFF SDK -->
+    <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px 20px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 24px;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            opacity: 0.9;
+            font-size: 14px;
+        }
+        
+        .profile-section {
+            background: #f8f9fa;
+            padding: 20px;
+            border-bottom: 2px solid #e9ecef;
+            display: none; /* แสดงเมื่อโหลด LIFF เสร็จ */
+        }
+        
+        .profile-section.show {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        .profile-pic {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 3px solid white;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .profile-info h3 {
+            font-size: 18px;
+            color: #333;
+            margin-bottom: 5px;
+        }
+        
+        .profile-info p {
+            font-size: 14px;
+            color: #666;
+        }
+        
+        .form-section {
+            padding: 30px 20px;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 600;
+            font-size: 14px;
+        }
+        
+        .form-group label .required {
+            color: #dc3545;
+        }
+        
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #e9ecef;
+            border-radius: 10px;
+            font-size: 16px;
+            transition: all 0.3s;
+        }
+        
+        .form-group input:focus,
+        .form-group select:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        
+        .form-group textarea {
+            resize: vertical;
+            min-height: 100px;
+        }
+        
+        .form-group .hint {
+            font-size: 12px;
+            color: #6c757d;
+            margin-top: 5px;
+        }
+        
+        .form-group .error {
+            color: #dc3545;
+            font-size: 13px;
+            margin-top: 5px;
+            display: none;
+        }
+        
+        .form-group.has-error input,
+        .form-group.has-error select,
+        .form-group.has-error textarea {
+            border-color: #dc3545;
+        }
+        
+        .form-group.has-error .error {
+            display: block;
+        }
+        
+        .file-upload {
+            position: relative;
+        }
+        
+        .file-upload input[type="file"] {
+            display: none;
+        }
+        
+        .file-upload-btn {
+            display: inline-block;
+            padding: 12px 20px;
+            background: #f8f9fa;
+            border: 2px dashed #dee2e6;
+            border-radius: 10px;
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.3s;
+        }
+        
+        .file-upload-btn:hover {
+            background: #e9ecef;
+            border-color: #667eea;
+        }
+        
+        .file-preview {
+            margin-top: 10px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            display: none;
+        }
+        
+        .file-preview.show {
+            display: block;
+        }
+        
+        .file-preview img {
+            max-width: 100%;
+            border-radius: 8px;
+        }
+        
+        .submit-btn {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-top: 20px;
+        }
+        
+        .submit-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+        
+        .submit-btn:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px 20px;
+        }
+        
+        .loading .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .success-message,
+        .error-message {
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        
+        .success-message {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .success-message.show {
+            display: block;
+        }
+        
+        .error-message {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .error-message.show {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>📋 ฟอร์มสมัคร</h1>
+            <p>กรุณากรอกข้อมูลให้ครบถ้วน</p>
+        </div>
+        
+        <!-- Loading State -->
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p>กำลังโหลด...</p>
+        </div>
+        
+        <!-- Profile Section (Hidden until LIFF loads) -->
+        <div class="profile-section" id="profileSection">
+            <img id="profilePic" src="" alt="Profile" class="profile-pic">
+            <div class="profile-info">
+                <h3 id="profileName">กำลังโหลด...</h3>
+                <p id="campaignName">แคมเปญ: -</p>
+            </div>
+        </div>
+        
+        <!-- Form Section -->
+        <div class="form-section" id="formSection" style="display: none;">
+            <!-- Success/Error Messages -->
+            <div class="success-message" id="successMessage">
+                ✅ ส่งข้อมูลเรียบร้อยแล้ว! ระบบจะแจ้งผลการพิจารณาให้ทราบภายหลัง
+            </div>
+            
+            <div class="error-message" id="errorMessage">
+                ❌ เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง
+            </div>
+            
+            <!-- Form -->
+            <form id="applicationForm">
+                <!-- Dynamic Form Fields (loaded from campaign config) -->
+                <h3 style="margin-bottom: 20px; color: #333;">ข้อมูลส่วนตัว</h3>
+                
+                <!-- Container for dynamic fields -->
+                <div id="dynamicFormFields">
+                    <!-- Default fields (will be replaced if campaign has form_config) -->
+                    <div class="form-group">
+                        <label>ชื่อ <span class="required">*</span></label>
+                        <input type="text" id="firstName" name="firstName" required>
+                        <div class="error">กรุณากรอกชื่อ</div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>นามสกุล <span class="required">*</span></label>
+                        <input type="text" id="lastName" name="lastName" required>
+                        <div class="error">กรุณากรอกนามสกุล</div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>เบอร์โทรศัพท์ <span class="required">*</span></label>
+                        <input type="tel" id="phone" name="phone" pattern="[0-9]{10}" required>
+                        <div class="hint">ตัวอย่าง: 0812345678 (10 หลัก)</div>
+                        <div class="error">กรุณากรอกเบอร์โทรศัพท์ 10 หลัก</div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>อีเมล <span class="required">*</span></label>
+                        <input type="email" id="email" name="email" required>
+                        <div class="error">กรุณากรอกอีเมลที่ถูกต้อง</div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>ที่อยู่ <span class="required">*</span></label>
+                        <textarea id="address" name="address" required></textarea>
+                        <div class="error">กรุณากรอกที่อยู่</div>
+                    </div>
+                </div>
+                
+                <!-- เอกสารแนบ (Dynamic from campaign config) -->
+                <h3 style="margin: 30px 0 20px; color: #333;">เอกสารแนบ</h3>
+                <div id="documentFields">
+                    <!-- Dynamic document fields will be inserted here -->
+                </div>
+                
+                <!-- Hidden Fields -->
+                <input type="hidden" id="lineUserId" name="lineUserId">
+                <input type="hidden" id="campaignCode" name="campaignCode">
+                
+                <!-- Submit Button -->
+                <button type="submit" class="submit-btn" id="submitBtn">
+                    ✅ ส่งข้อมูล
+                </button>
+            </form>
+        </div>
+    </div>
+    
+    <script>
+        // ตัวแปรสำหรับเก็บข้อมูล
+        let liffId = null;
+        let lineUserId = null;
+        let campaignCode = null;
+        let campaignId = null;  // เพิ่มตัวแปรเก็บ campaign ID
+        
+        // เมื่อโหลดหน้าเสร็จ
+        window.addEventListener('load', async function() {
+            console.log('🚀 LIFF Application Starting...');
+            console.log('🌐 Current URL:', window.location.href);
+            console.log('📍 Pathname:', window.location.pathname);
+            console.log('🔍 Search:', window.location.search);
+            console.log('#️⃣ Hash:', window.location.hash);
+            
+            // ดึง campaign code จากหลายแหล่ง
+            let campaignFromUrl = null;
+            
+            // Parse URL params
+            const urlParams = new URLSearchParams(window.location.search);
+            console.log('📋 All URL Params:', Array.from(urlParams.entries()));
+            
+            // วิธีที่ 1: ลอง liff.state (LIFF แปลง query param ให้)
+            const liffState = urlParams.get('liff.state');
+            console.log('🔗 Raw liff.state:', liffState);
+            
+            if (liffState) {
+                // liff.state = "?campaign=DEMO2026" (URL encoded)
+                const decodedState = decodeURIComponent(liffState);
+                console.log('🔓 Decoded liff.state:', decodedState);
+                
+                // Parse state params
+                const stateParams = new URLSearchParams(decodedState);
+                console.log('📋 State Params:', Array.from(stateParams.entries()));
+                
+                campaignFromUrl = stateParams.get('campaign');
+                if (campaignFromUrl) {
+                    console.log('✅ Found campaign in liff.state:', campaignFromUrl);
+                } else {
+                    console.warn('⚠️ No campaign in liff.state');
+                }
+            }
+            
+            // วิธีที่ 2: ลอง fragment (#campaign=XXX)
+            if (!campaignFromUrl) {
+                const hash = window.location.hash.substring(1);
+                console.log('🔗 Hash (without #):', hash);
+                
+                if (hash) {
+                    const hashParams = new URLSearchParams(hash);
+                    console.log('📋 Hash Params:', Array.from(hashParams.entries()));
+                    
+                    campaignFromUrl = hashParams.get('campaign');
+                    if (campaignFromUrl) {
+                        console.log('✅ Found campaign in fragment:', campaignFromUrl);
+                    }
+                }
+            }
+            
+            // วิธีที่ 3: ลอง query params (?campaign=XXX)
+            if (!campaignFromUrl) {
+                campaignFromUrl = urlParams.get('campaign');
+                if (campaignFromUrl) {
+                    console.log('✅ Found campaign in query:', campaignFromUrl);
+                }
+            }
+            
+            // วิธีที่ 4: ลอง localStorage
+            const storedCampaign = localStorage.getItem('liff_campaign_code');
+            console.log('💾 LocalStorage campaign:', storedCampaign);
+            
+            // ถ้ามี campaign ให้เก็บไว้ใน localStorage
+            if (campaignFromUrl) {
+                console.log('💾 Saving to localStorage:', campaignFromUrl);
+                localStorage.setItem('liff_campaign_code', campaignFromUrl);
+                campaignCode = campaignFromUrl;
+            } else if (storedCampaign) {
+                // ถ้าไม่มี ให้ดึงจาก localStorage (กรณี redirect กลับมา)
+                console.log('📦 Using from localStorage:', storedCampaign);
+                campaignCode = storedCampaign;
+            } else {
+                campaignCode = 'DEMO2026';
+                console.log('🔧 Using default:', campaignCode);
+            }
+            
+            console.log('✅ Final Campaign Code:', campaignCode);
+            
+            try {
+                // 1. ดึง Campaign Data จาก API (เพื่อเอา LIFF ID และ form_config)
+                console.log('📡 Fetching campaign data...');
+                const campaignData = await fetchCampaignData();
+                console.log('✅ Campaign data loaded:', campaignData);
+                
+                if (!campaignData) {
+                    throw new Error('ไม่พบข้อมูลแคมเปญ');
+                }
+                
+                if (!campaignData.liff_id) {
+                    throw new Error('ไม่พบ LIFF ID สำหรับแคมเปญนี้ กรุณาตั้งค่าใน Admin');
+                }
+                
+                liffId = campaignData.liff_id;
+                console.log('✅ LIFF ID:', liffId);
+                
+                // เก็บ campaign ID สำหรับส่งไป API
+                campaignId = campaignData.id;
+                console.log('✅ Campaign ID:', campaignId);
+                
+                // 2. Initialize LIFF ด้วย LIFF ID จากฐานข้อมูล
+                await initializeLIFF(liffId, campaignData);
+                
+            } catch (error) {
+                console.error('❌ Error:', error);
+                // Hide loading
+                document.getElementById('loading').style.display = 'none';
+                // Show error
+                showError(error.message || 'ไม่สามารถโหลดข้อมูลได้ กรุณาลองใหม่');
+            }
+        });
+        
+        // Fetch campaign data from API
+        async function fetchCampaignData() {
+            try {
+                const url = `https://autobot.boxdesign.in.th/api/lineapp/campaigns.php?code=${encodeURIComponent(campaignCode)}`;
+                console.log('🌐 Fetching from:', url);
+                
+                const response = await fetch(url);
+                console.log('📥 Response status:', response.status);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const result = await response.json();
+                console.log('📦 API Response:', result);
+                
+                if (result.success && result.data) {
+                    return result.data;
+                } else {
+                    throw new Error(result.message || 'ไม่พบแคมเปญ');
+                }
+            } catch (error) {
+                console.error('❌ Fetch Error:', error);
+                throw error;
+            }
+        }
+        
+        // Initialize LIFF
+        async function initializeLIFF(liffIdFromDB, campaignData) {
+            try {
+                console.log('🔧 Initializing LIFF with ID:', liffIdFromDB);
+                
+                // Initialize LIFF with the LIFF ID from database
+                await liff.init({ liffId: liffIdFromDB });
+                
+                console.log('✅ LIFF Initialized');
+                
+                // Check if logged in
+                if (!liff.isLoggedIn()) {
+                    console.log('Not logged in, redirecting to login...');
+                    liff.login();
+                    return;
+                }
+                
+                // Get user profile
+                const profile = await liff.getProfile();
+                console.log('👤 User Profile:', profile);
+                
+                lineUserId = profile.userId;
+                
+                // Show profile
+                showProfile(profile, campaignData);
+                
+                // Build dynamic form from campaign's form_config
+                if (campaignData.form_config && campaignData.form_config.length > 0) {
+                    buildDynamicForm(campaignData.form_config);
+                } else {
+                    console.warn('⚠️ No form_config found, using default form');
+                }
+                
+                // Build dynamic document fields from campaign's required_documents
+                if (campaignData.required_documents && campaignData.required_documents.length > 0) {
+                    renderDocumentFields(campaignData.required_documents);
+                } else {
+                    console.warn('⚠️ No required_documents found');
+                }
+                
+                // Hide loading, show form
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('formSection').style.display = 'block';
+                
+                // Pre-fill hidden fields
+                document.getElementById('lineUserId').value = lineUserId;
+                document.getElementById('campaignCode').value = campaignCode;
+                
+            } catch (error) {
+                console.error('LIFF Init Error:', error);
+                throw error;
+            }
+        }
+        
+        // Show user profile
+        function showProfile(profile, campaignData) {
+            document.getElementById('profilePic').src = profile.pictureUrl || 'https://via.placeholder.com/60';
+            document.getElementById('profileName').textContent = profile.displayName || 'ผู้ใช้ LINE';
+            document.getElementById('campaignName').textContent = campaignData.name || campaignCode;
+            document.getElementById('profileSection').classList.add('show');
+        }
+        
+        // Build dynamic form from campaign form_config
+        function buildDynamicForm(formConfig) {
+            console.log('🎨 Building dynamic form with', formConfig.length, 'questions');
+            console.log('📋 Form Config:', formConfig);
+            
+            const container = document.getElementById('dynamicFormFields');
+            if (!container) {
+                console.error('❌ Dynamic form container not found');
+                return;
+            }
+            
+            console.log('✅ Container found, clearing existing fields...');
+            
+            // Clear existing fields (except hidden ones)
+            container.innerHTML = '';
+            
+            // Build each field
+            formConfig.forEach((field, index) => {
+                console.log(`📝 Building field ${index + 1}:`, field);
+                const fieldHtml = buildFormField(field, index);
+                console.log(`✨ Generated HTML:`, fieldHtml.substring(0, 100) + '...');
+                container.insertAdjacentHTML('beforeend', fieldHtml);
+            });
+            
+            console.log('✅ Dynamic form built successfully - Total fields:', formConfig.length);
+        }
+        
+        // Build individual form field HTML
+        function buildFormField(field, index) {
+            const fieldId = `field_${index}`;
+            const requiredAttr = field.required ? 'required' : '';
+            const requiredLabel = field.required ? '<span class="required">*</span>' : '';
+            
+            let inputHtml = '';
+            
+            switch (field.type) {
+                case 'text':
+                case 'email':
+                case 'tel':
+                case 'number':
+                    inputHtml = `<input type="${field.type}" id="${fieldId}" name="${field.label}" 
+                                       placeholder="${field.placeholder || ''}" ${requiredAttr}>`;
+                    break;
+                    
+                case 'textarea':
+                    inputHtml = `<textarea id="${fieldId}" name="${field.label}" 
+                                          rows="4" placeholder="${field.placeholder || ''}" ${requiredAttr}></textarea>`;
+                    break;
+                    
+                case 'date':
+                    inputHtml = `<input type="date" id="${fieldId}" name="${field.label}" ${requiredAttr}>`;
+                    break;
+                    
+                case 'select':
+                    const options = field.options || [];
+                    const optionsHtml = options.map(opt => `<option value="${opt}">${opt}</option>`).join('');
+                    inputHtml = `<select id="${fieldId}" name="${field.label}" ${requiredAttr}>
+                                    <option value="">-- เลือก --</option>
+                                    ${optionsHtml}
+                                </select>`;
+                    break;
+                    
+                default:
+                    inputHtml = `<input type="text" id="${fieldId}" name="${field.label}" 
+                                       placeholder="${field.placeholder || ''}" ${requiredAttr}>`;
+            }
+            
+            return `
+                <div class="form-group">
+                    <label>
+                        ${field.label} ${requiredLabel}
+                    </label>
+                    ${inputHtml}
+                </div>
+            `;
+        }
+        
+        // Render dynamic document fields from campaign required_documents config
+        function renderDocumentFields(requiredDocuments) {
+            const container = document.getElementById('documentFields');
+            
+            if (!requiredDocuments || !Array.isArray(requiredDocuments) || requiredDocuments.length === 0) {
+                console.log('📄 No required documents configured');
+                container.innerHTML = '<p style="color: #666;">ไม่มีเอกสารที่ต้องอัพโหลด</p>';
+                return;
+            }
+            
+            console.log('📄 Rendering', requiredDocuments.length, 'document fields');
+            
+            let html = '';
+            
+            requiredDocuments.forEach((doc, index) => {
+                const docId = doc.type || `doc_${index}`;
+                const label = doc.label || 'เอกสาร';
+                const required = doc.required !== false; // Default to required
+                const requiredAttr = required ? 'required' : '';
+                const requiredLabel = required ? '<span class="required">*</span>' : '';
+                const accept = doc.accept || 'image/*,application/pdf'; // Accept images and PDFs
+                
+                html += `
+                    <div class="form-group">
+                        <label>${label} ${requiredLabel}</label>
+                        <div class="file-upload">
+                            <label for="${docId}" class="file-upload-btn">
+                                📷 อัพโหลด${label}
+                            </label>
+                            <input type="file" 
+                                   id="${docId}" 
+                                   data-doc-type="${doc.type}"
+                                   data-doc-label="${label}"
+                                   accept="${accept}"
+                                   ${requiredAttr}>
+                            <div class="file-preview" id="${docId}_preview" style="display: none;">
+                                <img id="${docId}_img" src="" alt="Preview">
+                                <span id="${docId}_name" style="display: block; margin-top: 10px; color: #666;"></span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            
+            container.innerHTML = html;
+            
+            // Add change event listeners for all file inputs
+            requiredDocuments.forEach((doc, index) => {
+                const docId = doc.type || `doc_${index}`;
+                const fileInput = document.getElementById(docId);
+                
+                if (fileInput) {
+                    fileInput.addEventListener('change', function(e) {
+                        handleFilePreview(e, docId);
+                    });
+                }
+            });
+            
+            console.log('✅ Document fields rendered');
+        }
+        
+        // Handle file preview
+        function handleFilePreview(event, docId) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            const preview = document.getElementById(`${docId}_preview`);
+            const img = document.getElementById(`${docId}_img`);
+            const nameSpan = document.getElementById(`${docId}_name`);
+            
+            if (!preview) return;
+            
+            // Show filename
+            if (nameSpan) {
+                nameSpan.textContent = `📎 ${file.name} (${(file.size / 1024).toFixed(2)} KB)`;
+            }
+            
+            // If image, show preview
+            if (file.type.startsWith('image/')) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    if (img) {
+                        img.src = e.target.result;
+                        img.style.display = 'block';
+                    }
+                    preview.style.display = 'block';
+                };
+                reader.readAsDataURL(file);
+            } else {
+                // For PDFs and other files, just show the name
+                if (img) {
+                    img.style.display = 'none';
+                }
+                preview.style.display = 'block';
+            }
+        }
+        
+        // OLD: Remove hardcoded file preview
+        // document.getElementById('idCard').addEventListener('change', function(e) { ... })
+        
+        // Handle form submission
+        document.getElementById('applicationForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            console.log('📤 Form submit triggered');
+            
+            // Disable submit button
+            const submitBtn = document.getElementById('submitBtn');
+            submitBtn.disabled = true;
+            submitBtn.textContent = '⏳ กำลังส่งข้อมูล...';
+            
+            try {
+                // Get LINE profile for additional data
+                const profile = await liff.getProfile();
+                console.log('👤 Getting profile for submission:', profile);
+                
+                // Collect all form data dynamically
+                const formData = {
+                    campaign_id: campaignId,
+                    line_user_id: profile.userId,
+                    line_display_name: profile.displayName,
+                    line_picture_url: profile.pictureUrl,
+                    line_profile: {
+                        userId: profile.userId,
+                        displayName: profile.displayName,
+                        pictureUrl: profile.pictureUrl,
+                        statusMessage: profile.statusMessage
+                    },
+                    form_data: {}
+                };
+                
+                console.log('🎯 Campaign ID:', formData.campaign_id);
+                console.log('👤 User ID:', formData.line_user_id);
+                console.log('👤 Display Name:', formData.line_display_name);
+                console.log('🖼️ Picture URL:', formData.line_picture_url);
+                
+                // Collect dynamic field data
+                const formFields = document.querySelectorAll('#dynamicFormFields input, #dynamicFormFields textarea, #dynamicFormFields select');
+                console.log('📋 Found', formFields.length, 'form fields');
+                
+                formFields.forEach((field, index) => {
+                    const fieldName = field.name || `field_${index}`;
+                    const fieldValue = field.value;
+                    formData.form_data[fieldName] = fieldValue;
+                    console.log(`  ✅ ${fieldName}: ${fieldValue}`);
+                });
+                
+                // Extract phone and email from form_data if available
+                if (formData.form_data['เบอร์โทร'] || formData.form_data['โทรศัพท์'] || formData.form_data['phone']) {
+                    formData.phone = formData.form_data['เบอร์โทร'] || formData.form_data['โทรศัพท์'] || formData.form_data['phone'];
+                }
+                if (formData.form_data['อีเมล'] || formData.form_data['email'] || formData.form_data['Email']) {
+                    formData.email = formData.form_data['อีเมล'] || formData.form_data['email'] || formData.form_data['Email'];
+                }
+                
+                console.log('📦 Complete form data:', formData);
+                console.log('📋 Form data object:', JSON.stringify(formData.form_data, null, 2));
+                
+                // Send to backend API (Step 1: Create/Update Application)
+                const url = 'https://autobot.boxdesign.in.th/api/lineapp/applications.php';
+                console.log('🌐 Posting to:', url);
+                
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(formData)
+                });
+                
+                console.log('📥 Response status:', response.status);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const result = await response.json();
+                console.log('✅ API Response:', result);
+                
+                // Step 2: Upload documents dynamically (from all file inputs)
+                const uploadedFiles = [];
+                
+                if (result.success && result.data && result.data.application_id) {
+                    const fileInputs = document.querySelectorAll('#documentFields input[type="file"]');
+                    console.log('📤 Found', fileInputs.length, 'file inputs to upload');
+                    
+                    for (const fileInput of fileInputs) {
+                        const file = fileInput.files[0];
+                        if (file) {
+                            const docType = fileInput.dataset.docType || 'อื่นๆ';
+                            const docLabel = fileInput.dataset.docLabel || 'เอกสาร';
+                            
+                            console.log(`📤 Uploading: ${docLabel} (${docType})`);
+                            
+                            try {
+                                const uploadResult = await uploadDocument(
+                                    result.data.application_id, 
+                                    file, 
+                                    docType,
+                                    docLabel  // CRITICAL: Pass label!
+                                );
+                                
+                                if (uploadResult.success) {
+                                    uploadedFiles.push(docLabel);
+                                    console.log(`✅ ${docLabel} uploaded successfully`);
+                                } else {
+                                    console.warn(`⚠️ ${docLabel} upload failed:`, uploadResult.message);
+                                }
+                            } catch (uploadError) {
+                                console.error(`❌ ${docLabel} upload error:`, uploadError);
+                                // Continue with other uploads
+                            }
+                        }
+                    }
+                }
+                
+                if (result.success) {
+                    // Show success message
+                    const isUpdate = result.data && result.data.is_update;
+                    const filesInfo = uploadedFiles.length > 0 ? `\n📎 อัพโหลดเอกสาร: ${uploadedFiles.join(', ')}` : '';
+                    const successMsg = isUpdate 
+                        ? `✅ อัปเดตข้อมูลสำเร็จ!${filesInfo}\n\nระบบจะแจ้งผลการพิจารณาให้ทราบภายหลัง`
+                        : `✅ ส่งข้อมูลสมัครเรียบร้อยแล้ว!${filesInfo}\n\nระบบจะแจ้งผลการพิจารณาให้ทราบภายหลัง`;
+                    
+                    document.getElementById('successMessage').textContent = successMsg;
+                    showSuccess();
+                    
+                    // Send message to LINE
+                    try {
+                        const lineMessage = isUpdate
+                            ? `✅ อัปเดตข้อมูลสำเร็จ!\n\n📋 เลขที่: ${result.data.application_no}\n🎯 แคมเปญ: ${campaignCode}${filesInfo}\n\nระบบจะแจ้งผลให้ทราบภายหลังค่ะ`
+                            : `✅ ส่งข้อมูลสมัครเรียบร้อยแล้ว!\n\n📋 เลขที่: ${result.data.application_no || 'กำลังประมวลผล'}\n🎯 แคมเปญ: ${campaignCode}${filesInfo}\n\nระบบจะแจ้งผลให้ทราบภายหลังค่ะ`;
+                        
+                        await liff.sendMessages([{
+                            type: 'text',
+                            text: lineMessage
+                        }]);
+                        console.log('✅ LINE message sent');
+                    } catch (msgError) {
+                        console.warn('⚠️ Could not send LINE message:', msgError);
+                    }
+                    
+                    // Close LIFF after 3 seconds
+                    setTimeout(() => {
+                        console.log('👋 Closing LIFF window...');
+                        liff.closeWindow();
+                    }, 3000);
+                    
+                } else {
+                    throw new Error(result.message || 'เกิดข้อผิดพลาดจากเซิร์ฟเวอร์');
+                }
+                
+            } catch (error) {
+                console.error('❌ Submit Error:', error);
+                showError(error.message || 'ไม่สามารถส่งข้อมูลได้ กรุณาลองใหม่');
+                
+                // Re-enable submit button
+                submitBtn.disabled = false;
+                submitBtn.textContent = '✅ ส่งข้อมูล';
+            }
+        });
+        
+        // Function to upload document
+        async function uploadDocument(applicationId, file, documentType, documentLabel) {
+            console.log('📤 Uploading document:', {
+                applicationId,
+                fileName: file.name,
+                fileSize: file.size,
+                fileType: file.type,
+                documentType,
+                documentLabel  // Log the label
+            });
+            
+            // Convert file to base64
+            const base64 = await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const base64String = reader.result.split(',')[1];
+                    resolve(base64String);
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+            });
+            
+            console.log('✅ File converted to base64, length:', base64.length);
+            
+            // Send to API
+            const uploadData = {
+                application_id: applicationId,
+                document_type: documentType,
+                document_label: documentLabel || documentType, // CRITICAL: Send label!
+                file_name: file.name,
+                file_data: base64,
+                file_type: file.type
+            };
+            
+            const url = 'https://autobot.boxdesign.in.th/api/lineapp/documents.php';
+            console.log('🌐 Uploading to:', url);
+            console.log('📦 Upload data:', { ...uploadData, file_data: '[BASE64_DATA]' });
+            
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(uploadData)
+            });
+            
+            console.log('📥 Upload response status:', response.status);
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
+            const result = await response.json();
+            console.log('✅ Upload result:', result);
+            
+            return result;
+        }
+        
+        // Show success message
+        function showSuccess() {
+            document.getElementById('successMessage').classList.add('show');
+            document.getElementById('errorMessage').classList.remove('show');
+            document.getElementById('applicationForm').style.display = 'none';
+        }
+        
+        // Show error message
+        function showError(message) {
+            const errorMsg = document.getElementById('errorMessage');
+            errorMsg.textContent = '❌ ' + message;
+            errorMsg.classList.add('show');
+            document.getElementById('successMessage').classList.remove('show');
+        }
+    </script>
+</body>
+</html>

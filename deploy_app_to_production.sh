@@ -42,10 +42,71 @@ echo ""
 # ============================================
 # Pre-deployment Checks
 # ============================================
-echo -e "${BLUE}🔍 Running pre-deployment checks...${NC}"
-echo ""
+
+# =========================================================
+# ✅ MANDATORY TESTS (Skip only with SKIP_TESTS=1 emergency)
+# =========================================================
+
+if [ "$SKIP_TESTS" != "1" ]; then
+    echo -e "${BLUE}🧪 Running mandatory pre-deployment tests...${NC}"
+    echo ""
+
+    # 1) PHP Syntax Check
+    echo "1️⃣ PHP Syntax Check..."
+    SYNTAX_ERRORS=0
+    # Use XAMPP PHP if available
+    PHP_CMD="php"
+    if [ -x "/opt/lampp/bin/php" ]; then
+        PHP_CMD="/opt/lampp/bin/php"
+    fi
+    
+    while IFS= read -r -d '' file; do
+        if ! $PHP_CMD -l "$file" > /dev/null 2>&1; then
+            echo -e "${RED}❌ Syntax error in: $file${NC}"
+            $PHP_CMD -l "$file"
+            SYNTAX_ERRORS=$((SYNTAX_ERRORS + 1))
+        fi
+    done < <(find includes api -name "*.php" -print0 2>/dev/null || true)
+
+    if [ $SYNTAX_ERRORS -gt 0 ]; then
+        echo ""
+        echo -e "${RED}❌ Found $SYNTAX_ERRORS syntax error(s)${NC}"
+        echo -e "${RED}⛔ Deployment blocked. Fix syntax errors first.${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✅ All PHP files passed syntax check${NC}"
+    echo ""
+
+    # 2) Unit Tests
+    if [ -f "vendor/bin/phpunit" ]; then
+        echo "2️⃣ Unit Tests (Mock Database - No Real API Calls)..."
+        # Use XAMPP PHP to run PHPUnit
+        if ! $PHP_CMD ./vendor/bin/phpunit tests/bot/RouterV1HandlerTest.php; then
+            echo ""
+            echo -e "${RED}❌ Unit tests failed${NC}"
+            echo -e "${RED}⛔ Deployment blocked. Fix tests first.${NC}"
+            echo ""
+            echo "Hint: Run locally with: $PHP_CMD ./vendor/bin/phpunit tests/bot/RouterV1HandlerTest.php"
+            exit 1
+        fi
+        echo -e "${GREEN}✅ All unit tests passed${NC}"
+        echo ""
+    else
+        echo -e "${YELLOW}⚠️  PHPUnit not installed - skipping unit tests${NC}"
+        echo "   Install with: composer require --dev phpunit/phpunit"
+        echo ""
+    fi
+
+    echo -e "${GREEN}✅ All pre-deployment tests passed${NC}"
+    echo ""
+else
+    echo -e "${RED}⚠️  SKIP_TESTS=1 detected - deploying WITHOUT tests (EMERGENCY MODE)${NC}"
+    echo "   This should be RARE and followed by immediate verification!"
+    echo ""
+fi
 
 # Check for hardcoded paths
+echo -e "${BLUE}🔍 Checking for hardcoded paths...${NC}"
 if [ -f "./scripts/fix-hardcoded-paths.sh" ]; then
     if ! bash ./scripts/fix-hardcoded-paths.sh > /dev/null 2>&1; then
         echo -e "${RED}❌ Found hardcoded image/asset paths!${NC}"

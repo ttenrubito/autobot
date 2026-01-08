@@ -4,6 +4,8 @@
 require_once __DIR__ . '/BotHandlerInterface.php';
 require_once __DIR__ . '/RouterV1Handler.php';
 require_once __DIR__ . '/RouterV2BoxDesignHandler.php';
+require_once __DIR__ . '/RouterV3LineAppHandler.php';
+require_once __DIR__ . '/../Logger.php';
 
 class BotHandlerFactory
 {
@@ -25,6 +27,14 @@ class BotHandlerFactory
                     'handler_class' => 'RouterV2BoxDesignHandler',
                 ]);
                 return new RouterV2BoxDesignHandler();
+
+            case 'router_v3_lineapp':
+            case 'lineapp_v3':
+            case 'line_application':
+                Logger::info('[FACTORY] ✅ Instantiating RouterV3LineAppHandler', [
+                    'handler_class' => 'RouterV3LineAppHandler',
+                ]);
+                return new RouterV3LineAppHandler();
 
             case 'router_v1':
             default:

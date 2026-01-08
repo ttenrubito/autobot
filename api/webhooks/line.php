@@ -7,6 +7,7 @@
 require_once __DIR__ . '/../../includes/Database.php';
 require_once __DIR__ . '/../../includes/Response.php';
 require_once __DIR__ . '/../../includes/Logger.php';
+require_once __DIR__ . '/../../includes/GoogleCloudStorage.php';
 
 header('Content-Type: application/json');
 
@@ -193,12 +194,24 @@ function processEvent($event) {
         if ($imageUrl) {
             $gatewayMessage['attachments'] = [[
                 'type' => 'image',
-                'url' => $imageUrl  // ✅ Now has proper URL!
+                'url' => $imageUrl  // ✅ Now has proper URL (GCS or local)!
             ]];
             Logger::info("LINE webhook: Image downloaded and normalized", [
                 'message_id' => $messageId,
                 'public_url' => $imageUrl
             ]);
+            
+            // ✅ Save image message to chat_messages
+            saveChatMessage(
+                (int)$channel['id'],
+                $userId,
+                'image',
+                '[รูปภาพ]',
+                $messageId,
+                'incoming',
+                'customer',
+                [['type' => 'image', 'url' => $imageUrl]]
+            );
         } else {
             Logger::error("LINE webhook: Failed to download image", [
                 'message_id' => $messageId
@@ -208,6 +221,17 @@ function processEvent($event) {
                 'message_id' => $messageId
             ]];
         }
+    } elseif ($messageType === 'text') {
+        // ✅ Save text message to chat_messages
+        saveChatMessage(
+            (int)$channel['id'],
+            $userId,
+            'text',
+            $text,
+            $messageId,
+            'incoming',
+            'customer'
+        );
     } elseif ($messageType === 'location') {
         $gatewayMessage['metadata']['location'] = [
             'latitude' => $message['latitude'] ?? null,
@@ -221,11 +245,31 @@ function processEvent($event) {
     
     // Extract response data (gateway wraps in 'data')
     $data = is_array($response) && isset($response['data']) ? $response['data'] : $response;
-    $replyText = is_array($data) ? (string)($data['reply_text'] ?? '') : '';
+    
+    // ✅ NEW: Support for multi-message replies (human-like conversation)
+    // Check for reply_texts array first, fallback to single reply_text
+    $replyTexts = [];
+    
+    if (is_array($data)) {
+        // Check for new format: reply_texts array
+        if (!empty($data['reply_texts']) && is_array($data['reply_texts'])) {
+            $replyTexts = $data['reply_texts'];
+            Logger::info('[LINE_WEBHOOK] Multi-message reply detected', [
+                'message_count' => count($replyTexts),
+            ]);
+        }
+        // Fallback to single message format
+        elseif (!empty($data['reply_text'])) {
+            $replyTexts = [(string)$data['reply_text']];
+            Logger::info('[LINE_WEBHOOK] Single message reply (legacy format)');
+        }
+    }
+    
     $actions = is_array($data) && isset($data['actions']) ? $data['actions'] : [];
     
     Logger::info("[LINE_WEBHOOK] Gateway response received", [
-        'has_reply' => !empty($replyText),
+        'has_reply' => !empty($replyTexts),
+        'message_count' => count($replyTexts),
         'actions_count' => count($actions),
         'actions_full' => $actions
     ]);
@@ -235,14 +279,30 @@ function processEvent($event) {
         recordMessageEvent((int)$channel['id'], $messageId, $response);
     }
     
-    // ✅ Send response back to LINE (text + actions/images)
-    if ($replyText !== '' || !empty($actions)) {
-        sendLineReply($replyToken, $replyText, $actions, $channel);
+    // ✅ Save bot reply messages to chat_messages
+    if (!empty($replyTexts)) {
+        foreach ($replyTexts as $idx => $replyText) {
+            $replyMessageId = $messageId . '_reply_' . ($idx + 1);
+            saveChatMessage(
+                (int)$channel['id'],
+                $userId,
+                'text',
+                $replyText,
+                $replyMessageId,
+                'outgoing',
+                'bot'
+            );
+        }
+    }
+    
+    // ✅ Send response back to LINE (multiple text messages + actions/images)
+    if (!empty($replyTexts) || !empty($actions)) {
+        sendLineReply($replyToken, $replyTexts, $actions, $channel);
     }
 }
 
 /**
- * ✅ Download image from LINE Content API and save to public directory
+ * ✅ Download image from LINE Content API and upload to Google Cloud Storage
  */
 function downloadLineImage($messageId, $channel) {
     $config = json_decode($channel['config'] ?? '{}', true);
@@ -253,12 +313,6 @@ function downloadLineImage($messageId, $channel) {
         return null;
     }
     
-    // Create upload directory if doesn't exist
-    $uploadDir = __DIR__ . '/../../public/uploads/line_images';
-    if (!is_dir($uploadDir)) {
-        mkdir($uploadDir, 0755, true);
-    }
-    
     // Download image from LINE
     $url = "https://api-data.line.me/v2/bot/message/$messageId/content";
     
@@ -267,10 +321,11 @@ function downloadLineImage($messageId, $channel) {
     curl_setopt($ch, CURLOPT_HTTPHEADER, [
         'Authorization: Bearer ' . $channelAccessToken
     ]);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
     
     $imageData = curl_exec($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $contentType = curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
     curl_close($ch);
     
     if ($httpCode !== 200 || !$imageData) {
@@ -278,8 +333,58 @@ function downloadLineImage($messageId, $channel) {
         return null;
     }
     
-    // Save to file
-    $filename = $messageId . '.jpg';
+    // Determine file extension from content type
+    $ext = 'jpg';
+    if (strpos($contentType, 'png') !== false) {
+        $ext = 'png';
+    } elseif (strpos($contentType, 'gif') !== false) {
+        $ext = 'gif';
+    }
+    
+    $filename = $messageId . '.' . $ext;
+    $mimeType = $contentType ?: 'image/jpeg';
+    
+    // Try uploading to GCS first
+    try {
+        $gcs = GoogleCloudStorage::getInstance();
+        $result = $gcs->uploadFile(
+            $imageData,
+            $filename,
+            $mimeType,
+            'line_images',  // folder in GCS bucket
+            [
+                'source' => 'line',
+                'message_id' => $messageId,
+                'channel_id' => $channel['id'] ?? ''
+            ]
+        );
+        
+        if ($result['success']) {
+            Logger::info("LINE image uploaded to GCS", [
+                'message_id' => $messageId,
+                'gcs_path' => $result['path'],
+                'signed_url' => substr($result['signed_url'], 0, 100) . '...'
+            ]);
+            
+            // Return signed URL for access
+            return $result['signed_url'];
+        } else {
+            Logger::warning("GCS upload failed, falling back to local storage", [
+                'error' => $result['error'] ?? 'Unknown'
+            ]);
+        }
+    } catch (Exception $e) {
+        Logger::warning("GCS not available, falling back to local storage", [
+            'error' => $e->getMessage()
+        ]);
+    }
+    
+    // Fallback to local storage if GCS fails
+    $uploadDir = __DIR__ . '/../../public/uploads/line_images';
+    if (!is_dir($uploadDir)) {
+        mkdir($uploadDir, 0755, true);
+    }
+    
     $filepath = $uploadDir . '/' . $filename;
     
     if (file_put_contents($filepath, $imageData) === false) {
@@ -332,6 +437,60 @@ function recordMessageEvent(int $channelId, string $externalEventId, ?array $res
 }
 
 /**
+ * ✅ Save chat message to database for history tracking
+ */
+function saveChatMessage($channelId, $userId, $messageType, $text, $messageId, $direction = 'incoming', $senderType = 'customer', $attachments = null) {
+    try {
+        $db = Database::getInstance();
+        
+        // Get or create conversation_id based on channel + user
+        $conversationId = 'line_' . $channelId . '_' . $userId;
+        
+        // Build message_data JSON for attachments
+        $messageData = null;
+        if ($attachments) {
+            $messageData = json_encode(['attachments' => $attachments], JSON_UNESCAPED_UNICODE);
+        }
+        
+        // Convert message type to match enum
+        $dbMessageType = $messageType;
+        if ($messageType === 'sticker') {
+            $dbMessageType = 'text'; // Store as text, actual content indicates it was sticker
+        }
+        
+        $sql = "INSERT INTO chat_messages 
+                (conversation_id, tenant_id, message_id, platform, direction, sender_type, sender_id, 
+                 message_type, message_text, message_data, sent_at, received_at, created_at)
+                VALUES (?, 'default', ?, 'line', ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW())
+                ON DUPLICATE KEY UPDATE updated_at = NOW()";
+        
+        $db->execute($sql, [
+            $conversationId,
+            $messageId,
+            $direction,
+            $senderType,
+            $userId,
+            $dbMessageType,
+            $text ?: null,
+            $messageData
+        ]);
+        
+        Logger::info("[LINE_WEBHOOK] Chat message saved to database", [
+            'conversation_id' => $conversationId,
+            'message_id' => $messageId,
+            'direction' => $direction,
+            'type' => $messageType
+        ]);
+        
+        return $conversationId;
+        
+    } catch (Exception $e) {
+        Logger::error("Failed to save chat message: " . $e->getMessage());
+        return null;
+    }
+}
+
+/**
  * Call internal message gateway
  */
 function callGateway($message) {
@@ -361,9 +520,13 @@ function callGateway($message) {
 }
 
 /**
- * ✅ Send reply to LINE user (text + images from actions)
+ * ✅ Send reply to LINE user (multiple text messages + images from actions)
+ * @param string $replyToken LINE reply token
+ * @param array $texts Array of text messages to send
+ * @param array $actions Bot actions (images, etc.)
+ * @param array $channel Channel configuration
  */
-function sendLineReply($replyToken, $text, $actions, $channel) {
+function sendLineReply($replyToken, $texts, $actions, $channel) {
     $config = json_decode($channel['config'] ?? '{}', true);
     $channelAccessToken = $config['channel_access_token'] ?? '';
     
@@ -377,12 +540,23 @@ function sendLineReply($replyToken, $text, $actions, $channel) {
     // Build messages array
     $messages = [];
     
-    // Add text message if present
-    if ($text !== '') {
-        $messages[] = [
-            'type' => 'text',
-            'text' => $text
-        ];
+    // ✅ Add multiple text messages if present
+    if (!empty($texts) && is_array($texts)) {
+        foreach ($texts as $text) {
+            $text = trim((string)$text);
+            if ($text !== '') {
+                $messages[] = [
+                    'type' => 'text',
+                    'text' => $text
+                ];
+                
+                // LINE API limit: max 5 messages per reply
+                if (count($messages) >= 5) {
+                    Logger::warning("[LINE_WEBHOOK] Reached LINE API limit of 5 messages (stopping at text messages)");
+                    break;
+                }
+            }
+        }
     }
     
     // ✅ Add image messages from actions

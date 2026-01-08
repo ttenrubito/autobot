@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Debug Document Upload</title>
+</head>
+<body>
+    <h1>Document Upload Debug</h1>
+    <p>Open browser console to see logs</p>
+    
+    <script>
+        // Test 1: Check if campaign API returns required_documents
+        console.log('🧪 Test 1: Fetching campaign config...');
+        fetch('https://autobot.boxdesign.in.th/api/lineapp/campaigns.php?id=2')
+            .then(r => r.json())
+            .then(data => {
+                console.log('✅ Campaign data:', data);
+                console.log('📄 Required documents:', data.data.required_documents);
+                
+                if (data.data.required_documents && data.data.required_documents.length > 0) {
+                    console.log('✅ Has required_documents config');
+                    
+                    // Test 2: Simulate document field rendering
+                    const docs = data.data.required_documents;
+                    docs.forEach((doc, i) => {
+                        console.log(`📄 Document ${i + 1}:`, {
+                            type: doc.type,
+                            label: doc.label || 'เอกสาร (fallback)',
+                            required: doc.required
+                        });
+                    });
+                } else {
+                    console.warn('⚠️ No required_documents found!');
+                }
+            })
+            .catch(err => console.error('❌ Error:', err));
+            
+        // Test 2: Check if documents API is accessible
+        console.log('🧪 Test 2: Checking documents API...');
+        fetch('https://autobot.boxdesign.in.th/api/lineapp/documents.php?application_id=1')
+            .then(r => r.json())
+            .then(data => {
+                console.log('✅ Documents for app 1:', data);
+                if (data.count === 0) {
+                    console.warn('⚠️ No documents uploaded yet!');
+                }
+            })
+            .catch(err => console.error('❌ Error:', err));
+            
+        // Test 3: Simulate upload
+        console.log('🧪 Test 3: To test upload, use this function in console:');
+        console.log(`
+async function testUpload() {
+    // Create a small test file
+    const blob = new Blob(['test content'], { type: 'text/plain' });
+    const file = new File([blob], 'test.txt', { type: 'text/plain' });
+    
+    // Convert to base64
+    const reader = new FileReader();
+    reader.onload = async function(e) {
+        const base64 = e.target.result.split(',')[1];
+        
+        // Upload
+        const response = await fetch('https://autobot.boxdesign.in.th/api/lineapp/documents.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                application_id: 1,
+                document_type: 'test',
+                file_name: 'test.txt',
+                file_data: base64,
+                file_type: 'text/plain'
+            })
+        });
+        
+        const result = await response.json();
+        console.log('Upload result:', result);
+    };
+    reader.readAsDataURL(file);
+}
+
+// Run it:
+testUpload();
+        `);
+    </script>
+</body>
+</html>

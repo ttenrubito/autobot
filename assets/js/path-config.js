@@ -156,6 +156,7 @@
         ADMIN_BILLING: PATH.api('api/admin/billing.php'),
         ADMIN_PACKAGES_LIST: PATH.api('api/admin/packages/list.php'),
         ADMIN_SUBSCRIPTIONS_ASSIGN: PATH.api('api/admin/subscriptions/assign.php'),
+        ADMIN_SUBSCRIPTIONS_EXTEND: PATH.api('api/admin/subscriptions/extend.php'),
         ADMIN_CUSTOMER_CHANNELS: PATH.api('api/admin/customer-channels.php'),
         ADMIN_CUSTOMER_INTEGRATIONS: PATH.api('api/admin/customer-integrations.php'),
         ADMIN_BOT_PROFILES: PATH.api('api/admin/customer-bot-profiles.php'),
@@ -182,9 +183,68 @@
 
         CUSTOMER_PAYMENTS: PATH.api('api/customer/payments.php'),
         CUSTOMER_PAYMENT_DETAIL: (paymentId) => PATH.api(`api/customer/payments.php?id=${encodeURIComponent(String(paymentId))}`),
+        CUSTOMER_PAYMENT_REFERENCES: (paymentId) => PATH.api(`api/customer/payments.php?id=${encodeURIComponent(String(paymentId))}&references=1`),
+        CUSTOMER_PAYMENT_CLASSIFY: PATH.api('api/customer/payments.php?action=classify'),
+        CUSTOMER_PAYMENT_APPROVE: PATH.api('api/customer/payments.php?action=approve'),
+        CUSTOMER_PAYMENT_REJECT: PATH.api('api/customer/payments.php?action=reject'),
+
+        CUSTOMER_CASES: PATH.api('api/customer/cases.php'),
+        CUSTOMER_CASE_DETAIL: (caseId) => PATH.api(`api/customer/cases.php?id=${encodeURIComponent(String(caseId))}`),
+
+        CUSTOMER_SAVINGS: PATH.api('api/customer/savings.php'),
+        CUSTOMER_SAVINGS_DETAIL: (savingsId) => PATH.api(`api/customer/savings.php?id=${encodeURIComponent(String(savingsId))}`),
+        CUSTOMER_SAVINGS_DEPOSIT: PATH.api('api/customer/savings.php?action=deposit'),
+
+        CUSTOMER_INSTALLMENTS: PATH.api('api/customer/installments.php'),
+        CUSTOMER_INSTALLMENT_DETAIL: (installmentId) => PATH.api(`api/customer/installments.php?id=${encodeURIComponent(String(installmentId))}`),
+        CUSTOMER_INSTALLMENT_PAY: PATH.api('api/customer/installments.php?action=pay'),
 
         ADMIN_PAYMENT_APPROVE: (paymentId) => PATH.api(`api/admin/payments/${paymentId}/approve`),
         ADMIN_PAYMENT_REJECT: (paymentId) => PATH.api(`api/admin/payments/${paymentId}/reject`),
+
+        // Admin Menu System APIs
+        ADMIN_USERS: PATH.api('api/admin/users.php'),
+        ADMIN_USER_MENU_CONFIG: PATH.api('api/admin/user-menu-config.php'),
+        USER_MENU_CONFIG: PATH.api('api/user/menu-config.php'),
+
+        // Admin Orders & Payments Pages APIs
+        ADMIN_ORDERS_API: PATH.api('api/admin/orders.php'),
+        ADMIN_PAYMENTS_API: PATH.api('api/admin/payments.php'),
+        
+        // Unified Payment Management (Classification + Sync)
+        ADMIN_UNIFIED_PAYMENTS: PATH.api('api/admin/payments/unified'),
+        ADMIN_UNIFIED_PAYMENT_DETAIL: (paymentId) => PATH.api(`api/admin/payments/unified/${paymentId}`),
+        ADMIN_UNIFIED_PAYMENT_CLASSIFY: (paymentId) => PATH.api(`api/admin/payments/unified/${paymentId}/classify`),
+        ADMIN_UNIFIED_PAYMENT_REJECT: (paymentId) => PATH.api(`api/admin/payments/unified/${paymentId}/reject`),
+        
+        // Commerce System APIs
+        ADMIN_CASES_API: PATH.api('api/admin/cases'),
+        ADMIN_SAVINGS_API: PATH.api('api/admin/savings'),
+        ADMIN_INSTALLMENTS_API: PATH.api('api/admin/installments'),
+        
+        // Admin Payment Actions with Push Notification
+        ADMIN_PAYMENT_VERIFY: (paymentId) => PATH.api(`api/admin/payments/${paymentId}/verify`),
+        ADMIN_PAYMENT_REJECT_NEW: (paymentId) => PATH.api(`api/admin/payments/${paymentId}/reject`),
+        ADMIN_PAYMENT_MANUAL: PATH.api('api/admin/payments/manual'),
+        
+        // Admin Installment Actions
+        ADMIN_INSTALLMENT_APPROVE: (contractId) => PATH.api(`api/admin/installments/${contractId}/approve`),
+        ADMIN_INSTALLMENT_VERIFY_PAYMENT: (contractId) => PATH.api(`api/admin/installments/${contractId}/verify-payment`),
+        ADMIN_INSTALLMENT_REJECT_PAYMENT: (contractId) => PATH.api(`api/admin/installments/${contractId}/reject-payment`),
+        ADMIN_INSTALLMENT_MANUAL_PAYMENT: (contractId) => PATH.api(`api/admin/installments/${contractId}/manual-payment`),
+        ADMIN_INSTALLMENT_UPDATE_DUE: (contractId) => PATH.api(`api/admin/installments/${contractId}/update-due-date`),
+        ADMIN_INSTALLMENT_CANCEL: (contractId) => PATH.api(`api/admin/installments/${contractId}/cancel`),
+        
+        // Admin Savings Actions  
+        ADMIN_SAVINGS_APPROVE_DEPOSIT: (savingsId) => PATH.api(`api/admin/savings/${savingsId}/approve-deposit`),
+        ADMIN_SAVINGS_CANCEL: (savingsId) => PATH.api(`api/admin/savings/${savingsId}/cancel`),
+        ADMIN_SAVINGS_COMPLETE: (savingsId) => PATH.api(`api/admin/savings/${savingsId}/complete`),
+        
+        // Push Notification API
+        PUSH_NOTIFY_SEND: PATH.api('api/webhook/push-notify/send'),
+        PUSH_NOTIFY_QUEUE: PATH.api('api/webhook/push-notify/queue'),
+        PUSH_NOTIFY_PROCESS: PATH.api('api/webhook/push-notify/process'),
+        PUSH_NOTIFY_STATS: PATH.api('api/webhook/push-notify/stats'),
     };
 
     /**
@@ -207,7 +267,15 @@
         ADMIN_INVOICES_PAGE: PATH.page('admin/invoices.php'),
         ADMIN_KNOWLEDGE_BASE: PATH.page('admin/knowledge-base.php'),
         ADMIN_REPORTS: PATH.page('admin/reports.php'),
+        ADMIN_CHAT_LOGS: PATH.page('admin/chat-logs.php'),
+        ADMIN_ORDERS: PATH.page('admin/orders.php'),
+        ADMIN_PAYMENTS: PATH.page('admin/payments.php'),
+        ADMIN_MENU_CONFIG: PATH.page('admin/menu-manager.php'),
         ADMIN_SETTINGS: PATH.page('admin/settings.php'),
+        // Commerce System Pages
+        ADMIN_CASES: PATH.page('admin/cases.php'),
+        ADMIN_SAVINGS: PATH.page('admin/savings.php'),
+        ADMIN_INSTALLMENTS: PATH.page('admin/installments.php'),
     };
 
     /**

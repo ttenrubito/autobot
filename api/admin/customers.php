@@ -122,12 +122,14 @@ try {
                 $params
             );
             
-            // Get customers
+            // Get customers with subscription info
             $customers = $db->query(
                 "SELECT 
-                    u.id, u.email, u.full_name, u.company_name, u.status, u.created_at,
+                    u.id, u.email, u.full_name, u.phone, u.company_name, u.status, u.created_at,
                     (SELECT COUNT(*) FROM customer_services WHERE user_id = u.id) as services_count,
-                    sp.name as plan_name
+                    sp.name as plan_name,
+                    s.current_period_end as subscription_end_date,
+                    s.status as subscription_status
                  FROM users u
                  LEFT JOIN subscriptions s ON u.id = s.user_id AND s.status = 'active'
                  LEFT JOIN subscription_plans sp ON s.plan_id = sp.id

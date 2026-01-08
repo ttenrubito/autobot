@@ -135,7 +135,7 @@ try {
             $stmt->execute($params);
             $total = $stmt->fetch(PDO::FETCH_ASSOC)['total'];
             
-            // Get orders
+            // Get orders with customer profile
             $stmt = $pdo->prepare("
                 SELECT 
                     o.id,
@@ -151,6 +151,10 @@ try {
                     o.created_at,
                     o.shipped_at,
                     o.delivered_at,
+                    o.customer_platform,
+                    o.customer_platform_id,
+                    o.customer_name,
+                    o.customer_avatar,
                     a.province,
                     a.district
                 FROM orders o
@@ -197,6 +201,10 @@ try {
             ]);
         }
         
+    } elseif ($method === 'POST') {
+        // POST /api/customer/orders - Create new order (Admin/Manual)
+        createOrder($pdo, $user_id);
+        
     } else {
         http_response_code(405);
         echo json_encode(['success' => false, 'message' => 'Method not allowed']);
@@ -210,4 +218,136 @@ try {
         'message' => 'Internal server error',
         'error' => $e->getMessage()
     ]);
+}
+
+/**
+ * Create new order (Admin/Manual Entry)
+ */
+function createOrder($pdo, $user_id) {
+    $input = json_decode(file_get_contents('php://input'), true);
+    
+    // Validate required fields
+    $productName = trim($input['product_name'] ?? '');
+    $totalAmount = floatval($input['total_amount'] ?? 0);
+    $quantity = intval($input['quantity'] ?? 1);
+    
+    if (empty($productName)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'กรุณาระบุชื่อสินค้า']);
+        return;
+    }
+    
+    if ($totalAmount <= 0) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'กรุณาระบุยอดเงิน']);
+        return;
+    }
+    
+    // Generate order number
+    $orderNo = 'ORD-' . date('Ymd') . '-' . strtoupper(substr(bin2hex(random_bytes(3)), 0, 5));
+    
+    // Prepare data
+    $productCode = trim($input['product_code'] ?? '');
+    $productId = $input['product_id'] ?? null;
+    $paymentType = $input['payment_type'] ?? 'full';
+    $source = $input['source'] ?? 'manual';
+    $customerName = trim($input['customer_name'] ?? '');
+    $customerPhone = trim($input['customer_phone'] ?? '');
+    $customerId = $input['customer_id'] ?? null; // From customer search autocomplete
+    $notes = trim($input['notes'] ?? '');
+    $installmentMonths = intval($input['installment_months'] ?? 0);
+    $downPayment = floatval($input['down_payment'] ?? 0);
+    
+    // Map payment type
+    if ($paymentType === 'savings') {
+        $paymentType = 'savings_deposit';
+    }
+    
+    try {
+        $pdo->beginTransaction();
+        
+        // Insert order
+        $stmt = $pdo->prepare("
+            INSERT INTO orders (
+                order_no,
+                customer_id,
+                product_name,
+                product_code,
+                product_id,
+                quantity,
+                total_amount,
+                payment_type,
+                installment_months,
+                down_payment,
+                source,
+                customer_name,
+                customer_phone,
+                notes,
+                status,
+                created_by,
+                created_at,
+                updated_at
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NOW(), NOW()
+            )
+        ");
+        
+        $stmt->execute([
+            $orderNo,
+            $user_id,
+            $productName,
+            $productCode ?: null,
+            $productId ?: null,
+            $quantity,
+            $totalAmount,
+            $paymentType,
+            $installmentMonths ?: null,
+            $downPayment ?: null,
+            $source,
+            $customerName ?: null,
+            $customerPhone ?: null,
+            $notes ?: null,
+            $user_id
+        ]);
+        
+        $orderId = $pdo->lastInsertId();
+        
+        // If installment, create schedule
+        if ($paymentType === 'installment' && $installmentMonths > 0) {
+            $remainingAmount = $totalAmount - $downPayment;
+            $amountPerPeriod = $remainingAmount / $installmentMonths;
+            
+            for ($i = 1; $i <= $installmentMonths; $i++) {
+                $dueDate = date('Y-m-d', strtotime("+{$i} months"));
+                
+                $stmt = $pdo->prepare("
+                    INSERT INTO installment_schedules (
+                        order_id, period_number, due_date, amount, paid_amount, status, created_at
+                    ) VALUES (?, ?, ?, ?, 0, 'pending', NOW())
+                ");
+                $stmt->execute([$orderId, $i, $dueDate, round($amountPerPeriod, 2)]);
+            }
+        }
+        
+        $pdo->commit();
+        
+        // Return success
+        echo json_encode([
+            'success' => true,
+            'message' => 'สร้างคำสั่งซื้อเรียบร้อย',
+            'data' => [
+                'id' => $orderId,
+                'order_no' => $orderNo
+            ]
+        ]);
+        
+    } catch (Exception $e) {
+        $pdo->rollBack();
+        error_log("Create order error: " . $e->getMessage());
+        http_response_code(500);
+        echo json_encode([
+            'success' => false,
+            'message' => 'ไม่สามารถสร้างคำสั่งซื้อได้: ' . $e->getMessage()
+        ]);
+    }
 }

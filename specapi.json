@@ -1,0 +1,386 @@
+Product Search + Image Export API Spec (for Vector Indexing)
+Project: Secondhand Brandname Chatbot (Keyword / Code / Image Search)
+ Owner: Box Design (Integration Spec for Data Team)
+ Version: v1.0
+ Last updated: 2026-01-06
+
+1) Goal & Scope
+ต้องการ API 2 เส้นหลัก เพื่อรองรับ 2 งาน:
+A) Runtime Search (ตอนลูกค้าส่งข้อความ/รหัส/รูปมา)
+ฝั่งบอททำ vector search เอง (ภายนอก DB) → ได้ refId หรือ keyword/codes
+
+
+จากนั้นเรียก API Product Search เพื่อดึงรายละเอียดสินค้าแบบสดล่าสุด
+
+
+B) Offline Indexing (Export รูปไปทำ vector index)
+ฝั่งบอทต้อง “ดึงรูป + refId” ออกไปทำ index
+
+
+ต้องรองรับทั้ง:
+
+
+export ครั้งแรก (full)
+
+
+export ซ้ำเฉพาะรายการที่ “รูปเปลี่ยน” (incremental)
+
+
+
+2) Definitions
+refId: รหัสอ้างอิงสินค้า (unique key) เช่น "P-2026-000123"
+
+
+product_code / sku: รหัสสินค้า/รหัสหน้าร้าน (อาจซ้ำได้ในบางระบบ แต่ถ้า unique ได้ยิ่งดี)
+
+
+image: รูปสินค้าหลายมุม 1 รายการมีได้หลายรูป (1 refId → many images)
+
+
+
+3) Authentication & Headers
+Auth (เลือกแบบใดแบบหนึ่งตามระบบทีม data):
+Authorization: Bearer <token>
+ หรือ
+
+
+X-API-Key: <api_key>
+
+
+Headers แนะนำ
+Content-Type: application/json
+
+
+Accept: application/json
+
+
+
+4) Endpoint #1 — Product Search
+POST /v1/products/search
+Purpose
+ค้นหาสินค้าแบบรวมทุกกรณี:
+ค้นด้วย keyword
+
+
+ค้นด้วย product_code
+
+
+ค้นด้วย refIds (สำคัญมาก: ใช้หลัง vector search ได้ refId)
+
+
+✅ จุดสำคัญ: refIds filter ต้องรองรับ เพื่อให้ flow “image → vector → refId → ดึงรายละเอียด” ทำงานจบในเส้นเดียว
+
+Request Body (JSON)
+{
+  "keyword": "string (optional)",
+  "product_code": "string (optional)",
+  "ref_ids": ["string"] (optional),
+  "filters": {
+    "brand": ["string"],
+    "availability": ["in_stock", "reserved", "sold"],
+    "price_min": 0,
+    "price_max": 0
+  },
+  "sort": {
+    "by": "relevance|updated_at|price",
+    "order": "asc|desc"
+  },
+  "page": {
+    "limit": 20
+  }
+}
+
+Rules
+อย่างน้อยต้องมี 1 อย่าง: keyword หรือ product_code หรือ ref_ids
+
+
+ref_ids รองรับหลายค่า (ใช้เมื่อ vector search คืนมา 5–50 รายการ)
+
+
+
+
+Response 200 (JSON)
+{
+  "data": [
+    {
+      "ref_id": "P-2026-000123",
+      "product_code": "SKU-ABC-001",
+      "title": "GUCCI Marmont Mini Bag",
+      "brand": "GUCCI",
+“description": "รายละเอียดสินค้าที่แสดงในแชท",
+      "price": 45900,
+      "currency": "THB",
+      "availability": "in_stock",
+      "thumbnail_url": "https://.../thumb.jpg", 
+      "image_count": 6,
+      "updated_at": "2026-01-06T10:20:30Z",
+      "attributes": {
+        "color": "black",
+        "material": "leather"
+      }
+    }
+  ],
+  "page": {
+    "limit": 20
+  }
+}
+Notes (Response fields)
+attributes เป็น optional object เพื่อยืดหยุ่น ไม่ผูก schema
+
+
+thumbnail_url แนะนำให้มี 1 รูปหลักไว้โชว์เร็ว
+
+
+ถ้าทีม data มีข้อมูลอื่น (เช่น description, category, size) สามารถเพิ่มได้ โดยไม่ breaking
+
+
+
+Examples
+1) Search by refIds (หลัง vector search)
+{
+  "ref_ids": ["P-2026-000123", "P-2026-000987"],
+  "page": { "limit": 20 }
+}
+
+2) Search by product code
+{
+  "product_code": "SKU-ABC-001",
+  "page": { "limit": 20 }
+}
+
+3) Search by keyword + filters
+{
+  "keyword": "marmont black",
+  "filters": { "brand": ["GUCCI"], "availability": ["in_stock"] },
+  "sort": { "by": "relevance", "order": "desc" },
+  "page": { "limit": 20 }
+}
+
+
+
+
+
+
+
+
+
+
+
+5) Endpoint #2 — Export Product Images (for Vector Index)
+GET /v1/products/images/export
+Purpose
+ดึง “รูป + refId” ไปสร้าง vector index
+รองรับ full export
+
+
+รองรับ incremental export (เฉพาะรูปที่เปลี่ยน)
+
+
+
+Query Params
+- limit (optional, default 200, max 500)
+- offset (optional, default 0)  — สำหรับ paging แบบง่าย
+- status (optional)            — เช่น active/inactive (ถ้าต้องการ)
+- updated_since (optional, RFC3339) — สำหรับ incremental (คืนเฉพาะรายการที่รูปเปลี่ยน)
+- snapshot_at (optional, RFC3339)   — แนะนำสำหรับ Full export เพื่อให้ total นิ่งระหว่าง loop
+  * ถ้า client ไม่ส่ง snapshot_at ใน request แรก ให้ server สร้างค่า snapshot_at แล้วส่งกลับมา
+  * จากนั้น client ต้องส่ง snapshot_at เดิมกลับมาในทุกหน้าถัดไป
+
+
+✅ แนะนำให้รองรับ updated_since
+updated_since ใช้เริ่ม incremental แบบ “ตั้งแต่เวลา X” (where กับ updated_date)
+
+
+
+Response 200 (JSON)
+{
+  "snapshot_at": "2026-01-06T10:30:00Z",
+  "total": 12640, //<<< คือจำนวน สินค้า (ref_id) ไม่ใช่จำนวนรูปภาพ
+  "page": {
+    "limit": 200,
+    "offset": 0,
+    "has_more": true,
+    "next_offset": 200
+  },
+  "items": [
+    {
+      "ref_id": "P-2026-000123",
+      "images_version": 7,
+      "images": [
+        {
+          "image_id": "IMG-001",
+          "url": "https://.../img1.jpg",
+          "position": 1,
+          "updated_at": "2026-01-06T10:10:00Z",
+          "deleted": false
+        },
+        {
+          "image_id": "IMG-002",
+          "url": "https://.../img2.jpg",
+          "position": 2,
+          "updated_at": "2026-01-06T10:12:00Z",
+          "deleted": false
+        }
+      ]
+    }
+  ]
+}
+
+
+
+Incremental Design (รูปเปลี่ยนทำไง)
+รองรับได้ง่าย ๆ แบบไม่ซับซ้อน:
+— updated_since
+server คืนเฉพาะรายการที่ รูปถูกเพิ่ม/ลบ/เปลี่ยน
+
+
+ใช้ field: 
+images_version (integer) เพิ่มทุกครั้งที่ image set เปลี่ยน
+
+
+ตัวอย่าง
+GET /v1/products/images/export?limit=500&offset=0&snapshot_at=2026-01-06T03:00:00Z
+
+
+
+Image URL Requirements
+URL ต้องเข้าถึงได้โดยระบบ indexing (ไม่ควรหมดอายุเร็ว)
+
+
+ถ้าเป็น signed URL ขอ TTL อย่างน้อย 24 ชั่วโมง
+
+
+file types: jpg/png/webp (ตามที่ทีมกำหนด)
+
+
+ขนาดไฟล์ (แนะนำ): ไม่เกิน 5–10MB ต่อรูป
+
+
+
+
+
+6) Error Handling (ทั้ง 2 endpoints)
+Response โครงสร้างแนะนำ:
+{
+  "error": {
+    "code": "INVALID_REQUEST",
+    "message": "keyword/ref_ids/product_code is required",
+    "details": {}
+  }
+}
+
+Status ที่ควรรองรับ:
+400 invalid request
+
+
+401 unauthorized
+
+
+403 forbidden
+
+
+404 not found (เฉพาะบางกรณี)
+
+
+429 rate limit
+
+
+500 server error
+
+
+
+7) Minimal Acceptance Checklist
+ทีม data ทำให้ครบตามนี้ถือว่า “พร้อมใช้งาน”:
+/v1/products/search รองรับ ref_ids[] (สำคัญ)
+
+
+/v1/products/images/export คืน ref_id + images[] (หลายรูปได้)
+
+
+export รองรับ paging และรองรับ incremental (updated_since หรือ images_version)
+
+
+มี updated_at / images_version เพื่อจับ “เปลี่ยนแปลง”
+
+
+response เป็น JSON เสถียร + error format ชัด
+
+
+
+ตัวอย่าง SQL (เพื่อให้ทีม data เห็นภาพ)
+1) API Product Search (SQL แบบง่าย)
+SELECT
+  p.ref_id,
+  p.product_code,
+  p.title,
+  p.brand,
+  p.status,
+  p.price,
+  p.updated_at
+FROM products p
+WHERE 1=1
+  AND (:product_code IS NULL OR p.product_code = :product_code)
+  AND (:status IS NULL OR p.status = :status)
+  AND (
+        :keyword IS NULL
+        OR (p.title ILIKE '%' || :keyword || '%')
+        OR (p.brand ILIKE '%' || :keyword || '%')
+      )
+  AND (
+        :refIds_is_empty = true
+        OR p.ref_id = ANY(:refIds)
+      )
+ORDER BY p.updated_at DESC
+LIMIT :limit OFFSET :offset;
+
+2) Export Images (PostgreSQL)
+A) Query หา total (นับจำนวนสินค้า/ref_id ที่เข้าข่าย)
+SELECT COUNT(*) AS total
+FROM (
+  SELECT pi.ref_id
+  FROM product_images pi
+  JOIN products p ON p.ref_id = pi.ref_id
+  WHERE 1=1
+    AND (:status IS NULL OR p.status = :status)
+    AND (:updated_since IS NULL OR pi.updated_at >= :updated_since)
+    AND (:snapshot_at IS NULL OR pi.updated_at <= :snapshot_at)
+  GROUP BY pi.ref_id
+) t;
+
+B) Query ดึงข้อมูล 1 หน้า (เลือก ref_id ก่อน แล้วค่อยรวมรูปเป็น images[])
+WITH page_ref AS (
+  SELECT pi.ref_id,
+         MAX(pi.updated_at) AS last_image_updated_at
+  FROM product_images pi
+  JOIN products p ON p.ref_id = pi.ref_id
+  WHERE 1=1
+    AND (:status IS NULL OR p.status = :status)
+    AND (:updated_since IS NULL OR pi.updated_at >= :updated_since)
+    AND (:snapshot_at IS NULL OR pi.updated_at <= :snapshot_at)
+  GROUP BY pi.ref_id
+  ORDER BY last_image_updated_at ASC, pi.ref_id ASC
+  LIMIT :limit OFFSET :offset
+)
+SELECT
+  pr.ref_id,
+  pr.last_image_updated_at,
+  COALESCE(
+    json_agg(
+      json_build_object(
+        'image_id', pi.image_id,
+        'url', pi.image_url,
+        'position', pi.position,
+        'updated_at', pi.updated_at,
+        'deleted', COALESCE(pi.deleted, false),
+        'hash', pi.hash
+      )
+      ORDER BY pi.position ASC, pi.image_id ASC
+    ) FILTER (WHERE pi.image_id IS NOT NULL),
+    '[]'::json
+  ) AS images
+FROM page_ref pr
+LEFT JOIN product_images pi ON pi.ref_id = pr.ref_id
+GROUP BY pr.ref_id, pr.last_image_updated_at
+ORDER BY pr.last_image_updated_at ASC, pr.ref_id ASC;
+
+หมายเหตุ : จะทำ JSON aggregation ใน SQL หรือไม่ก็ได้ขึ้นกับทางฝั่ง data ครับ

@@ -8,12 +8,21 @@ RUN apt-get update && apt-get install -y \
 RUN docker-php-ext-install pdo_mysql mysqli mbstring exif pcntl bcmath gd
 RUN a2enmod rewrite headers
 
+# Install Composer
+COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
+
 WORKDIR /var/www/html
 COPY . .
 
+# Install PHP dependencies (Google Cloud Storage SDK)
+RUN composer install --no-dev --optimize-autoloader --no-interaction || echo "Composer install failed, continuing..."
+
 RUN mkdir -p /var/www/html/storage/logs \
+    /var/www/html/storage/documents \
+    /var/www/html/config/gcp \
  && chown -R www-data:www-data /var/www/html \
- && chmod -R 755 /var/www/html
+ && chmod -R 755 /var/www/html \
+ && chmod 600 /var/www/html/config/gcp/service-account.json 2>/dev/null || true
 
 ENV PORT=8080
 
