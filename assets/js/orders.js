@@ -106,20 +106,29 @@ function renderOrders(orders) {
     }
 
     tbody.innerHTML = orders.map(order => {
+        // Map status to badge class (supports both old and new status names)
         const statusClass = {
+            'draft': 'secondary',
             'pending': 'warning',
+            'pending_payment': 'warning',
+            'paid': 'success',
             'processing': 'info',
             'shipped': 'primary',
             'delivered': 'success',
-            'cancelled': 'danger'
+            'cancelled': 'danger',
+            'refunded': 'danger'
         }[order.status] || 'secondary';
 
         const statusText = {
+            'draft': 'ร่าง',
             'pending': 'รอดำเนินการ',
+            'pending_payment': 'รอชำระเงิน',
+            'paid': 'ชำระแล้ว',
             'processing': 'กำลังเตรียม',
             'shipped': 'จัดส่งแล้ว',
             'delivered': 'ส่งถึงแล้ว',
-            'cancelled': 'ยกเลิก'
+            'cancelled': 'ยกเลิก',
+            'refunded': 'คืนเงิน'
         }[order.status] || order.status;
 
         const isHighlighted = targetOrderNo && String(order.order_no) === String(targetOrderNo);
@@ -135,18 +144,24 @@ function renderOrders(orders) {
             ? renderCustomerProfileBadge(customerProfile)
             : `<span>${customerProfile.name}</span>`;
 
+        // Map order_type to display (supports both old and new names)
+        const paymentType = order.payment_type || order.order_type || 'full_payment';
+        const isFullPayment = paymentType === 'full' || paymentType === 'full_payment';
+        const isInstallment = paymentType === 'installment';
+        const installmentMonths = order.installment_months || 0;
+
         return `
             <tr onclick="viewOrderDetail(${order.id})" style="cursor:pointer;${rowStyle}">
-                <td><strong>${order.order_no}</strong></td>
+                <td><strong>${order.order_no || order.order_number || '-'}</strong></td>
                 <td>${customerBadgeHtml}</td>
                 <td>
-                    ${order.product_name}<br>
+                    ${order.product_name || '-'}<br>
                     <small style="color:var(--color-gray);">${order.product_code || ''}</small>
                 </td>
                 <td style="text-align:right;"><strong>฿${formatNumber(order.total_amount)}</strong></td>
                 <td>
-                    <span class="badge badge-${order.payment_type === 'full' ? 'success' : 'info'}">
-                        ${order.payment_type === 'full' ? '💳 จ่ายเต็ม' : '📅 ผ่อน ' + order.installment_months + ' งวด'}
+                    <span class="badge badge-${isFullPayment ? 'success' : 'info'}">
+                        ${isFullPayment ? '💳 จ่ายเต็ม' : (isInstallment ? '📅 ผ่อน ' + installmentMonths + ' งวด' : '💰 ออมครบ')}
                     </span>
                 </td>
                 <td><span class="badge badge-${statusClass}">${statusText}</span></td>

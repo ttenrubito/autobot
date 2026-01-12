@@ -35,31 +35,23 @@ $case_id = $_GET['id'] ?? null;
 try {
     $pdo = getDB();
     
-    // Get customer_id (fallback to user_id if no customers table)
-    $customer_id = $user_id;
-    try {
-        $stmt = $pdo->prepare("SELECT id FROM customers WHERE user_id = ? LIMIT 1");
-        $stmt->execute([$user_id]);
-        $customer = $stmt->fetch(PDO::FETCH_ASSOC);
-        if ($customer) {
-            $customer_id = $customer['id'];
-        }
-    } catch (PDOException $e) {
-        // customers table doesn't exist, use user_id directly
-        $customer_id = $user_id;
-    }
+    // ✅ Get tenant_id from user (เจ้าของร้านดู cases ทั้งหมดของร้าน by tenant_id)
+    $stmt = $pdo->prepare("SELECT tenant_id FROM users WHERE id = ? LIMIT 1");
+    $stmt->execute([$user_id]);
+    $user = $stmt->fetch(PDO::FETCH_ASSOC);
+    $tenant_id = $user['tenant_id'] ?? 'default';
     
     if ($method === 'GET') {
         if ($case_id) {
             // Get specific case
-            getCaseDetail($pdo, $case_id, $customer_id);
+            getCaseDetail($pdo, $case_id, $tenant_id);
         } else {
-            // Get all cases for customer
-            getAllCases($pdo, $customer_id);
+            // Get all cases for this shop/tenant
+            getAllCases($pdo, $tenant_id);
         }
     } elseif ($method === 'POST') {
         // Create new case
-        createCase($pdo, $customer_id, $user_id);
+        createCase($pdo, $tenant_id, $user_id);
     } else {
         http_response_code(405);
         echo json_encode(['success' => false, 'message' => 'Method not allowed']);
@@ -75,9 +67,9 @@ try {
 }
 
 /**
- * Get all cases for customer
+ * Get all cases for shop/tenant (เจ้าของร้านดู cases ทั้งหมดของร้าน)
  */
-function getAllCases($pdo, $customer_id) {
+function getAllCases($pdo, $tenant_id) {
     $status = $_GET['status'] ?? null;
     $priority = $_GET['priority'] ?? null;
     
@@ -86,8 +78,9 @@ function getAllCases($pdo, $customer_id) {
     $limit = isset($_GET['limit']) ? min(100, max(1, (int)$_GET['limit'])) : 20;
     $offset = ($page - 1) * $limit;
     
-    $where = ['c.customer_id = ?'];
-    $params = [$customer_id];
+    // ✅ Query by tenant_id (ร้านดู cases ของ tenant ตัวเอง)
+    $where = ['c.tenant_id = ?'];
+    $params = [$tenant_id];
     
     if ($status) {
         $where[] = 'c.status = ?';
@@ -106,34 +99,27 @@ function getAllCases($pdo, $customer_id) {
     $countStmt->execute($params);
     $total = (int)$countStmt->fetchColumn();
     
-    // Get paginated results
+    // Get paginated results - simple query without JOIN to customer_profiles (table may not exist yet)
     $stmt = $pdo->prepare("
         SELECT 
             c.id,
             c.case_no,
             c.case_type,
             c.platform,
+            c.external_user_id,
             c.subject,
             c.description,
             c.status,
             c.priority,
             c.product_ref_id,
             c.order_id,
-            c.payment_id,
-            c.savings_account_id,
-            c.resolution_type,
-            c.resolution_notes,
+            c.slots,
+            c.assigned_to,
             c.created_at,
             c.updated_at,
             c.resolved_at,
-            c.customer_platform,
-            c.customer_name,
-            c.customer_avatar,
-            o.order_no,
-            o.product_name as order_product_name,
             u.full_name as assigned_to_name
         FROM cases c
-        LEFT JOIN orders o ON c.order_id = o.id
         LEFT JOIN users u ON c.assigned_to = u.id
         WHERE {$whereClause}
         ORDER BY c.created_at DESC
@@ -144,14 +130,20 @@ function getAllCases($pdo, $customer_id) {
     $stmt->execute($params);
     $cases = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
+    // Add customer name/avatar placeholder (profile data will be added when chat comes in)
+    foreach ($cases as &$case) {
+        $case['customer_name'] = $case['external_user_id'] ? ('ลูกค้า ' . substr($case['external_user_id'], -6)) : 'ไม่ระบุ';
+        $case['customer_avatar'] = null;
+    }
+    
     // Calculate summary from all records (not just current page)
     $summaryStmt = $pdo->prepare("
         SELECT status, COUNT(*) as count 
         FROM cases 
-        WHERE customer_id = ? 
+        WHERE tenant_id = ? 
         GROUP BY status
     ");
-    $summaryStmt->execute([$customer_id]);
+    $summaryStmt->execute([$tenant_id]);
     $statusCounts = $summaryStmt->fetchAll(PDO::FETCH_KEY_PAIR);
     
     $summary = [
@@ -182,7 +174,7 @@ function getAllCases($pdo, $customer_id) {
 /**
  * Get specific case detail
  */
-function getCaseDetail($pdo, $case_id, $customer_id) {
+function getCaseDetail($pdo, $case_id, $tenant_id) {
     $stmt = $pdo->prepare("
         SELECT 
             c.*,
@@ -199,9 +191,9 @@ function getCaseDetail($pdo, $case_id, $customer_id) {
         LEFT JOIN payments p ON c.payment_id = p.id
         LEFT JOIN savings_accounts sa ON c.savings_account_id = sa.id
         LEFT JOIN users u ON c.assigned_to = u.id
-        WHERE c.id = ? AND c.customer_id = ?
+        WHERE c.id = ? AND c.tenant_id = ?
     ");
-    $stmt->execute([$case_id, $customer_id]);
+    $stmt->execute([$case_id, $tenant_id]);
     $case = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if (!$case) {
@@ -209,6 +201,10 @@ function getCaseDetail($pdo, $case_id, $customer_id) {
         echo json_encode(['success' => false, 'message' => 'Case not found']);
         return;
     }
+    
+    // Add customer placeholder
+    $case['customer_name'] = $case['external_user_id'] ? ('ลูกค้า ' . substr($case['external_user_id'], -6)) : 'ไม่ระบุ';
+    $case['customer_avatar'] = null;
     
     // Get case history/messages if available
     try {
@@ -239,7 +235,7 @@ function getCaseDetail($pdo, $case_id, $customer_id) {
 /**
  * Create new case
  */
-function createCase($pdo, $customer_id, $user_id) {
+function createCase($pdo, $tenant_id, $user_id) {
     $input = json_decode(file_get_contents('php://input'), true);
     
     if (!$input) {
@@ -276,23 +272,11 @@ function createCase($pdo, $customer_id, $user_id) {
     // Generate case number
     $case_no = 'CASE-' . date('Ymd') . '-' . str_pad(mt_rand(1, 9999), 4, '0', STR_PAD_LEFT);
     
-    // Get channel_id for this customer
-    $channel_id = null;
-    try {
-        $stmt = $pdo->prepare("SELECT id FROM customer_services WHERE user_id = ? LIMIT 1");
-        $stmt->execute([$user_id]);
-        $channel = $stmt->fetch(PDO::FETCH_ASSOC);
-        if ($channel) {
-            $channel_id = $channel['id'];
-        }
-    } catch (PDOException $e) {
-        // Ignore if table doesn't exist
-    }
-    
-    // Default channel_id to 1 if not found (required field)
-    if (!$channel_id) {
-        $channel_id = 1;
-    }
+    // Get first channel owned by user
+    $chStmt = $pdo->prepare("SELECT id FROM customer_channels WHERE user_id = ? AND is_deleted = 0 LIMIT 1");
+    $chStmt->execute([$user_id]);
+    $ch = $chStmt->fetch(PDO::FETCH_ASSOC);
+    $channel_id = $ch ? $ch['id'] : 1;
     
     $stmt = $pdo->prepare("
         INSERT INTO cases (
@@ -300,7 +284,7 @@ function createCase($pdo, $customer_id, $user_id) {
             case_type, subject, description, priority, status,
             order_id, payment_id, created_at
         ) VALUES (
-            ?, 'default', ?, ?, ?, 'web',
+            ?, ?, ?, ?, ?, 'web',
             ?, ?, ?, ?, 'open',
             ?, ?, NOW()
         )
@@ -308,9 +292,10 @@ function createCase($pdo, $customer_id, $user_id) {
     
     $stmt->execute([
         $case_no,
-        $customer_id,
+        $tenant_id,
+        $user_id,  // customer_id = user who created
         $channel_id,
-        'web_user_' . $customer_id,
+        'web_user_' . $user_id,
         $case_type,
         $subject,
         $description,

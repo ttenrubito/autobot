@@ -27,7 +27,7 @@ SELECT
             JSON_OBJECT('id', 'conversations', 'label', 'แชทกับลูกค้า', 'enabled', true, 'icon', '💭', 'url', 'conversations.php'),
             JSON_OBJECT('id', 'addresses', 'label', 'ที่อยู่จัดส่ง', 'enabled', true, 'icon', '📍', 'url', 'addresses.php'),
             JSON_OBJECT('id', 'orders', 'label', 'คำสั่งซื้อ', 'enabled', true, 'icon', '📦', 'url', 'orders.php'),
-            JSON_OBJECT('id', 'payment_history', 'label', 'ประวัติการชำระ / ตรวจสลิป', 'enabled', true, 'icon', '💰', 'url', 'payment-history.php'),
+            JSON_OBJECT('id', 'payment_history', 'label', 'ประวัติการชำระ(ตรวจ)', 'enabled', true, 'icon', '💰', 'url', 'payment-history.php'),
             JSON_OBJECT('id', 'profile', 'label', 'โปรไฟล์', 'enabled', true, 'icon', '👤', 'url', 'profile.php')
         )
     ),
@@ -46,7 +46,7 @@ ON DUPLICATE KEY UPDATE
             JSON_OBJECT('id', 'conversations', 'label', 'แชทกับลูกค้า', 'enabled', true, 'icon', '💭', 'url', 'conversations.php'),
             JSON_OBJECT('id', 'addresses', 'label', 'ที่อยู่จัดส่ง', 'enabled', true, 'icon', '📍', 'url', 'addresses.php'),
             JSON_OBJECT('id', 'orders', 'label', 'คำสั่งซื้อ', 'enabled', true, 'icon', '📦', 'url', 'orders.php'),
-            JSON_OBJECT('id', 'payment_history', 'label', 'ประวัติการชำระ / ตรวจสลิป', 'enabled', true, 'icon', '💰', 'url', 'payment-history.php'),
+            JSON_OBJECT('id', 'payment_history', 'label', 'ประวัติการชำระ(ตรวจ)', 'enabled', true, 'icon', '💰', 'url', 'payment-history.php'),
             JSON_OBJECT('id', 'profile', 'label', 'โปรไฟล์', 'enabled', true, 'icon', '👤', 'url', 'profile.php')
         )
     ),

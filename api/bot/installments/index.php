@@ -22,7 +22,11 @@ require_once __DIR__ . '/../../../includes/Logger.php';
 // Parse request
 $method = $_SERVER['REQUEST_METHOD'];
 $uri = $_SERVER['REQUEST_URI'];
-$uri_parts = explode('/', trim(parse_url($uri, PHP_URL_PATH), '/'));
+
+// Normalize path - remove index.php if present
+$path = parse_url($uri, PHP_URL_PATH);
+$path = preg_replace('#/index\.php$#', '', $path);
+$uri_parts = explode('/', trim($path, '/'));
 
 // Expected: /api/bot/installments/{id?}/{action?}
 // Also support router-provided params via $_GET

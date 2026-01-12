@@ -14,12 +14,15 @@ const AVAILABLE_MENUS = [
     { id: 'conversations', label: 'แชทกับลูกค้า', icon: '💭', url: 'conversations.php' },
     { id: 'addresses', label: 'ที่อยู่จัดส่ง', icon: '📍', url: 'addresses.php' },
     { id: 'orders', label: 'คำสั่งซื้อ', icon: '📦', url: 'orders.php' },
-    { id: 'payment_history', label: 'ประวัติการชำระ / ตรวจสลิป', icon: '💰', url: 'payment-history.php' },
+    { id: 'payment_history', label: 'ประวัติการชำระ(ตรวจ)', icon: '💰', url: 'payment-history.php' },
     { id: 'campaigns', label: 'จัดการแคมเปญ', icon: '🎯', url: 'campaigns.php' },
     { id: 'line_applications', label: 'ใบสมัคร LINE', icon: '📋', url: 'line-applications.php' },
     { id: 'cases', label: 'Case Inbox', icon: '📥', url: 'cases.php' },
     { id: 'savings', label: 'ออมเงิน', icon: '🐷', url: 'savings.php' },
     { id: 'installments', label: 'ผ่อนชำระ', icon: '📅', url: 'installments.php' },
+    { id: 'deposits', label: 'มัดจำสินค้า', icon: '💎', url: 'deposits.php' },
+    { id: 'pawns', label: 'ฝากจำนำ', icon: '🏆', url: 'pawns.php' },
+    { id: 'repairs', label: 'งานซ่อม', icon: '🔧', url: 'repairs.php' },
     { id: 'profile', label: 'โปรไฟล์', icon: '👤', url: 'profile.php' },
 ];
 

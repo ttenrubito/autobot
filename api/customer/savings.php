@@ -2,19 +2,34 @@
 /**
  * Customer Savings API
  * 
- * GET  /api/customer/savings           - Get all savings for customer
+ * GET  /api/customer/savings           - Get all savings accounts for customer
  * POST /api/customer/savings           - Create new savings account
  * POST /api/customer/savings?action=deposit  - Add deposit
  * GET  /api/customer/savings?id=X      - Get specific savings account
  * 
- * @version 1.0
- * @date 2026-01-07
+ * Database Schema (savings_accounts table):
+ * - id, account_no, tenant_id, customer_id, channel_id, external_user_id, platform
+ * - product_ref_id, product_name, product_price
+ * - target_amount, current_amount, min_deposit_amount
+ * - started_at, target_date, completed_at
+ * - status (active, completed, converted, cancelled, expired, refunded)
+ * - order_id, case_id, admin_notes
+ * - created_at, updated_at
+ * 
+ * Database Schema (savings_transactions table):
+ * - id, transaction_no, savings_account_id, tenant_id
+ * - transaction_type, amount, balance_after, payment_method
+ * - slip_image_url, slip_ocr_data, payment_amount, payment_time, sender_name
+ * - status, verified_by, verified_at, rejection_reason, notes
+ * - case_id, created_at, updated_at
+ * 
+ * @version 3.0
+ * @date 2026-01-11
  */
 
 header('Content-Type: application/json');
 require_once __DIR__ . '/../../config.php';
 require_once __DIR__ . '/../../includes/auth.php';
-require_once __DIR__ . '/../../includes/Database.php';
 
 // Verify authentication
 $auth = verifyToken();
@@ -30,38 +45,44 @@ $action = $_GET['action'] ?? null;
 $savings_id = $_GET['id'] ?? null;
 
 try {
-    $db = Database::getInstance();
     $pdo = getDB();
     
-    // Get customer_id from user_id (fallback to user_id if no customers table)
-    $customer_id = $user_id;
-    try {
-        $stmt = $pdo->prepare("SELECT id FROM customers WHERE user_id = ? LIMIT 1");
-        $stmt->execute([$user_id]);
-        $customer = $stmt->fetch(PDO::FETCH_ASSOC);
-        if ($customer) {
-            $customer_id = $customer['id'];
-        }
-    } catch (PDOException $e) {
-        // customers table doesn't exist, use user_id directly
-        $customer_id = $user_id;
+    // Check if savings_accounts table exists
+    $tableCheck = $pdo->query("SHOW TABLES LIKE 'savings_accounts'");
+    if ($tableCheck->rowCount() === 0) {
+        // Table doesn't exist yet - return empty data with message
+        echo json_encode([
+            'success' => true,
+            'data' => [],
+            'summary' => [
+                'total_saved' => 0,
+                'total_goal' => 0,
+                'total_pending' => 0,
+                'active_count' => 0,
+                'completed_count' => 0
+            ],
+            'pagination' => [
+                'page' => 1,
+                'limit' => 20,
+                'total' => 0,
+                'total_pages' => 0
+            ],
+            'message' => 'ระบบออมเงินยังไม่พร้อมใช้งาน กรุณาติดต่อผู้ดูแลระบบ'
+        ]);
+        exit;
     }
     
     if ($method === 'GET') {
         if ($savings_id) {
-            // Get specific savings account
-            getSavingsDetail($pdo, $savings_id, $customer_id);
+            getSavingsDetail($pdo, $savings_id, $user_id);
         } else {
-            // Get all savings for customer
-            getAllSavings($pdo, $customer_id);
+            getAllSavings($pdo, $user_id);
         }
     } elseif ($method === 'POST') {
         if ($action === 'deposit') {
-            // Add deposit
-            addDeposit($pdo, $customer_id);
+            addDeposit($pdo, $user_id);
         } else {
-            // Create new savings account
-            createSavings($pdo, $customer_id);
+            createSavings($pdo, $user_id);
         }
     } else {
         http_response_code(405);
@@ -73,71 +94,103 @@ try {
     http_response_code(500);
     echo json_encode([
         'success' => false,
-        'message' => 'เกิดข้อผิดพลาด กรุณาลองใหม่'
+        'message' => 'เกิดข้อผิดพลาด กรุณาลองใหม่',
+        'error' => $e->getMessage()
     ]);
 }
 
 /**
  * Get all savings accounts for customer
  */
-function getAllSavings($pdo, $customer_id) {
+function getAllSavings($pdo, $user_id) {
     // Pagination
     $page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
     $limit = isset($_GET['limit']) ? min(100, max(1, (int)$_GET['limit'])) : 20;
     $offset = ($page - 1) * $limit;
     
+    // Status filter
+    $status = isset($_GET['status']) ? $_GET['status'] : null;
+    
+    // Build WHERE clause - use customer_id column
+    $where = ['s.customer_id = ?'];
+    $params = [$user_id];
+    
+    if ($status) {
+        $where[] = 's.status = ?';
+        $params[] = $status;
+    }
+    
+    $where_clause = implode(' AND ', $where);
+    
     // Get total count first
-    $countStmt = $pdo->prepare("SELECT COUNT(*) FROM savings_accounts WHERE customer_id = ?");
-    $countStmt->execute([$customer_id]);
+    $countStmt = $pdo->prepare("SELECT COUNT(*) FROM savings_accounts s WHERE $where_clause");
+    $countStmt->execute($params);
     $total = (int)$countStmt->fetchColumn();
     
+    // Get savings accounts with progress
     $stmt = $pdo->prepare("
         SELECT 
-            s.*,
-            s.customer_platform,
-            s.customer_name,
-            s.customer_avatar,
-            COALESCE(
-                (SELECT SUM(amount) FROM savings_transactions WHERE savings_account_id = s.id AND status = 'verified'),
-                0
-            ) as verified_amount,
-            COALESCE(
-                (SELECT SUM(amount) FROM savings_transactions WHERE savings_account_id = s.id AND status = 'pending'),
-                0
-            ) as pending_amount,
-            ROUND((COALESCE(s.current_amount, 0) / NULLIF(s.target_amount, 0)) * 100, 1) as progress_percent
+            s.id,
+            s.account_no,
+            s.customer_id,
+            s.product_ref_id,
+            s.product_name,
+            s.product_price,
+            s.target_amount,
+            s.current_amount,
+            s.current_amount as saved_amount,
+            s.min_deposit_amount,
+            s.status,
+            s.target_date,
+            s.completed_at,
+            s.started_at,
+            s.admin_notes as note,
+            s.created_at,
+            s.updated_at,
+            -- Progress percentage
+            ROUND((s.current_amount / NULLIF(s.target_amount, 0)) * 100, 1) as progress_percent
         FROM savings_accounts s
-        WHERE s.customer_id = ?
+        WHERE $where_clause
         ORDER BY s.created_at DESC
         LIMIT ? OFFSET ?
     ");
-    $stmt->execute([$customer_id, $limit, $offset]);
+    $params[] = $limit;
+    $params[] = $offset;
+    $stmt->execute($params);
     $savings = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // Calculate summary from all records
+    // Calculate summary from all records for this user
     $summaryStmt = $pdo->prepare("
         SELECT 
-            SUM(current_amount) as total_saved,
-            SUM(target_amount) as total_goal,
-            SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active_count
+            COALESCE(SUM(current_amount), 0) as total_saved,
+            COALESCE(SUM(target_amount), 0) as total_goal,
+            0 as total_pending,
+            SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active_count,
+            SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_count
         FROM savings_accounts
         WHERE customer_id = ?
     ");
-    $summaryStmt->execute([$customer_id]);
+    $summaryStmt->execute([$user_id]);
     $summaryData = $summaryStmt->fetch(PDO::FETCH_ASSOC);
     
     $totalSaved = (float)($summaryData['total_saved'] ?? 0);
     $totalGoal = (float)($summaryData['total_goal'] ?? 0);
+    $totalPending = (float)($summaryData['total_pending'] ?? 0);
     $activeCount = (int)($summaryData['active_count'] ?? 0);
+    $completedCount = (int)($summaryData['completed_count'] ?? 0);
     
+    // Process each savings account
     foreach ($savings as &$s) {
+        $s['saved_amount'] = (float)($s['saved_amount'] ?? 0);
         $s['current_amount'] = (float)($s['current_amount'] ?? 0);
         $s['target_amount'] = (float)($s['target_amount'] ?? 0);
+        $s['pending_amount'] = 0;
         $s['remaining'] = max(0, $s['target_amount'] - $s['current_amount']);
         $s['progress_percent'] = (float)($s['progress_percent'] ?? 0);
-        // Use product_name as display name
-        $s['name'] = $s['product_name'] ?? 'ออมเงิน #' . $s['id'];
+        $s['display_name'] = $s['product_name'] ?: ('ออมเงิน #' . $s['account_no']);
+        $s['name'] = $s['display_name'];
     }
+    unset($s);
     
     echo json_encode([
         'success' => true,
@@ -145,8 +198,10 @@ function getAllSavings($pdo, $customer_id) {
         'summary' => [
             'total_saved' => $totalSaved,
             'total_goal' => $totalGoal,
+            'total_pending' => $totalPending,
             'overall_progress' => $totalGoal > 0 ? round(($totalSaved / $totalGoal) * 100, 1) : 0,
-            'active_count' => $activeCount
+            'active_count' => $activeCount,
+            'completed_count' => $completedCount
         ],
         'pagination' => [
             'page' => $page,
@@ -160,12 +215,16 @@ function getAllSavings($pdo, $customer_id) {
 /**
  * Get specific savings account detail
  */
-function getSavingsDetail($pdo, $savings_id, $customer_id) {
+function getSavingsDetail($pdo, $savings_id, $user_id) {
     $stmt = $pdo->prepare("
-        SELECT * FROM savings_accounts 
-        WHERE id = ? AND customer_id = ?
+        SELECT 
+            s.*,
+            s.current_amount as saved_amount,
+            ROUND((s.current_amount / NULLIF(s.target_amount, 0)) * 100, 1) as progress_percent
+        FROM savings_accounts s
+        WHERE (s.id = ? OR s.account_no = ?) AND s.customer_id = ?
     ");
-    $stmt->execute([$savings_id, $customer_id]);
+    $stmt->execute([$savings_id, $savings_id, $user_id]);
     $savings = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if (!$savings) {
@@ -175,36 +234,60 @@ function getSavingsDetail($pdo, $savings_id, $customer_id) {
     }
     
     // Get transactions/deposits
-    $stmt = $pdo->prepare("
-        SELECT * FROM savings_transactions 
-        WHERE savings_account_id = ?
-        ORDER BY created_at DESC
-    ");
-    $stmt->execute([$savings_id]);
-    $transactions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $transactions = [];
+    $txTableCheck = $pdo->query("SHOW TABLES LIKE 'savings_transactions'");
+    if ($txTableCheck->rowCount() > 0) {
+        $stmt = $pdo->prepare("
+            SELECT 
+                t.id,
+                t.transaction_no,
+                t.savings_account_id,
+                t.amount,
+                t.balance_after,
+                t.transaction_type,
+                t.status,
+                t.slip_image_url,
+                t.slip_image_url as slip_image,
+                t.payment_method,
+                t.sender_name,
+                t.payment_time as transfer_time,
+                t.verified_by,
+                t.verified_at,
+                t.rejection_reason,
+                t.notes as note,
+                t.created_at,
+                t.updated_at
+            FROM savings_transactions t
+            WHERE t.savings_account_id = ?
+            ORDER BY t.created_at DESC
+        ");
+        $stmt->execute([$savings['id']]);
+        $transactions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
     
-    // Calculate pending amount
+    // Calculate pending amount from transactions
     $pendingAmount = 0;
     foreach ($transactions as $t) {
-        if ($t['status'] === 'pending') {
+        if ($t['status'] === 'pending' && $t['transaction_type'] === 'deposit') {
             $pendingAmount += (float)$t['amount'];
         }
     }
     
     // Calculate progress
+    $savings['saved_amount'] = (float)($savings['saved_amount'] ?? 0);
     $savings['current_amount'] = (float)($savings['current_amount'] ?? 0);
     $savings['target_amount'] = (float)($savings['target_amount'] ?? 0);
     $savings['pending_amount'] = $pendingAmount;
     $savings['remaining'] = max(0, $savings['target_amount'] - $savings['current_amount']);
-    $savings['progress_percent'] = $savings['target_amount'] > 0 
-        ? round(($savings['current_amount'] / $savings['target_amount']) * 100, 1) 
-        : 0;
-    $savings['name'] = $savings['product_name'] ?? 'ออมเงิน #' . $savings['id'];
+    $savings['progress_percent'] = (float)($savings['progress_percent'] ?? 0);
+    $savings['display_name'] = $savings['product_name'] ?: ('ออมเงิน #' . $savings['account_no']);
+    $savings['name'] = $savings['display_name'];
     
     echo json_encode([
         'success' => true, 
         'data' => [
             'account' => $savings,
+            'goal' => $savings,
             'transactions' => $transactions
         ]
     ]);
@@ -213,11 +296,12 @@ function getSavingsDetail($pdo, $savings_id, $customer_id) {
 /**
  * Create new savings account
  */
-function createSavings($pdo, $customer_id) {
+function createSavings($pdo, $user_id) {
     $input = json_decode(file_get_contents('php://input'), true);
     
-    $productName = trim($input['name'] ?? $input['product_name'] ?? '');
+    $productName = trim($input['product_name'] ?? $input['name'] ?? '');
     $targetAmount = (float)($input['target_amount'] ?? 0);
+    $productPrice = (float)($input['product_price'] ?? $targetAmount);
     $targetDate = $input['target_date'] ?? null;
     $note = trim($input['note'] ?? '');
     
@@ -229,36 +313,37 @@ function createSavings($pdo, $customer_id) {
     
     // Generate account number
     $accountNo = 'SAV-' . date('Ymd') . '-' . strtoupper(substr(bin2hex(random_bytes(3)), 0, 5));
+    $productRefId = 'PROD-' . strtoupper(substr(bin2hex(random_bytes(4)), 0, 8));
     
     $stmt = $pdo->prepare("
         INSERT INTO savings_accounts 
-        (account_no, tenant_id, customer_id, channel_id, external_user_id, platform,
-         product_ref_id, product_name, product_price, target_amount, target_date, 
-         status, current_amount, admin_notes, created_at)
-        VALUES (?, 'default', ?, 1, '', 'web',
-                ?, ?, ?, ?, ?, 
-                'active', 0, ?, NOW())
+        (account_no, customer_id, channel_id, external_user_id, platform, product_ref_id, 
+         product_name, product_price, target_amount, current_amount, status, 
+         target_date, admin_notes, created_at, updated_at)
+        VALUES (?, ?, 0, ?, 'web', ?, ?, ?, ?, 0, 'active', ?, ?, NOW(), NOW())
     ");
     
     $stmt->execute([
         $accountNo,
-        $customer_id,
-        $accountNo, // product_ref_id
+        $user_id,
+        'user_' . $user_id,
+        $productRefId,
         $productName,
-        $targetAmount,
+        $productPrice,
         $targetAmount,
         $targetDate ?: null,
-        $note
+        $note ?: null
     ]);
     
     $id = $pdo->lastInsertId();
     
     echo json_encode([
         'success' => true,
-        'message' => 'สร้างเป้าหมายออมเงินสำเร็จ',
+        'message' => 'สร้างบัญชีออมสินค้าสำเร็จ',
         'data' => [
             'id' => $id,
-            'account_no' => $accountNo
+            'account_no' => $accountNo,
+            'product_ref_id' => $productRefId
         ]
     ]);
 }
@@ -266,10 +351,10 @@ function createSavings($pdo, $customer_id) {
 /**
  * Add deposit to savings account
  */
-function addDeposit($pdo, $customer_id) {
+function addDeposit($pdo, $user_id) {
     $input = json_decode(file_get_contents('php://input'), true);
     
-    $savingsId = (int)($input['savings_id'] ?? 0);
+    $savingsId = (int)($input['savings_id'] ?? $input['savings_account_id'] ?? 0);
     $amount = (float)($input['amount'] ?? 0);
     $note = trim($input['note'] ?? '');
     
@@ -280,8 +365,12 @@ function addDeposit($pdo, $customer_id) {
     }
     
     // Verify ownership
-    $stmt = $pdo->prepare("SELECT id, status, current_amount FROM savings_accounts WHERE id = ? AND customer_id = ?");
-    $stmt->execute([$savingsId, $customer_id]);
+    $stmt = $pdo->prepare("
+        SELECT id, account_no, status, current_amount 
+        FROM savings_accounts 
+        WHERE id = ? AND customer_id = ?
+    ");
+    $stmt->execute([$savingsId, $user_id]);
     $savings = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if (!$savings) {
@@ -296,25 +385,46 @@ function addDeposit($pdo, $customer_id) {
         return;
     }
     
-    // Generate transaction number
-    $txNo = 'SAVTX-' . date('Ymd') . '-' . strtoupper(substr(bin2hex(random_bytes(3)), 0, 5));
-    $balanceAfter = (float)$savings['current_amount'] + $amount;
+    // Check if savings_transactions table exists
+    $txTableCheck = $pdo->query("SHOW TABLES LIKE 'savings_transactions'");
+    if ($txTableCheck->rowCount() === 0) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'ระบบยังไม่พร้อม กรุณาติดต่อผู้ดูแล']);
+        return;
+    }
     
-    $stmt = $pdo->prepare("
-        INSERT INTO savings_transactions 
-        (transaction_no, savings_account_id, tenant_id, transaction_type, amount, balance_after, notes, status, created_at)
-        VALUES (?, ?, 'default', 'deposit', ?, ?, ?, 'pending', NOW())
-    ");
-    
-    $stmt->execute([$txNo, $savingsId, $amount, $balanceAfter, $note]);
-    
-    echo json_encode([
-        'success' => true,
-        'message' => 'บันทึกยอดฝากเรียบร้อย รอตรวจสอบ',
-        'data' => [
-            'transaction_no' => $txNo,
-            'amount' => $amount,
-            'status' => 'pending'
-        ]
-    ]);
+    try {
+        $pdo->beginTransaction();
+        
+        // Generate transaction number
+        $txNo = 'SAVTX-' . date('Ymd') . '-' . strtoupper(substr(bin2hex(random_bytes(3)), 0, 5));
+        $balanceAfter = (float)$savings['current_amount'] + $amount;
+        
+        // Insert transaction
+        $stmt = $pdo->prepare("
+            INSERT INTO savings_transactions 
+            (transaction_no, savings_account_id, transaction_type, amount, balance_after, 
+             status, notes, created_at, updated_at)
+            VALUES (?, ?, 'deposit', ?, ?, 'pending', ?, NOW(), NOW())
+        ");
+        $stmt->execute([$txNo, $savingsId, $amount, $balanceAfter, $note ?: null]);
+        $txId = $pdo->lastInsertId();
+        
+        $pdo->commit();
+        
+        echo json_encode([
+            'success' => true,
+            'message' => 'บันทึกยอดฝากเรียบร้อย รอตรวจสอบ',
+            'data' => [
+                'transaction_id' => $txId,
+                'transaction_no' => $txNo,
+                'amount' => $amount,
+                'status' => 'pending'
+            ]
+        ]);
+        
+    } catch (Exception $e) {
+        $pdo->rollBack();
+        throw $e;
+    }
 }

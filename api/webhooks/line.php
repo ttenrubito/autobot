@@ -145,6 +145,12 @@ function processEvent($event) {
     $adminUserIds = $config['admin_user_ids'] ?? [];
     $isAdmin = in_array($userId, $adminUserIds, true);
     
+    // ✅ Upsert customer profile (ถ้าเป็นข้อความจากลูกค้า ไม่ใช่ admin)
+    $channelAccessToken = $config['channel_access_token'] ?? '';
+    if (!$isAdmin && !empty($userId) && !empty($channelAccessToken)) {
+        upsertCustomerProfile('line', $userId, $channelAccessToken);
+    }
+    
     if ($isAdmin) {
         Logger::info('[LINE_WEBHOOK] Admin user detected', [
             'user_id' => $userId,
@@ -641,4 +647,77 @@ function sendLineReply($replyToken, $texts, $actions, $channel) {
         'message_count' => count($messages)
     ]);
     return true;
+}
+
+/**
+ * Upsert customer profile from LINE
+ * บันทึกหรืออัพเดท profile ลูกค้าจาก LINE (ซ้ำไม่ได้)
+ */
+function upsertCustomerProfile(string $platform, string $platformUserId, string $channelAccessToken): void
+{
+    if (empty($platformUserId) || empty($channelAccessToken)) {
+        return;
+    }
+    
+    try {
+        // Get profile from LINE API
+        $profileUrl = "https://api.line.me/v2/bot/profile/{$platformUserId}";
+        
+        $ch = curl_init($profileUrl);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 5,
+            CURLOPT_HTTPHEADER => [
+                'Authorization: Bearer ' . $channelAccessToken
+            ]
+        ]);
+        $resp = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        
+        if ($httpCode !== 200) {
+            Logger::warning('[LINE_PROFILE] Failed to get profile from LINE', [
+                'platform_user_id' => $platformUserId,
+                'http_code' => $httpCode,
+            ]);
+            return;
+        }
+        
+        $profile = json_decode($resp, true);
+        if (!is_array($profile)) {
+            return;
+        }
+        
+        $displayName = $profile['displayName'] ?? null;
+        $avatarUrl = $profile['pictureUrl'] ?? null;
+        
+        if (!$displayName && !$avatarUrl) {
+            return;
+        }
+        
+        // Upsert into customer_profiles (INSERT ... ON DUPLICATE KEY UPDATE)
+        $db = Database::getInstance();
+        $sql = "
+            INSERT INTO customer_profiles (platform, platform_user_id, display_name, avatar_url, first_seen_at, last_active_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, NOW(), NOW(), NOW(), NOW())
+            ON DUPLICATE KEY UPDATE 
+                display_name = COALESCE(VALUES(display_name), display_name),
+                avatar_url = COALESCE(VALUES(avatar_url), avatar_url),
+                last_active_at = NOW(),
+                updated_at = NOW()
+        ";
+        
+        $db->execute($sql, [$platform, $platformUserId, $displayName, $avatarUrl]);
+        
+        Logger::info('[LINE_PROFILE] Customer profile upserted', [
+            'platform' => $platform,
+            'platform_user_id' => $platformUserId,
+            'display_name' => $displayName,
+        ]);
+        
+    } catch (Throwable $e) {
+        Logger::error('[LINE_PROFILE] Error upserting customer profile: ' . $e->getMessage(), [
+            'platform_user_id' => $platformUserId,
+        ]);
+    }
 }

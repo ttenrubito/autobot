@@ -93,7 +93,7 @@ if (!isset($current_page)) {
             <li class="sidebar-nav-item" data-menu="payment_history">
                 <a href="payment-history.php" class="sidebar-nav-link <?php echo ($current_page === 'payment_history') ? 'active' : ''; ?>">
                     <span class="sidebar-nav-icon">💰</span>
-                    <span>ประวัติการชำระ / ตรวจสลิป</span>
+                    <span>ประวัติการชำระ(ตรวจ)</span>
                 </a>
             </li>
             <li class="sidebar-nav-item" data-menu="campaigns">
@@ -124,6 +124,24 @@ if (!isset($current_page)) {
                 <a href="installments.php" class="sidebar-nav-link <?php echo ($current_page === 'installments') ? 'active' : ''; ?>">
                     <span class="sidebar-nav-icon">📅</span>
                     <span>ผ่อนชำระ</span>
+                </a>
+            </li>
+            <li class="sidebar-nav-item" data-menu="deposits">
+                <a href="deposits.php" class="sidebar-nav-link <?php echo ($current_page === 'deposits') ? 'active' : ''; ?>">
+                    <span class="sidebar-nav-icon">💎</span>
+                    <span>มัดจำสินค้า</span>
+                </a>
+            </li>
+            <li class="sidebar-nav-item" data-menu="pawns">
+                <a href="pawns.php" class="sidebar-nav-link <?php echo ($current_page === 'pawns') ? 'active' : ''; ?>">
+                    <span class="sidebar-nav-icon">🏆</span>
+                    <span>ฝากจำนำ</span>
+                </a>
+            </li>
+            <li class="sidebar-nav-item" data-menu="repairs">
+                <a href="repairs.php" class="sidebar-nav-link <?php echo ($current_page === 'repairs') ? 'active' : ''; ?>">
+                    <span class="sidebar-nav-icon">🔧</span>
+                    <span>งานซ่อม</span>
                 </a>
             </li>
             <li class="sidebar-nav-item" data-menu="profile">

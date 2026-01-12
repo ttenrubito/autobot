@@ -5,8 +5,7 @@
  */
 
 define('INCLUDE_CHECK', true);
-require_once __DIR__ . '/../../includes/config.php';
-require_once __DIR__ . '/../../includes/db.php';
+require_once __DIR__ . '/../../config.php';
 require_once __DIR__ . '/../../includes/auth.php';
 
 header('Content-Type: application/json');
@@ -25,7 +24,7 @@ if (!isset($_SESSION['user_id'])) {
 $userId = $_SESSION['user_id'];
 
 try {
-    $db = getDbConnection();
+    $db = getDB();
     
     // 2) Get active subscription with plan details
     $stmt = $db->prepare("

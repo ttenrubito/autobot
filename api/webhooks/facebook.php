@@ -209,6 +209,14 @@ function processMessagingEvent(array $event, string $entryPageId): void
         return;
     }
     
+    // ✅ Upsert customer profile (ถ้าเป็นข้อความจากลูกค้า ไม่ใช่ admin)
+    // Get page_access_token from channel config JSON
+    $cfg = json_decode($channel['config'] ?? '{}', true);
+    $pageAccessToken = trim((string)($cfg['page_access_token'] ?? ''));
+    if (!$isAdmin && !empty($senderId) && !empty($pageAccessToken)) {
+        upsertCustomerProfile('facebook', $senderId, $pageAccessToken);
+    }
+    
     $isAdminCommand = false;
     if ($isAdmin && $text !== '') {  // ✅ Check if message is FROM the page (human staff OR automation bot)
         $textLower = mb_strtolower(trim($text), 'UTF-8');
@@ -783,4 +791,74 @@ function sendFacebookImage(string $recipientPsid, string $imageUrl, array $chann
         'facebook_response' => json_decode($resp, true)
     ]);
     return true;
+}
+
+/**
+ * Upsert customer profile from Facebook
+ * บันทึกหรืออัพเดท profile ลูกค้าจาก Facebook (ซ้ำไม่ได้)
+ */
+function upsertCustomerProfile(string $platform, string $platformUserId, string $pageAccessToken): void
+{
+    if (empty($platformUserId) || empty($pageAccessToken)) {
+        return;
+    }
+    
+    try {
+        // Get profile from Facebook Graph API
+        $profileUrl = "https://graph.facebook.com/v18.0/{$platformUserId}?fields=name,profile_pic&access_token={$pageAccessToken}";
+        
+        $ch = curl_init($profileUrl);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 5,
+        ]);
+        $resp = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        
+        if ($httpCode !== 200) {
+            Logger::warning('[FB_PROFILE] Failed to get profile from Facebook', [
+                'platform_user_id' => $platformUserId,
+                'http_code' => $httpCode,
+            ]);
+            return;
+        }
+        
+        $profile = json_decode($resp, true);
+        if (!is_array($profile)) {
+            return;
+        }
+        
+        $displayName = $profile['name'] ?? null;
+        $avatarUrl = $profile['profile_pic'] ?? null;
+        
+        if (!$displayName && !$avatarUrl) {
+            return;
+        }
+        
+        // Upsert into customer_profiles (INSERT ... ON DUPLICATE KEY UPDATE)
+        $db = Database::getInstance();
+        $sql = "
+            INSERT INTO customer_profiles (platform, platform_user_id, display_name, avatar_url, first_seen_at, last_active_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, NOW(), NOW(), NOW(), NOW())
+            ON DUPLICATE KEY UPDATE 
+                display_name = COALESCE(VALUES(display_name), display_name),
+                avatar_url = COALESCE(VALUES(avatar_url), avatar_url),
+                last_active_at = NOW(),
+                updated_at = NOW()
+        ";
+        
+        $db->execute($sql, [$platform, $platformUserId, $displayName, $avatarUrl]);
+        
+        Logger::info('[FB_PROFILE] Customer profile upserted', [
+            'platform' => $platform,
+            'platform_user_id' => $platformUserId,
+            'display_name' => $displayName,
+        ]);
+        
+    } catch (Throwable $e) {
+        Logger::error('[FB_PROFILE] Error upserting customer profile: ' . $e->getMessage(), [
+            'platform_user_id' => $platformUserId,
+        ]);
+    }
 }

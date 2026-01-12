@@ -33,6 +33,30 @@ try {
     $db = Database::getInstance();
     $pdo = getDB();
     
+    // Check if installment_contracts table exists
+    $tableCheck = $pdo->query("SHOW TABLES LIKE 'installment_contracts'");
+    if ($tableCheck->rowCount() === 0) {
+        // Table doesn't exist yet - return empty data with message
+        echo json_encode([
+            'success' => true,
+            'data' => [],
+            'summary' => [
+                'total_paid' => 0,
+                'total_remaining' => 0,
+                'active_count' => 0,
+                'overdue_count' => 0
+            ],
+            'pagination' => [
+                'page' => 1,
+                'limit' => 20,
+                'total' => 0,
+                'total_pages' => 0
+            ],
+            'message' => 'ระบบผ่อนชำระยังไม่พร้อมใช้งาน กรุณาติดต่อผู้ดูแลระบบ'
+        ]);
+        exit;
+    }
+    
     // Get customer_id from user_id (fallback to user_id if no customers table)
     $customer_id = $user_id;
     try {

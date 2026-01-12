@@ -41,8 +41,16 @@ function setupAddressSearchAndFilters() {
     }
 }
 
-function filterAddresses(type) {
+function filterAddresses(type, evt) {
     addressFilter = type || '';
+    
+    // Update active chip
+    document.querySelectorAll('.filter-chip').forEach(chip => chip.classList.remove('active'));
+    
+    const target = (evt && (evt.currentTarget || evt.target)) ? (evt.currentTarget || evt.target) : null;
+    const btn = target ? target.closest('.filter-chip') : document.querySelector(`.filter-chip[data-filter="${type}"]`);
+    if (btn) btn.classList.add('active');
+    
     applyAddressFilters();
 }
 
@@ -106,14 +114,23 @@ function updateAddressFilterHint() {
 
 function highlightAddressCardById(addressId) {
     const id = String(addressId);
-    const card = document.querySelector(`.address-card[data-address-id="${CSS.escape(id)}"]`);
-    if (!card) return;
-
-    // Remove previous highlights
-    document.querySelectorAll('.address-card.is-highlighted').forEach(el => el.classList.remove('is-highlighted'));
-
-    card.classList.add('is-highlighted');
-    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    
+    // Try table row first
+    const row = document.querySelector(`tr[data-address-id="${CSS.escape(id)}"]`);
+    if (row) {
+        document.querySelectorAll('tr.is-highlighted').forEach(el => el.classList.remove('is-highlighted'));
+        row.classList.add('is-highlighted');
+        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+    }
+    
+    // Try mobile card
+    const card = document.querySelector(`.address-mobile-card[data-address-id="${CSS.escape(id)}"]`);
+    if (card) {
+        document.querySelectorAll('.address-mobile-card.is-highlighted').forEach(el => el.classList.remove('is-highlighted'));
+        card.classList.add('is-highlighted');
+        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
 }
 
 async function loadAddresses(page = 1) {
@@ -168,65 +185,88 @@ function goToPage(page) {
 }
 
 function renderAddresses(addresses) {
-    const container = document.getElementById('addressesContainer');
+    const tableBody = document.getElementById('addressesTableBody');
+    const mobileContainer = document.getElementById('addressesMobileContainer');
 
+    // Empty state
     if (!addresses || addresses.length === 0) {
-        container.innerHTML = `
-            <div style="grid-column:1/-1;text-align:center;padding:3rem;">
-                <p style="color:var(--color-gray);font-size:1.1rem;">ไม่พบที่อยู่ตามตัวกรอง/คำค้น</p>
-                <div style="margin-top:1rem;">
-                    <button class="btn btn-outline" onclick="clearAddressFilters()">ล้างตัวกรอง</button>
-                </div>
+        const emptyHtml = `
+            <div style="text-align:center;padding:3rem;">
+                <div style="font-size:3rem;margin-bottom:1rem;">📍</div>
+                <p style="color:#6b7280;font-size:1.1rem;margin-bottom:1rem;">ไม่พบที่อยู่ตามตัวกรอง/คำค้น</p>
+                <button class="btn btn-outline" onclick="clearAddressFilters()">ล้างตัวกรอง</button>
             </div>
         `;
+        
+        if (tableBody) {
+            tableBody.innerHTML = `<tr><td colspan="6">${emptyHtml}</td></tr>`;
+        }
+        if (mobileContainer) {
+            mobileContainer.innerHTML = emptyHtml;
+        }
         return;
     }
 
-    const getLandmark = (additionalInfo) => {
-        if (!additionalInfo) return '';
-        // API returns already-decoded object; some older data might be JSON string.
-        if (typeof additionalInfo === 'string') {
-            try {
-                const obj = JSON.parse(additionalInfo);
-                return (obj && obj.landmark) ? String(obj.landmark) : '';
-            } catch {
-                return '';
-            }
-        }
-        if (typeof additionalInfo === 'object') {
-            return additionalInfo.landmark ? String(additionalInfo.landmark) : '';
-        }
-        return '';
+    // Helper function
+    const getFullAddress = (addr) => {
+        let parts = [addr.address_line1];
+        if (addr.address_line2) parts.push(addr.address_line2);
+        if (addr.subdistrict) parts.push('ต.' + addr.subdistrict);
+        parts.push('อ.' + addr.district);
+        return parts.join(' ');
     };
 
-    container.innerHTML = addresses.map(addr => {
-        const landmark = getLandmark(addr.additional_info);
-        return `
-        <div class="address-card ${addr.is_default ? 'address-default' : ''}" data-address-id="${addr.id}">
-            ${addr.is_default ? '<div class="default-badge">✓ ที่อยู่หลัก</div>' : ''}
-            <div class="address-header">
-                <div class="address-recipient">${addr.recipient_name}</div>
-                <div class="address-phone">📞 ${addr.phone}</div>
-            </div>
-            <div class="address-details">
-                ${addr.address_line1}<br>
-                ${addr.address_line2 ? addr.address_line2 + '<br>' : ''}
-                ${addr.subdistrict ? 'ต.' + addr.subdistrict + ' ' : ''}อ.${addr.district} 
-                จ.${addr.province} ${addr.postal_code}
-            </div>
-            ${landmark ? `
-                <div class="address-note">
-                    📍 ${landmark}
+    // Render Desktop Table
+    if (tableBody) {
+        tableBody.innerHTML = addresses.map(addr => `
+            <tr data-address-id="${addr.id}">
+                <td>
+                    ${addr.is_default ? '<span class="default-badge-sm" title="ที่อยู่หลัก"><i class="fas fa-star" style="font-size:0.6rem;"></i></span>' : ''}
+                </td>
+                <td>
+                    <div class="recipient-cell">
+                        <span class="recipient-name">${addr.recipient_name}</span>
+                        <span class="recipient-phone">${addr.phone}</span>
+                    </div>
+                </td>
+                <td>
+                    <div class="address-cell">${getFullAddress(addr)}</div>
+                </td>
+                <td>${addr.province}</td>
+                <td>${addr.postal_code}</td>
+                <td>
+                    <div class="action-btns">
+                        ${!addr.is_default ? `<button class="btn-action btn-primary-action" onclick="setDefaultAddress(${addr.id})" title="ตั้งเป็นหลัก"><i class="fas fa-star"></i></button>` : ''}
+                        <button class="btn-action" onclick="editAddress(${addr.id})" title="แก้ไข"><i class="fas fa-edit"></i></button>
+                        <button class="btn-action btn-danger-action" onclick="deleteAddress(${addr.id})" title="ลบ"><i class="fas fa-trash"></i></button>
+                    </div>
+                </td>
+            </tr>
+        `).join('');
+    }
+
+    // Render Mobile Cards
+    if (mobileContainer) {
+        mobileContainer.innerHTML = addresses.map(addr => `
+            <div class="address-mobile-card ${addr.is_default ? 'is-default' : ''}" data-address-id="${addr.id}">
+                <div class="address-mobile-header">
+                    <div>
+                        <div class="address-mobile-recipient">${addr.recipient_name}</div>
+                        <div class="address-mobile-phone">${addr.phone}</div>
+                    </div>
                 </div>
-            ` : ''}
-            <div class="address-actions">
-                ${!addr.is_default ? `<button class="btn btn-sm btn-outline" onclick="setDefaultAddress(${addr.id})">ตั้งเป็นหลัก</button>` : ''}
-                <button class="btn btn-sm btn-secondary" onclick="editAddress(${addr.id})">แก้ไข</button>
-                <button class="btn btn-sm btn-danger" onclick="deleteAddress(${addr.id})">ลบ</button>
+                <div class="address-mobile-body">
+                    ${getFullAddress(addr)}<br>
+                    จ.${addr.province} ${addr.postal_code}
+                </div>
+                <div class="address-mobile-actions">
+                    ${!addr.is_default ? `<button class="btn-action btn-primary-action" onclick="setDefaultAddress(${addr.id})"><i class="fas fa-star"></i> ตั้งเป็นหลัก</button>` : ''}
+                    <button class="btn-action" onclick="editAddress(${addr.id})"><i class="fas fa-edit"></i> แก้ไข</button>
+                    <button class="btn-action btn-danger-action" onclick="deleteAddress(${addr.id})"><i class="fas fa-trash"></i> ลบ</button>
+                </div>
             </div>
-        </div>
-    `;
-    }).join('');
+        `).join('');
+    }
 }
 
 function showAddressForm(addressId = null) {
@@ -265,6 +305,16 @@ function editAddress(id) {
 }
 
 async function setDefaultAddress(addressId) {
+    const confirmed = await showConfirmDialog({
+        title: 'ตั้งเป็นที่อยู่หลัก',
+        message: 'ต้องการตั้งที่อยู่นี้เป็นที่อยู่หลักใช่หรือไม่?',
+        confirmText: 'ยืนยัน',
+        cancelText: 'ยกเลิก',
+        type: 'confirm'
+    });
+    
+    if (!confirmed) return;
+    
     try {
         // Router expects method POST with action=set_default
         const result = await apiCall(API_ENDPOINTS.CUSTOMER_ADDRESS_SET_DEFAULT(addressId), {
@@ -283,7 +333,15 @@ async function setDefaultAddress(addressId) {
 }
 
 async function deleteAddress(addressId) {
-    if (!confirm('ต้องการลบที่อยู่นี้ใช่หรือไม่?')) return;
+    const confirmed = await showConfirmDialog({
+        title: 'ลบที่อยู่',
+        message: 'ต้องการลบที่อยู่นี้ใช่หรือไม่? การดำเนินการนี้ไม่สามารถย้อนกลับได้',
+        confirmText: 'ลบ',
+        cancelText: 'ยกเลิก',
+        type: 'danger'
+    });
+    
+    if (!confirmed) return;
 
     try {
         const result = await apiCall(API_ENDPOINTS.CUSTOMER_ADDRESS_DETAIL(addressId), {
@@ -299,6 +357,64 @@ async function deleteAddress(addressId) {
     } catch (error) {
         toast('เกิดข้อผิดพลาด', 'error');
     }
+}
+
+// Custom Confirm Dialog
+function showConfirmDialog(options = {}) {
+    return new Promise((resolve) => {
+        const {
+            title = 'ยืนยัน',
+            message = 'คุณแน่ใจหรือไม่?',
+            confirmText = 'ยืนยัน',
+            cancelText = 'ยกเลิก',
+            type = 'confirm' // 'confirm' | 'danger'
+        } = options;
+        
+        const icon = type === 'danger' ? '⚠️' : '❓';
+        const btnClass = type === 'danger' ? 'btn-danger' : 'btn-confirm';
+        
+        const overlay = document.createElement('div');
+        overlay.className = 'confirm-dialog-overlay';
+        overlay.innerHTML = `
+            <div class="confirm-dialog-box">
+                <div class="confirm-dialog-icon">${icon}</div>
+                <div class="confirm-dialog-title">${title}</div>
+                <div class="confirm-dialog-message">${message}</div>
+                <div class="confirm-dialog-buttons">
+                    <button class="confirm-dialog-btn btn-cancel">${cancelText}</button>
+                    <button class="confirm-dialog-btn ${btnClass}">${confirmText}</button>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(overlay);
+        document.body.style.overflow = 'hidden';
+        
+        const cleanup = (result) => {
+            document.body.removeChild(overlay);
+            document.body.style.overflow = '';
+            resolve(result);
+        };
+        
+        // Event listeners
+        overlay.querySelector('.btn-cancel').addEventListener('click', () => cleanup(false));
+        overlay.querySelector(`.${btnClass}`).addEventListener('click', () => cleanup(true));
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) cleanup(false);
+        });
+        
+        // ESC to close
+        const escHandler = (e) => {
+            if (e.key === 'Escape') {
+                document.removeEventListener('keydown', escHandler);
+                cleanup(false);
+            }
+        };
+        document.addEventListener('keydown', escHandler);
+        
+        // Focus confirm button
+        setTimeout(() => overlay.querySelector(`.${btnClass}`).focus(), 50);
+    });
 }
 
 function closeAddressModal() {
@@ -350,12 +466,21 @@ document.getElementById('addressForm')?.addEventListener('submit', async (e) => 
 });
 
 function showError(message) {
-    const container = document.getElementById('addressesContainer');
-    container.innerHTML = `
-        <div style="grid-column:1/-1;text-align:center;padding:3rem;">
-            <p style="color:var(--color-danger);">${message}</p>
+    const tableBody = document.getElementById('addressesTableBody');
+    const mobileContainer = document.getElementById('addressesMobileContainer');
+    
+    const errorHtml = `
+        <div style="text-align:center;padding:3rem;">
+            <p style="color:#dc2626;">${message}</p>
         </div>
     `;
+    
+    if (tableBody) {
+        tableBody.innerHTML = `<tr><td colspan="6">${errorHtml}</td></tr>`;
+    }
+    if (mobileContainer) {
+        mobileContainer.innerHTML = errorHtml;
+    }
 }
 
 // Use global showToast from auth.js if available; fallback to alert.

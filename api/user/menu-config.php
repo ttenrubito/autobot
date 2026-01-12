@@ -74,12 +74,15 @@ try {
             ['id' => 'conversations', 'label' => 'แชทกับลูกค้า', 'enabled' => true, 'icon' => '💭', 'url' => 'conversations.php'],
             ['id' => 'addresses', 'label' => 'ที่อยู่จัดส่ง', 'enabled' => true, 'icon' => '📍', 'url' => 'addresses.php'],
             ['id' => 'orders', 'label' => 'คำสั่งซื้อ', 'enabled' => true, 'icon' => '📦', 'url' => 'orders.php'],
-            ['id' => 'payment_history', 'label' => 'ประวัติการชำระ / ตรวจสลิป', 'enabled' => true, 'icon' => '💰', 'url' => 'payment-history.php'],
+            ['id' => 'payment_history', 'label' => 'ประวัติการชำระ(ตรวจ)', 'enabled' => true, 'icon' => '💰', 'url' => 'payment-history.php'],
             ['id' => 'campaigns', 'label' => 'จัดการแคมเปญ', 'enabled' => true, 'icon' => '🎯', 'url' => 'campaigns.php'],
             ['id' => 'line_applications', 'label' => 'ใบสมัคร LINE', 'enabled' => true, 'icon' => '📋', 'url' => 'line-applications.php'],
             ['id' => 'cases', 'label' => 'Case Inbox', 'enabled' => true, 'icon' => '📥', 'url' => 'cases.php'],
             ['id' => 'savings', 'label' => 'ออมเงิน', 'enabled' => true, 'icon' => '🐷', 'url' => 'savings.php'],
             ['id' => 'installments', 'label' => 'ผ่อนชำระ', 'enabled' => true, 'icon' => '📅', 'url' => 'installments.php'],
+            ['id' => 'deposits', 'label' => 'มัดจำสินค้า', 'enabled' => true, 'icon' => '💎', 'url' => 'deposits.php'],
+            ['id' => 'pawns', 'label' => 'ฝากจำนำ', 'enabled' => true, 'icon' => '🏆', 'url' => 'pawns.php'],
+            ['id' => 'repairs', 'label' => 'งานซ่อม', 'enabled' => true, 'icon' => '🔧', 'url' => 'repairs.php'],
             ['id' => 'profile', 'label' => 'โปรไฟล์', 'enabled' => true, 'icon' => '👤', 'url' => 'profile.php'],
         ];
         

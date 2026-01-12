@@ -1,14 +1,57 @@
 # Ignore files for Cloud Build/Run deployment
+# ===========================================
+
+# Version Control
 .git/
 .gitignore
+
+# IDE/Editor
 .vscode/
+*.swp
+*.swo
+
+# Dependencies (not needed - will composer install in Docker)
 node_modules/
 vendor/phpunit/
+vendor/phar-io/
+vendor/sebastian/
+
+# Testing
 tests/
-*.log
-*.md
-.env.example
-.dockerignore
 test_*.php
 debug_*.php
 check_*.php
+diagnose_*.php
+
+# Large files - CRITICAL for fast deploy
+google-cloud-sdk/
+google-cloud-cli-*.tar.gz
+*.tar.gz
+*.zip
+
+# Logs and temp
+*.log
+logs/
+
+# Documentation
+*.md
+docs/
+
+# Config files not needed in production  
+.env.example
+.dockerignore
+*.bak.*
+
+# Keep migration SQL files (remove *.sql from ignore)
+# *.sql - DO NOT ignore, needed for migrations
+
+# Scripts not needed in production
+deploy*.sh
+apply*.sh
+clear*.sh
+DEPLOY*.sh
+
+# Uploads (should use GCS in production)
+public/uploads/slips/
+public/uploads/products/
+public/backup/

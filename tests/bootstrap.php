@@ -83,6 +83,11 @@ if (!class_exists('Database')) {
             return true;
         }
         
+        public function lastInsertId(): int
+        {
+            return $this->mockData['lastInsertId'] ?? 1;
+        }
+        
         public function setMockData(string $method, $data): void
         {
             $this->mockData[$method] = $data;

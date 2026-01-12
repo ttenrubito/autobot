@@ -369,6 +369,7 @@ try {
         'session_id' => $sessionId,  // For conversation history
         'external_user_id' => $externalUserId,  // For reference
         'is_admin' => $incoming['is_admin'] ?? false,  // ✅ CRITICAL: Pass admin flag to Router
+        'platform' => $incoming['metadata']['platform'] ?? $incoming['channel_type'] ?? ($channel['platform'] ?? 'unknown'),  // ✅ Platform for case creation
     ];
 
     // ---- Trace id for correlating gateway <-> webhook logs ----

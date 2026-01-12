@@ -98,9 +98,10 @@ include('../includes/customer/sidebar.php');
     <div class="row" style="margin-top: 1.5rem;">
         <div class="col-12">
             <div class="card">
-                <div class="card-header" style="background: linear-gradient(135deg, #1e40af 0%, #2563eb 100%); border-bottom: none;">
-                    <h3 class="card-title" style="color: white; font-weight: 600;">
-                        <i class="fas fa-credit-card"></i> วิธีการชำระเงิน
+                <div class="card-header" style="background: linear-gradient(135deg, #1e40af 0%, #2563eb 100%); border-bottom: none; padding: 1rem 1.5rem;">
+                    <h3 class="card-title" style="color: white; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 0.5rem;">
+                        <i class="fas fa-credit-card"></i> 
+                        <span>วิธีการชำระเงิน</span>
                     </h3>
                 </div>
                 <div class="card-body" style="padding: 2rem;">
@@ -155,7 +156,7 @@ include('../includes/customer/sidebar.php');
                     </div>
 
                     <!-- Pricing Tiers -->
-                    <div style="background: white; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1.25rem;">
+                    <div style="display:none;background: white; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1.25rem;">
                         <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem;">
                             <i class="fas fa-tag" style="color: #2563eb;"></i>
                             <h5 style="margin: 0; color: #1e293b; font-weight: 600; font-size: 0.9375rem;">แพ็กเกจแนะนำ</h5>
@@ -180,58 +181,6 @@ include('../includes/customer/sidebar.php');
         </div>
     </div>
 </main>
-    <div class="row" style="margin-top: 1.5rem;">
-        <div class="col-12">
-            <div class="card">
-                <div class="card-header" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
-                    <h3 class="card-title" style="color: white;"><i class="fas fa-university"></i> การชำระเงิน / ต่ออายุแพ็กเกจ</h3>
-                </div>
-                <div class="card-body">
-                    <div style="background: #f0f9ff; border: 2px solid #3b82f6; border-radius: 12px; padding: 1.5rem;">
-                        <h4 style="margin-top: 0; color: #1e40af;">🏦 โอนเงินผ่านบัญชีธนาคาร</h4>
-                        
-                        <div style="background: white; padding: 1.25rem; border-radius: 8px; margin: 1rem 0;">
-                            <div style="display: grid; grid-template-columns: 140px 1fr; gap: 0.75rem; font-size: 0.95rem;">
-                                <div style="font-weight: 600; color: #475569;">ธนาคาร:</div>
-                                <div style="color: #1e293b;">ไทยพาณิชย์ (SCB)</div>
-                                
-                                <div style="font-weight: 600; color: #475569;">ชื่อบัญชี:</div>
-                                <div style="color: #1e293b;">บริษัท บ็อกซ์ ดีไซน์ จำกัด</div>
-                                
-                                <div style="font-weight: 600; color: #475569;">เลขที่บัญชี:</div>
-                                <div style="font-family: monospace; font-size: 1.1rem; font-weight: 700; color: #0369a1;">123-456-7890</div>
-                            </div>
-                        </div>
-                        
-                        <div style="background: #fef3c7; border-left: 4px solid #f59e0b; padding: 1rem; border-radius: 6px; margin-top: 1rem;">
-                            <div style="color: #92400e;">
-                                <strong style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
-                                    <i class="fas fa-info-circle"></i> หลังโอนเงินแล้ว
-                                </strong>
-                                <div style="margin-left: 1.5rem;">
-                                    แจ้งสลิปพร้อมระบุจำนวนวันที่ต้องการต่อมาที่:<br>
-                                    📱 <strong>LINE:</strong> @boxdesign<br>
-                                    ✉️ <strong>อีเมล:</strong> payment@boxdesign.in.th<br>
-                                    <br>
-                                    <em style="font-size: 0.9rem;">ทีมงานจะดำเนินการเพิ่มวันให้ภายใน 24 ชั่วโมง</em>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div style="background: white; border: 1px solid #e5e7eb; border-radius: 8px; padding: 1rem; margin-top: 1rem;">
-                            <div style="font-weight: 600; margin-bottom: 0.5rem; color: #374151;">💡 แพ็กเกจยอดนิยม</div>
-                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem; font-size: 0.9rem; color: #6b7280;">
-                                <div>• 30 วัน = 2,500 บาท</div>
-                                <div>• 90 วัน = 6,900 บาท (ลด 5%)</div>
-                                <div>• 365 วัน = 25,000 บาท (ลด 17%)</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-</main>
 
 <script>
 // ========================================
@@ -242,8 +191,8 @@ async function loadSubscriptionInfo() {
     const container = document.getElementById('subscriptionDisplay');
     
     try {
-        // Fetch subscription data from API
-        const res = await fetch('/api/customer/subscription-info.php');
+        // Fetch subscription data from API (use relative path from /autobot/)
+        const res = await fetch('/autobot/api/customer/subscription-info.php');
         const data = await res.json();
         
         if (!data.success || !data.subscription) {

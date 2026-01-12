@@ -1,0 +1,17 @@
+# Bot API Directory Routing
+# Route all requests to parent api/index.php router
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    
+    # Skip actual files
+    RewriteCond %{REQUEST_FILENAME} -f
+    RewriteRule ^ - [L]
+    
+    # Route all directory requests to parent router
+    RewriteRule ^(.*)$ /api/index.php [L]
+</IfModule>
+
+# Allow access to this directory
+Options -Indexes
+DirectorySlash Off

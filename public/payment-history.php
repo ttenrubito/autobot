@@ -16,95 +16,52 @@ include('../includes/customer/sidebar.php');
     <!-- Page Header -->
     <div class="page-header">
         <div>
-            <h1 class="page-title">💰 ประวัติการชำระเงิน</h1>
+            <h1 class="page-title">ประวัติการชำระเงิน</h1>
             <p class="page-subtitle">ดูรายการชำระเงินและสลิปการโอน</p>
-        </div>
-        <div class="keyboard-hint">
-            <small>
-                <kbd>Ctrl</kbd> + <kbd>K</kbd> ค้นหา | 
-                <kbd>←</kbd> <kbd>→</kbd> เปลี่ยนหน้า | 
-                <kbd>ESC</kbd> ปิด
-            </small>
         </div>
     </div>
 
-    <!-- Search Bar -->
-    <div class="card">
-        <div class="card-body" style="padding: 1rem;">
-            <div class="search-box">
-                <i class="fas fa-search search-icon"></i>
+    <!-- Unified Filter Panel -->
+    <div class="filter-panel">
+        <!-- Search Row -->
+        <div class="filter-row filter-row-search">
+            <div class="search-wrapper">
+                <i class="fas fa-search"></i>
                 <input 
                     type="search" 
                     id="paymentSearch" 
-                    class="search-input" 
-                    placeholder="ค้นหาเลขที่ชำระเงิน, เลขคำสั่งซื้อ, หรือจำนวนเงิน..."
-                    aria-label="ค้นหาการชำระเงิน"
+                    placeholder="ค้นหาเลขชำระเงิน, คำสั่งซื้อ, จำนวนเงิน..."
+                    aria-label="ค้นหา"
                 >
             </div>
         </div>
-    </div>
-
-    <!-- Filter Tabs & Date Range -->
-    <div class="card mt-3">
-        <div class="card-body" style="padding: 1rem;">
-            <div class="filter-tabs">
-                <button class="filter-tab active" onclick="filterPayments('', event)" data-filter="">
-                    <span class="tab-icon">📋</span>
-                    <span class="tab-label">ทั้งหมด</span>
-                </button>
-                <button class="filter-tab" onclick="filterPayments('full', event)" data-filter="full">
-                    <span class="tab-icon">💳</span>
-                    <span class="tab-label">จ่ายเต็ม</span>
-                </button>
-                <button class="filter-tab" onclick="filterPayments('installment', event)" data-filter="installment">
-                    <span class="tab-icon">📅</span>
-                    <span class="tab-label">ผ่อนชำระ</span>
-                </button>
-                <button class="filter-tab" onclick="filterPayments('savings', event)" data-filter="savings">
-                    <span class="tab-icon">🐷</span>
-                    <span class="tab-label">ออมเงิน</span>
-                </button>
-                <button class="filter-tab" onclick="filterPayments('pending', event)" data-filter="pending">
-                    <span class="tab-icon">⏳</span>
-                    <span class="tab-label">รอตรวจสอบ</span>
-                </button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Date Range Filter -->
-    <div class="card mt-3">
-        <div class="card-body" style="padding: 1rem;">
-            <div class="date-filter-container">
-                <div class="date-filter-header">
-                    <span class="date-filter-icon">📅</span>
-                    <span class="date-filter-label">กรองตามวันที่</span>
+        
+        <!-- Filter Row -->
+        <div class="filter-row filter-row-options">
+            <!-- Status Tabs -->
+            <div class="filter-group">
+                <label class="filter-label">ประเภท</label>
+                <div class="filter-chips">
+                    <button class="filter-chip active" data-filter="" onclick="filterPayments('', event)"><i class="fas fa-list"></i> ทั้งหมด</button>
+                    <button class="filter-chip" data-filter="full" onclick="filterPayments('full', event)"><i class="fas fa-credit-card"></i> จ่ายเต็ม</button>
+                    <button class="filter-chip" data-filter="installment" onclick="filterPayments('installment', event)"><i class="fas fa-calendar-alt"></i> ผ่อนชำระ</button>
+                    <button class="filter-chip" data-filter="savings" onclick="filterPayments('savings', event)"><i class="fas fa-piggy-bank"></i> ออมเงิน</button>
+                    <button class="filter-chip" data-filter="pending" onclick="filterPayments('pending', event)"><i class="fas fa-clock"></i> รอตรวจสอบ</button>
                 </div>
-                <div class="date-filter-inputs">
-                    <div class="date-input-group">
-                        <label for="startDate" class="date-label">วันเริ่มต้น</label>
-                        <input 
-                            type="date" 
-                            id="startDate" 
-                            class="date-input"
-                            aria-label="วันเริ่มต้น"
-                        >
-                    </div>
-                    <div class="date-separator">ถึง</div>
-                    <div class="date-input-group">
-                        <label for="endDate" class="date-label">วันสิ้นสุด</label>
-                        <input 
-                            type="date" 
-                            id="endDate" 
-                            class="date-input"
-                            aria-label="วันสิ้นสุด"
-                        >
-                    </div>
-                    <button class="btn-filter-date" onclick="applyDateFilter()" title="กรองตามวันที่">
-                        <i class="fas fa-filter"></i> กรอง
+            </div>
+            
+            <!-- Date Range -->
+            <div class="filter-group filter-group-date">
+                <label class="filter-label">ช่วงวันที่</label>
+                <div class="date-range-inline">
+                    <input type="date" id="startDate" aria-label="วันเริ่มต้น">
+                    <span class="date-sep">—</span>
+                    <input type="date" id="endDate" aria-label="วันสิ้นสุด">
+                    <button class="btn-apply" onclick="applyDateFilter()" title="กรอง">
+                        <i class="fas fa-check"></i>
                     </button>
-                    <button class="btn-clear-date" onclick="clearDateFilter()" title="ล้างการกรอง">
-                        <i class="fas fa-times"></i> ล้าง
+                    <button class="btn-reset" onclick="clearDateFilter()" title="ล้าง">
+                        <i class="fas fa-undo"></i>
                     </button>
                 </div>
             </div>
@@ -175,7 +132,228 @@ include('../includes/customer/sidebar.php');
 <div id="toast" class="toast"></div>
 
 <style>
-/* Classification UI Styles */
+/* =====================================================
+   PROFESSIONAL FILTER PANEL - Clean & Minimal Design
+   ===================================================== */
+.filter-panel {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    margin-bottom: 1.5rem;
+    overflow: hidden;
+}
+
+.filter-row {
+    padding: 1rem 1.25rem;
+}
+
+.filter-row-search {
+    border-bottom: 1px solid #f3f4f6;
+}
+
+.filter-row-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+    align-items: flex-start;
+}
+
+/* Search Input */
+.search-wrapper {
+    position: relative;
+    width: 100%;
+}
+
+.search-wrapper i {
+    position: absolute;
+    left: 1rem;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #9ca3af;
+    font-size: 0.9rem;
+}
+
+.search-wrapper input {
+    width: 100%;
+    padding: 0.75rem 1rem 0.75rem 2.75rem;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    font-size: 0.95rem;
+    background: #f9fafb;
+    color: #111827;
+    transition: all 0.2s ease;
+}
+
+.search-wrapper input:focus {
+    outline: none;
+    background: #ffffff;
+    border-color: #6b7280;
+    box-shadow: 0 0 0 3px rgba(107, 114, 128, 0.1);
+}
+
+.search-wrapper input::placeholder {
+    color: #9ca3af;
+}
+
+/* Filter Groups */
+.filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.filter-group-date {
+    margin-left: auto;
+}
+
+.filter-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Filter Chips */
+.filter-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.filter-chip {
+    padding: 0.5rem 1rem;
+    border: 1px solid #e5e7eb;
+    background: #ffffff;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #4b5563;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.filter-chip i {
+    font-size: 0.8rem;
+    opacity: 0.7;
+}
+
+.filter-chip:hover {
+    background: #f9fafb;
+    border-color: #d1d5db;
+}
+
+.filter-chip.active {
+    background: #1f2937;
+    border-color: #1f2937;
+    color: #ffffff;
+}
+
+.filter-chip.active i {
+    opacity: 1;
+}
+
+/* Date Range Inline */
+.date-range-inline {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.date-range-inline input[type="date"] {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    background: #ffffff;
+    color: #111827;
+    cursor: pointer;
+    min-width: 140px;
+}
+
+.date-range-inline input[type="date"]:focus {
+    outline: none;
+    border-color: #6b7280;
+}
+
+.date-sep {
+    color: #9ca3af;
+    font-size: 0.875rem;
+}
+
+.btn-apply,
+.btn-reset {
+    width: 36px;
+    height: 36px;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    font-size: 0.8rem;
+}
+
+.btn-apply {
+    background: #1f2937;
+    border-color: #1f2937;
+    color: #ffffff;
+}
+
+.btn-apply:hover {
+    background: #111827;
+}
+
+.btn-reset {
+    background: #ffffff;
+    color: #6b7280;
+}
+
+.btn-reset:hover {
+    background: #f3f4f6;
+    color: #374151;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .filter-row-options {
+        flex-direction: column;
+        gap: 1rem;
+    }
+    
+    .filter-group-date {
+        margin-left: 0;
+        width: 100%;
+    }
+    
+    .date-range-inline {
+        flex-wrap: wrap;
+    }
+    
+    .date-range-inline input[type="date"] {
+        flex: 1;
+        min-width: 120px;
+    }
+    
+    .filter-chips {
+        width: 100%;
+    }
+    
+    .filter-chip {
+        flex: 1;
+        text-align: center;
+        min-width: 0;
+    }
+}
+
+/* =====================================================
+   Classification UI Styles
+   ===================================================== */
 .classification-section {
     background: #f9fafb;
     border-radius: 12px;
@@ -265,184 +443,6 @@ include('../includes/customer/sidebar.php');
 
 #periodSection-* {
     margin-top: 0.75rem;
-}
-
-/* Filter Tabs */
-.filter-tabs {
-    display: flex;
-    gap: 0.75rem;
-    flex-wrap: wrap;
-}
-
-.filter-tab {
-    flex: 1;
-    min-width: 140px;
-    padding: 0.875rem 1.25rem;
-    border: 2px solid #e5e7eb; /* Subtle gray border */
-    background: #ffffff; /* White background */
-    border-radius: 12px;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-    font-weight: 500;
-    color: #4b5563; /* Medium gray text */
-}
-
-.filter-tab:hover {
-    border-color: #d1d5db; /* Slightly darker gray */
-    background: #f9fafb; /* Very light gray */
-    transform: translateY(-2px);
-}
-
-.filter-tab.active {
-    border-color: #6b7280; /* Darker gray for active */
-    background: #374151; /* Dark gray background */
-    color: white;
-    box-shadow: 0 2px 8px rgba(55, 65, 81, 0.2);
-}
-
-.tab-icon {
-    font-size: 1.25rem;
-}
-
-.tab-label {
-    font-size: 0.9rem;
-}
-
-/* Date Range Filter */
-.date-filter-container {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-}
-
-.date-filter-header {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-weight: 600;
-    font-size: 1rem;
-    color: #1f2937; /* Professional dark gray */
-}
-
-.date-filter-icon {
-    font-size: 1.25rem;
-}
-
-.date-filter-inputs {
-    display: flex;
-    align-items: flex-end;
-    gap: 1rem;
-    flex-wrap: wrap;
-}
-
-.date-input-group {
-    display: flex;
-    flex-direction: column;
-    gap: 0.375rem;
-    flex: 1;
-    min-width: 180px;
-}
-
-.date-label {
-    font-size: 0.8rem;
-    font-weight: 500;
-    color: #6b7280; /* Consistent gray */
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
-.date-input {
-    padding: 0.75rem 1rem;
-    border: 2px solid #e5e7eb; /* Subtle border */
-    border-radius: 10px;
-    font-size: 1rem;
-    font-family: inherit;
-    background: #ffffff; /* White */
-    color: #111827; /* Dark text */
-    transition: all 0.2s ease;
-    cursor: pointer;
-}
-
-.date-input:hover {
-    border-color: #d1d5db; /* Slightly darker gray */
-}
-
-.date-input:focus {
-    outline: none;
-    border-color: #9ca3af; /* Medium gray focus */
-    box-shadow: 0 0 0 3px rgba(156, 163, 175, 0.1);
-}
-
-.date-separator {
-    font-weight: 500;
-    color: #6b7280; /* Consistent gray */
-    padding-bottom: 0.75rem;
-    white-space: nowrap;
-}
-
-.btn-filter-date,
-.btn-clear-date {
-    padding: 0.75rem 1.5rem;
-    border: 2px solid transparent;
-    border-radius: 10px;
-    font-size: 0.95rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    white-space: nowrap;
-}
-
-.btn-filter-date {
-    background: #374151; /* Dark gray - professional */
-    color: white;
-    box-shadow: 0 2px 8px rgba(55, 65, 81, 0.2);
-}
-
-.btn-filter-date:hover {
-    background: #1f2937; /* Darker gray on hover */
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(55, 65, 81, 0.25);
-}
-
-.btn-clear-date {
-    background: #ffffff; /* White */
-    color: #6b7280; /* Gray text */
-    border-color: #e5e7eb; /* Subtle border */
-}
-
-.btn-clear-date:hover {
-    background: #f9fafb; /* Light gray */
-    border-color: #d1d5db; /* Darker border */
-    color: #374151; /* Darker text */
-    transform: translateY(-2px);
-}
-
-@media (max-width: 768px) {
-    .date-filter-inputs {
-        flex-direction: column;
-        align-items: stretch;
-    }
-    
-    .date-input-group {
-        min-width: 100%;
-    }
-    
-    .date-separator {
-        text-align: center;
-        padding-bottom: 0;
-    }
-    
-    .btn-filter-date,
-    .btn-clear-date {
-        justify-content: center;
-    }
 }
 
 /* Payments Grid */

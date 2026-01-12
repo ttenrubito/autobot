@@ -650,6 +650,55 @@ class RouterV1Handler implements BotHandlerInterface
                         $slots['action_type'] = $this->detectInstallmentActionTypeFromText($text) ?: null;
                     }
 
+                    // =========================================================
+                    // ✅ AUTO-CREATE CASE for keyword-matched route (via API)
+                    // =========================================================
+                    $caseManagement = $config['case_management'] ?? [];
+                    $backendCfg = $config['backend_api'] ?? [];
+                    if (!empty($caseManagement['enabled']) && !empty($caseManagement['auto_create_case']) && $intent && !empty($backendCfg['enabled'])) {
+                        try {
+                            $caseEngine = new CaseEngine($config, $context);
+                            $caseType = $caseEngine->detectCaseType($intent, $slots['action_type'] ?? null);
+                            
+                            if ($caseType) {
+                                // Get case_create endpoint from config
+                                $caseEndpoint = $backendCfg['endpoints']['case_create'] ?? '/api/bot/cases';
+                                $casePayload = [
+                                    'platform' => $context['platform'] ?? ($context['channel']['platform'] ?? 'unknown'),
+                                    'channel_id' => $channelId,
+                                    'external_user_id' => $externalUserId,
+                                    'case_type' => $caseType,
+                                    'slots' => $slots,
+                                    'intent' => $intent,
+                                ];
+                                
+                                // Call API endpoint
+                                $caseResp = $this->callBackendJson($backendCfg, $caseEndpoint, $casePayload);
+                                
+                                if ($caseResp['ok'] && !empty($caseResp['data'])) {
+                                    $caseData = $caseResp['data'];
+                                    $meta['case'] = [
+                                        'id' => $caseData['id'] ?? null,
+                                        'case_no' => $caseData['case_no'] ?? null,
+                                        'case_type' => $caseType,
+                                        'is_new' => $caseData['is_new'] ?? true,
+                                    ];
+                                    Logger::info('[CASE_API] Case created via route', [
+                                        'trace_id' => $traceId,
+                                        'intent' => $intent,
+                                        'case_type' => $caseType,
+                                        'case_id' => $caseData['id'] ?? null,
+                                    ]);
+                                }
+                            }
+                        } catch (Throwable $caseEx) {
+                            Logger::error('[CASE_API] Failed to create case via route', [
+                                'trace_id' => $traceId,
+                                'error' => $caseEx->getMessage(),
+                            ]);
+                        }
+                    }
+
                     // backend step
                     $handled = $this->tryHandleByIntentWithBackend($intent, $slots, $context, $config, $templates, $text, null);
 
@@ -796,6 +845,49 @@ class RouterV1Handler implements BotHandlerInterface
                     }
                 }
 
+                // =========================================================
+                // ✅ KEYWORD-BASED INTENT FALLBACK when LLM fails to detect
+                // =========================================================
+                if (empty($intent)) {
+                    $textLower = mb_strtolower($text, 'UTF-8');
+                    
+                    // Savings keywords
+                    if (preg_match('/ออม|ออมทอง|เปิดออม|สะสม/u', $textLower)) {
+                        $intent = 'savings_new';
+                        $slots['action_type'] = 'new';
+                        Logger::info("[INTENT_FALLBACK] Keyword match: savings_new", ['text' => $text]);
+                    }
+                    // Installment keywords  
+                    elseif (preg_match('/ผ่อน|งวด|ผ่อนชำระ/u', $textLower)) {
+                        $intent = 'installment_flow';
+                        $slots['action_type'] = 'new';
+                        Logger::info("[INTENT_FALLBACK] Keyword match: installment_flow", ['text' => $text]);
+                    }
+                    // Pawn keywords
+                    elseif (preg_match('/จำนำ|ฝากจำนำ|ต่อดอก|ไถ่ถอน/u', $textLower)) {
+                        $intent = 'pawn_new';
+                        $slots['action_type'] = 'new';
+                        Logger::info("[INTENT_FALLBACK] Keyword match: pawn_new", ['text' => $text]);
+                    }
+                    // Repair keywords
+                    elseif (preg_match('/ซ่อม|เซอร์วิส|ส่งซ่อม/u', $textLower)) {
+                        $intent = 'repair_new';
+                        $slots['action_type'] = 'new';
+                        Logger::info("[INTENT_FALLBACK] Keyword match: repair_new", ['text' => $text]);
+                    }
+                    // Deposit keywords
+                    elseif (preg_match('/มัดจำ|วางมัดจำ|กันไว้/u', $textLower)) {
+                        $intent = 'deposit_new';
+                        $slots['action_type'] = 'new';
+                        Logger::info("[INTENT_FALLBACK] Keyword match: deposit_new", ['text' => $text]);
+                    }
+                    // Product inquiry keywords
+                    elseif (preg_match('/สนใจ|ดู|มี.*ไหม|ราคา|แหวน|สร้อย|นาฬิกา|กำไล|ต่างหู/u', $textLower)) {
+                        $intent = 'product_availability';
+                        Logger::info("[INTENT_FALLBACK] Keyword match: product_availability", ['text' => $text]);
+                    }
+                }
+
                 $intentConfigMap = $config['intents'] ?? [];
                 $intentConfig = ($intent && isset($intentConfigMap[$intent])) ? $intentConfigMap[$intent] : [];
                 $missingSlots = $intent ? $this->detectMissingSlots($intent, $intentConfig, $slots) : [];
@@ -804,6 +896,64 @@ class RouterV1Handler implements BotHandlerInterface
                 $meta['slots'] = $slots;
                 $meta['missing_slots'] = $missingSlots;
                 if ($confidence !== null) $meta['confidence'] = (float)$confidence;
+
+                // =========================================================
+                // ✅ AUTO-CREATE CASE when intent detected (via API)
+                // =========================================================
+                $caseManagement = $config['case_management'] ?? [];
+                $backendCfg = $config['backend_api'] ?? [];
+                if (!empty($caseManagement['enabled']) && !empty($caseManagement['auto_create_case']) && $intent && !empty($backendCfg['enabled'])) {
+                    try {
+                        $caseEngine = new CaseEngine($config, $context);
+                        $caseType = $caseEngine->detectCaseType($intent, $slots['action_type'] ?? null);
+                        
+                        if ($caseType) {
+                            // Get case_create endpoint from config
+                            $caseEndpoint = $backendCfg['endpoints']['case_create'] ?? '/api/bot/cases';
+                            $casePayload = [
+                                'platform' => $context['platform'] ?? ($context['channel']['platform'] ?? 'unknown'),
+                                'channel_id' => $channelId,
+                                'external_user_id' => $externalUserId,
+                                'case_type' => $caseType,
+                                'slots' => $slots,
+                                'intent' => $intent,
+                            ];
+                            
+                            // Call API endpoint
+                            $caseResp = $this->callBackendJson($backendCfg, $caseEndpoint, $casePayload);
+                            
+                            if ($caseResp['ok'] && !empty($caseResp['data'])) {
+                                $caseData = $caseResp['data'];
+                                $meta['case'] = [
+                                    'id' => $caseData['id'] ?? null,
+                                    'case_no' => $caseData['case_no'] ?? null,
+                                    'case_type' => $caseType,
+                                    'is_new' => $caseData['is_new'] ?? true,
+                                ];
+                                Logger::info('[CASE_API] Case created via API', [
+                                    'trace_id' => $traceId,
+                                    'intent' => $intent,
+                                    'case_type' => $caseType,
+                                    'case_id' => $caseData['id'] ?? null,
+                                    'case_no' => $caseData['case_no'] ?? null,
+                                ]);
+                            } else {
+                                Logger::warning('[CASE_API] Failed to create case via API', [
+                                    'trace_id' => $traceId,
+                                    'intent' => $intent,
+                                    'case_type' => $caseType,
+                                    'response' => $caseResp,
+                                ]);
+                            }
+                        }
+                    } catch (Throwable $caseEx) {
+                        Logger::error('[CASE_ENGINE] Failed to create case', [
+                            'trace_id' => $traceId,
+                            'intent' => $intent,
+                            'error' => $caseEx->getMessage(),
+                        ]);
+                    }
+                }
 
                 $handled = $this->tryHandleByIntentWithBackend($intent, $slots, $context, $config, $templates, $text, null);
 
@@ -1659,6 +1809,507 @@ class RouterV1Handler implements BotHandlerInterface
             return ['handled' => false, 'reply_text' => $tpl, 'reason' => 'missing_savings_action_type', 'slots' => $slots];
         }
 
+        // -------------------------
+        // Intent: deposit_new / deposit_payment / deposit_inquiry (มัดจำ)
+        // -------------------------
+        if (in_array($intent, ['deposit_new', 'deposit_payment', 'deposit_inquiry'])) {
+            $actionType = null;
+            if ($intent === 'deposit_new') $actionType = 'new';
+            elseif ($intent === 'deposit_payment') $actionType = 'pay';
+            elseif ($intent === 'deposit_inquiry') $actionType = 'inquiry';
+            
+            if (!empty($slots['action_type'])) {
+                $actionType = $slots['action_type'];
+            }
+            
+            $askProductForDeposit = $templates['ask_product_for_deposit'] ?? 'สนใจมัดจำสินค้าตัวไหนคะ? 🎁 ส่งชื่อหรือรหัสสินค้ามาได้เลยค่ะ';
+            $askDepositSlip = $templates['ask_deposit_slip'] ?? 'รบกวนส่งรูปสลิปโอนมัดจำด้วยนะคะ 📷';
+            
+            // Handle deposit_new
+            if ($actionType === 'new') {
+                $productRefId = trim((string)($slots['product_ref_id'] ?? ''));
+                $productName = trim((string)($slots['product_name'] ?? ''));
+                
+                if ($productRefId === '' && $productName === '') {
+                    return ['handled' => false, 'reply_text' => $askProductForDeposit, 'reason' => 'missing_product_for_deposit', 'slots' => $slots];
+                }
+                
+                $endpoint = $ep(['deposit_create']);
+                if (!$endpoint) return ['handled' => false, 'reason' => 'missing_endpoint_deposit_create'];
+                
+                $payload = [
+                    'channel_id' => $channelId,
+                    'external_user_id' => $externalUserId,
+                    'platform' => $context['platform'] ?? ($context['channel']['platform'] ?? 'unknown'),
+                    'product_ref_id' => $productRefId ?: null,
+                    'product_name' => $productName ?: null,
+                    'product_price' => (float)($slots['product_price'] ?? 0),
+                    'deposit_percentage' => 10 // 10% มัดจำ
+                ];
+                
+                $resp = $this->callBackendJson($backendCfg, $endpoint, $payload);
+                if (!$resp['ok']) {
+                    return ['handled' => false, 'reply_text' => $templates['fallback'] ?? 'ขออภัยค่ะ มีปัญหาในการสร้างรายการมัดจำ', 'reason' => 'backend_error', 'meta' => $resp, 'slots' => $slots];
+                }
+                
+                $data = $resp['data'] ?? [];
+                $tpl = $templates['deposit_created'] ?? "กันสินค้าให้แล้วค่ะ 🎯\nรหัส: {{deposit_no}}\nสินค้า: {{product_name}}\nราคาสินค้า: {{product_price}} บาท\nยอดมัดจำ: {{deposit_amount}} บาท (10%)\n\nโอนได้ที่:\nSCB: 1653014242 (บจก.เพชรวิบวับ)\nแล้วส่งสลิปมาได้เลยนะคะ 💳";
+                $reply = $this->renderTemplate($tpl, [
+                    'deposit_no' => $data['deposit_no'] ?? '',
+                    'product_name' => $data['product_name'] ?? $productName,
+                    'product_price' => number_format((float)($data['product_price'] ?? 0)),
+                    'deposit_amount' => number_format((float)($data['deposit_amount'] ?? 0))
+                ]);
+                
+                $slots['deposit_id'] = $data['id'] ?? null;
+                $slots['deposit_no'] = $data['deposit_no'] ?? null;
+                
+                return ['handled' => true, 'reply_text' => $reply, 'reason' => 'backend_deposit_created', 'meta' => $resp, 'slots' => $slots];
+            }
+            
+            // Handle deposit_payment
+            if ($actionType === 'pay') {
+                $depositId = trim((string)($slots['deposit_id'] ?? ''));
+                $slipImageUrl = $extra['slip_image_url'] ?? ($context['message']['attachments'][0]['url'] ?? null);
+                
+                // Try to find deposit if not provided
+                if ($depositId === '') {
+                    $existingDeposit = $this->db->queryOne(
+                        "SELECT id FROM deposits WHERE channel_id = ? AND external_user_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1",
+                        [$channelId, $externalUserId]
+                    );
+                    if ($existingDeposit) {
+                        $depositId = (string)$existingDeposit['id'];
+                        $slots['deposit_id'] = $depositId;
+                    }
+                }
+                
+                if ($depositId === '') {
+                    return ['handled' => false, 'reply_text' => 'ไม่พบรายการมัดจำที่รอชำระค่ะ ต้องการมัดจำสินค้าใหม่ไหมคะ? 🛍️', 'reason' => 'no_pending_deposit', 'slots' => $slots];
+                }
+                
+                if (!$slipImageUrl) {
+                    return ['handled' => false, 'reply_text' => $askDepositSlip, 'reason' => 'missing_deposit_slip', 'slots' => $slots];
+                }
+                
+                $endpoint = $ep(['deposit_pay']);
+                if (!$endpoint) return ['handled' => false, 'reason' => 'missing_endpoint_deposit_pay'];
+                
+                $endpoint = str_replace('{id}', $depositId, $endpoint);
+                
+                $payload = [
+                    'slip_image_url' => $slipImageUrl,
+                    'amount' => (float)($slots['amount'] ?? 0),
+                    'payment_time' => $slots['time'] ?? null,
+                    'sender_name' => $slots['sender_name'] ?? null
+                ];
+                
+                $resp = $this->callBackendJson($backendCfg, $endpoint, $payload);
+                if (!$resp['ok']) {
+                    return ['handled' => false, 'reply_text' => $templates['deposit_payment_pending'] ?? 'บันทึกการโอนมัดจำให้แล้วค่ะ รอเจ้าหน้าที่ตรวจสอบนะคะ 🙏', 'reason' => 'backend_error', 'meta' => $resp, 'slots' => $slots];
+                }
+                
+                $tpl = $templates['deposit_payment_received'] ?? 'ได้รับสลิปมัดจำแล้วค่ะ ✅ รอเจ้าหน้าที่ตรวจสอบนะคะ สินค้ากันไว้ให้แล้วค่ะ 🎁';
+                return ['handled' => true, 'reply_text' => $tpl, 'reason' => 'backend_deposit_payment', 'meta' => $resp, 'slots' => $slots];
+            }
+            
+            // Handle deposit_inquiry
+            if ($actionType === 'inquiry') {
+                $depositId = trim((string)($slots['deposit_id'] ?? ''));
+                
+                if ($depositId === '') {
+                    $deposits = $this->db->queryAll(
+                        "SELECT * FROM deposits WHERE channel_id = ? AND external_user_id = ? AND status IN ('pending', 'paid') ORDER BY created_at DESC",
+                        [$channelId, $externalUserId]
+                    );
+                    
+                    if (empty($deposits)) {
+                        return ['handled' => true, 'reply_text' => 'ไม่มีรายการมัดจำที่กำลังดำเนินการอยู่ค่ะ 📭', 'reason' => 'no_deposits', 'slots' => $slots];
+                    }
+                    
+                    if (count($deposits) === 1) {
+                        $d = $deposits[0];
+                        $tpl = $templates['deposit_status'] ?? "รายการมัดจำ {{deposit_no}}\nสินค้า: {{product_name}}\nยอดมัดจำ: {{deposit_amount}} บาท\nสถานะ: {{status}}\nหมดอายุ: {{expires_at}} 📅";
+                        $reply = $this->renderTemplate($tpl, [
+                            'deposit_no' => $d['deposit_no'] ?? '',
+                            'product_name' => $d['product_name'] ?? '',
+                            'deposit_amount' => number_format((float)($d['deposit_amount'] ?? 0)),
+                            'status' => $d['status'] === 'pending' ? 'รอชำระ' : ($d['status'] === 'paid' ? 'ชำระแล้ว' : $d['status']),
+                            'expires_at' => $d['expires_at'] ?? '-'
+                        ]);
+                        return ['handled' => true, 'reply_text' => $reply, 'reason' => 'deposit_inquiry_single', 'slots' => $slots];
+                    }
+                    
+                    $lines = [];
+                    foreach ($deposits as $i => $d) {
+                        $statusTh = $d['status'] === 'pending' ? 'รอชำระ' : ($d['status'] === 'paid' ? 'ชำระแล้ว' : $d['status']);
+                        $lines[] = ($i + 1) . ") {$d['product_name']}: " . number_format((float)($d['deposit_amount'] ?? 0)) . " บ. ({$statusTh})";
+                    }
+                    
+                    $reply = "รายการมัดจำค่ะ 📋\n" . implode("\n", $lines);
+                    return ['handled' => true, 'reply_text' => $reply, 'reason' => 'deposit_inquiry_multiple', 'slots' => $slots];
+                }
+                
+                $endpoint = $ep(['deposit_status']);
+                if ($endpoint) {
+                    $endpoint = str_replace('{id}', $depositId, $endpoint);
+                    $resp = $this->callBackendJson($backendCfg, $endpoint, []);
+                    
+                    if ($resp['ok'] && !empty($resp['data'])) {
+                        $d = $resp['data'];
+                        $tpl = $templates['deposit_status'] ?? "รายการมัดจำ {{deposit_no}}\nสินค้า: {{product_name}}\nยอดมัดจำ: {{deposit_amount}} บาท\nสถานะ: {{status}} 📅";
+                        $reply = $this->renderTemplate($tpl, [
+                            'deposit_no' => $d['deposit_no'] ?? '',
+                            'product_name' => $d['product_name'] ?? '',
+                            'deposit_amount' => number_format((float)($d['deposit_amount'] ?? 0)),
+                            'status' => $d['status_display'] ?? $d['status']
+                        ]);
+                        return ['handled' => true, 'reply_text' => $reply, 'reason' => 'backend_deposit_status', 'meta' => $resp, 'slots' => $slots];
+                    }
+                }
+                
+                return ['handled' => false, 'reply_text' => 'ไม่พบข้อมูลมัดจำค่ะ 😅', 'reason' => 'deposit_not_found', 'slots' => $slots];
+            }
+            
+            $tpl = $templates['deposit_choose_action'] ?? 'ต้องการ "มัดจำใหม่ / ส่งสลิป / เช็คสถานะ" แบบไหนคะ 😊';
+            return ['handled' => false, 'reply_text' => $tpl, 'reason' => 'missing_deposit_action_type', 'slots' => $slots];
+        }
+
+        // -------------------------
+        // Intent: pawn_new / pawn_pay_interest / pawn_redeem / pawn_inquiry (ฝากจำนำ)
+        // -------------------------
+        if (in_array($intent, ['pawn_new', 'pawn_pay_interest', 'pawn_redeem', 'pawn_inquiry'])) {
+            $actionType = null;
+            if ($intent === 'pawn_new') $actionType = 'new';
+            elseif ($intent === 'pawn_pay_interest') $actionType = 'pay_interest';
+            elseif ($intent === 'pawn_redeem') $actionType = 'redeem';
+            elseif ($intent === 'pawn_inquiry') $actionType = 'inquiry';
+            
+            if (!empty($slots['action_type'])) {
+                $actionType = $slots['action_type'];
+            }
+            
+            $askPawnItem = $templates['ask_pawn_item'] ?? 'ต้องการจำนำสินค้าชิ้นไหนคะ? 💎 บอกรายละเอียดได้เลยค่ะ';
+            $askPawnInterestSlip = $templates['ask_pawn_interest_slip'] ?? 'รบกวนส่งรูปสลิปชำระดอกเบี้ยด้วยนะคะ 📷';
+            
+            // Handle pawn_new - ต้องส่งต่อแอดมิน (ต้องประเมินของ)
+            if ($actionType === 'new') {
+                $itemDesc = trim((string)($slots['item_description'] ?? ($slots['product_name'] ?? '')));
+                
+                if ($itemDesc === '') {
+                    return ['handled' => false, 'reply_text' => $askPawnItem, 'reason' => 'missing_pawn_item', 'slots' => $slots];
+                }
+                
+                // Pawn ต้อง handoff to admin เพราะต้องประเมินราคา
+                $tpl = $templates['pawn_handoff'] ?? "รับทราบค่ะ ต้องการจำนำ {{item_description}} 💎\nรบกวนส่งรูปสินค้ามาให้ตรวจสอบด้วยนะคะ\nเจ้าหน้าที่จะติดต่อกลับเพื่อประเมินราคาค่ะ ✨";
+                $reply = $this->renderTemplate($tpl, [
+                    'item_description' => $itemDesc
+                ]);
+                
+                // Create case for admin follow-up
+                $this->db->execute(
+                    "INSERT INTO cases (channel_id, external_user_id, case_type, status, subject, description, priority) VALUES (?, ?, 'pawn', 'open', ?, ?, 'high')",
+                    [$channelId, $externalUserId, "ลูกค้าต้องการจำนำ: {$itemDesc}", $itemDesc]
+                );
+                
+                return ['handled' => true, 'reply_text' => $reply, 'reason' => 'pawn_handoff_to_admin', 'handoff' => true, 'slots' => $slots];
+            }
+            
+            // Handle pawn_pay_interest (ต่อดอก)
+            if ($actionType === 'pay_interest') {
+                $pawnId = trim((string)($slots['pawn_id'] ?? ''));
+                $slipImageUrl = $extra['slip_image_url'] ?? ($context['message']['attachments'][0]['url'] ?? null);
+                
+                // Try to find active pawn if not provided
+                if ($pawnId === '') {
+                    $existingPawn = $this->db->queryOne(
+                        "SELECT id FROM pawns WHERE channel_id = ? AND external_user_id = ? AND status = 'active' ORDER BY next_interest_due ASC LIMIT 1",
+                        [$channelId, $externalUserId]
+                    );
+                    if ($existingPawn) {
+                        $pawnId = (string)$existingPawn['id'];
+                        $slots['pawn_id'] = $pawnId;
+                    }
+                }
+                
+                if ($pawnId === '') {
+                    return ['handled' => false, 'reply_text' => 'ไม่พบรายการจำนำที่ต้องต่อดอกค่ะ 📭', 'reason' => 'no_active_pawn', 'slots' => $slots];
+                }
+                
+                if (!$slipImageUrl) {
+                    // Get interest amount first
+                    $pawnData = $this->db->queryOne("SELECT * FROM pawns WHERE id = ?", [$pawnId]);
+                    if ($pawnData) {
+                        $interestAmount = (float)$pawnData['principal_amount'] * ((float)$pawnData['interest_rate_percent'] / 100);
+                        $tpl = $templates['pawn_interest_info'] ?? "ยอดดอกเบี้ยที่ต้องชำระ: {{interest_amount}} บาท\n\nโอนได้ที่:\nSCB: 1653014242 (บจก.เพชรวิบวับ)\nแล้วส่งสลิปมาได้เลยนะคะ 💳";
+                        $reply = $this->renderTemplate($tpl, [
+                            'interest_amount' => number_format($interestAmount)
+                        ]);
+                        return ['handled' => false, 'reply_text' => $reply, 'reason' => 'awaiting_pawn_slip', 'slots' => $slots];
+                    }
+                    return ['handled' => false, 'reply_text' => $askPawnInterestSlip, 'reason' => 'missing_pawn_slip', 'slots' => $slots];
+                }
+                
+                $endpoint = $ep(['pawn_pay_interest']);
+                if (!$endpoint) return ['handled' => false, 'reason' => 'missing_endpoint_pawn_pay_interest'];
+                
+                $endpoint = str_replace('{id}', $pawnId, $endpoint);
+                
+                $payload = [
+                    'slip_image_url' => $slipImageUrl,
+                    'amount' => (float)($slots['amount'] ?? 0),
+                    'payment_time' => $slots['time'] ?? null,
+                    'sender_name' => $slots['sender_name'] ?? null
+                ];
+                
+                $resp = $this->callBackendJson($backendCfg, $endpoint, $payload);
+                if (!$resp['ok']) {
+                    return ['handled' => false, 'reply_text' => $templates['pawn_payment_pending'] ?? 'บันทึกการชำระดอกเบี้ยให้แล้วค่ะ รอเจ้าหน้าที่ตรวจสอบนะคะ 🙏', 'reason' => 'backend_error', 'meta' => $resp, 'slots' => $slots];
+                }
+                
+                $data = $resp['data'] ?? [];
+                $tpl = $templates['pawn_interest_paid'] ?? "ได้รับการชำระดอกเบี้ยแล้วค่ะ ✅\nงวดถัดไปครบกำหนด: {{next_due_date}}\nขอบคุณค่ะ 🙏";
+                $reply = $this->renderTemplate($tpl, [
+                    'next_due_date' => $data['next_interest_due'] ?? '-'
+                ]);
+                return ['handled' => true, 'reply_text' => $reply, 'reason' => 'backend_pawn_interest_paid', 'meta' => $resp, 'slots' => $slots];
+            }
+            
+            // Handle pawn_redeem (ไถ่ถอน)
+            if ($actionType === 'redeem') {
+                $pawnId = trim((string)($slots['pawn_id'] ?? ''));
+                
+                if ($pawnId === '') {
+                    $existingPawn = $this->db->queryOne(
+                        "SELECT * FROM pawns WHERE channel_id = ? AND external_user_id = ? AND status = 'active' ORDER BY next_interest_due ASC LIMIT 1",
+                        [$channelId, $externalUserId]
+                    );
+                    if ($existingPawn) {
+                        $pawnId = (string)$existingPawn['id'];
+                        $slots['pawn_id'] = $pawnId;
+                    }
+                }
+                
+                if ($pawnId === '') {
+                    return ['handled' => false, 'reply_text' => 'ไม่พบรายการจำนำที่สามารถไถ่ถอนได้ค่ะ 📭', 'reason' => 'no_active_pawn_redeem', 'slots' => $slots];
+                }
+                
+                // Get redemption amount
+                $endpoint = $ep(['pawn_status']);
+                if ($endpoint) {
+                    $endpoint = str_replace('{id}', $pawnId, $endpoint);
+                    $resp = $this->callBackendJson($backendCfg, $endpoint, []);
+                    
+                    if ($resp['ok'] && !empty($resp['data'])) {
+                        $p = $resp['data'];
+                        $tpl = $templates['pawn_redeem_info'] ?? "ยอดไถ่ถอนทั้งหมด: {{redemption_amount}} บาท\n(เงินต้น {{principal}} + ดอกเบี้ยค้าง {{outstanding_interest}} บาท)\n\nโอนได้ที่:\nSCB: 1653014242 (บจก.เพชรวิบวับ)\nแล้วแจ้งมาได้เลยนะคะ เจ้าหน้าที่จะนัดวันรับของค่ะ 💎";
+                        $reply = $this->renderTemplate($tpl, [
+                            'redemption_amount' => number_format((float)($p['redemption_amount'] ?? 0)),
+                            'principal' => number_format((float)($p['principal_amount'] ?? 0)),
+                            'outstanding_interest' => number_format((float)($p['outstanding_interest'] ?? 0))
+                        ]);
+                        return ['handled' => true, 'reply_text' => $reply, 'reason' => 'pawn_redeem_info', 'slots' => $slots];
+                    }
+                }
+                
+                return ['handled' => false, 'reply_text' => 'ไม่พบข้อมูลจำนำค่ะ กรุณาติดต่อเจ้าหน้าที่ 🙏', 'reason' => 'pawn_not_found', 'slots' => $slots];
+            }
+            
+            // Handle pawn_inquiry
+            if ($actionType === 'inquiry') {
+                $pawnId = trim((string)($slots['pawn_id'] ?? ''));
+                
+                if ($pawnId === '') {
+                    $pawns = $this->db->queryAll(
+                        "SELECT * FROM pawns WHERE channel_id = ? AND external_user_id = ? AND status IN ('active', 'overdue') ORDER BY next_interest_due ASC",
+                        [$channelId, $externalUserId]
+                    );
+                    
+                    if (empty($pawns)) {
+                        return ['handled' => true, 'reply_text' => 'ไม่มีรายการจำนำที่กำลังดำเนินการอยู่ค่ะ 📭', 'reason' => 'no_pawns', 'slots' => $slots];
+                    }
+                    
+                    if (count($pawns) === 1) {
+                        $p = $pawns[0];
+                        $tpl = $templates['pawn_status'] ?? "รายการจำนำ {{pawn_no}}\nสินค้า: {{item_description}}\nเงินต้น: {{principal}} บาท\nดอกเบี้ย: {{interest_rate}}%/เดือน\nครบกำหนดต่อดอก: {{next_due}} 📅";
+                        $reply = $this->renderTemplate($tpl, [
+                            'pawn_no' => $p['pawn_no'] ?? '',
+                            'item_description' => $p['item_description'] ?? '',
+                            'principal' => number_format((float)($p['principal_amount'] ?? 0)),
+                            'interest_rate' => $p['interest_rate_percent'] ?? '2',
+                            'next_due' => $p['next_interest_due'] ?? '-'
+                        ]);
+                        return ['handled' => true, 'reply_text' => $reply, 'reason' => 'pawn_inquiry_single', 'slots' => $slots];
+                    }
+                    
+                    $lines = [];
+                    foreach ($pawns as $i => $p) {
+                        $lines[] = ($i + 1) . ") {$p['item_description']}: " . number_format((float)($p['principal_amount'] ?? 0)) . " บ. (ถึง: {$p['next_interest_due']})";
+                    }
+                    
+                    $reply = "รายการจำนำค่ะ 📋\n" . implode("\n", $lines);
+                    return ['handled' => true, 'reply_text' => $reply, 'reason' => 'pawn_inquiry_multiple', 'slots' => $slots];
+                }
+                
+                $endpoint = $ep(['pawn_status']);
+                if ($endpoint) {
+                    $endpoint = str_replace('{id}', $pawnId, $endpoint);
+                    $resp = $this->callBackendJson($backendCfg, $endpoint, []);
+                    
+                    if ($resp['ok'] && !empty($resp['data'])) {
+                        $p = $resp['data'];
+                        $tpl = $templates['pawn_status'] ?? "รายการจำนำ {{pawn_no}}\nสินค้า: {{item_description}}\nเงินต้น: {{principal}} บาท\nดอกเบี้ย: {{interest_rate}}%/เดือน\nครบกำหนดต่อดอก: {{next_due}} 📅";
+                        $reply = $this->renderTemplate($tpl, [
+                            'pawn_no' => $p['pawn_no'] ?? '',
+                            'item_description' => $p['item_description'] ?? '',
+                            'principal' => number_format((float)($p['principal_amount'] ?? 0)),
+                            'interest_rate' => $p['interest_rate_percent'] ?? '2',
+                            'next_due' => $p['next_interest_due'] ?? '-'
+                        ]);
+                        return ['handled' => true, 'reply_text' => $reply, 'reason' => 'backend_pawn_status', 'meta' => $resp, 'slots' => $slots];
+                    }
+                }
+                
+                return ['handled' => false, 'reply_text' => 'ไม่พบข้อมูลจำนำค่ะ 😅', 'reason' => 'pawn_not_found', 'slots' => $slots];
+            }
+            
+            $tpl = $templates['pawn_choose_action'] ?? 'ต้องการ "จำนำใหม่ / ต่อดอก / ไถ่ถอน / เช็คสถานะ" แบบไหนคะ 😊';
+            return ['handled' => false, 'reply_text' => $tpl, 'reason' => 'missing_pawn_action_type', 'slots' => $slots];
+        }
+
+        // -------------------------
+        // Intent: repair_new / repair_inquiry (งานซ่อม)
+        // -------------------------
+        if (in_array($intent, ['repair_new', 'repair_inquiry'])) {
+            $actionType = null;
+            if ($intent === 'repair_new') $actionType = 'new';
+            elseif ($intent === 'repair_inquiry') $actionType = 'inquiry';
+            
+            if (!empty($slots['action_type'])) {
+                $actionType = $slots['action_type'];
+            }
+            
+            $askRepairItem = $templates['ask_repair_item'] ?? 'ต้องการซ่อมสินค้าชิ้นไหนคะ? 🔧 บอกรายละเอียดอาการเสียได้เลยค่ะ';
+            
+            // Handle repair_new
+            if ($actionType === 'new') {
+                $itemDesc = trim((string)($slots['item_description'] ?? ($slots['product_name'] ?? '')));
+                $issueDesc = trim((string)($slots['issue_description'] ?? ''));
+                
+                if ($itemDesc === '' && $issueDesc === '') {
+                    return ['handled' => false, 'reply_text' => $askRepairItem, 'reason' => 'missing_repair_item', 'slots' => $slots];
+                }
+                
+                $endpoint = $ep(['repair_create']);
+                if (!$endpoint) {
+                    // Fallback: create case and handoff
+                    $this->db->execute(
+                        "INSERT INTO cases (channel_id, external_user_id, case_type, status, subject, description, priority) VALUES (?, ?, 'repair', 'open', ?, ?, 'medium')",
+                        [$channelId, $externalUserId, "ลูกค้าต้องการซ่อม: {$itemDesc}", "{$itemDesc}\nอาการ: {$issueDesc}"]
+                    );
+                    
+                    $tpl = $templates['repair_handoff'] ?? "รับทราบค่ะ 🔧\nสินค้า: {{item_description}}\nอาการ: {{issue_description}}\n\nเจ้าหน้าที่จะติดต่อกลับเพื่อนัดรับของและประเมินราคาซ่อมค่ะ ✨";
+                    $reply = $this->renderTemplate($tpl, [
+                        'item_description' => $itemDesc ?: '-',
+                        'issue_description' => $issueDesc ?: '-'
+                    ]);
+                    return ['handled' => true, 'reply_text' => $reply, 'reason' => 'repair_case_created', 'handoff' => true, 'slots' => $slots];
+                }
+                
+                $payload = [
+                    'channel_id' => $channelId,
+                    'external_user_id' => $externalUserId,
+                    'platform' => $context['platform'] ?? ($context['channel']['platform'] ?? 'unknown'),
+                    'item_description' => $itemDesc,
+                    'issue_description' => $issueDesc
+                ];
+                
+                $resp = $this->callBackendJson($backendCfg, $endpoint, $payload);
+                if (!$resp['ok']) {
+                    return ['handled' => false, 'reply_text' => $templates['fallback'] ?? 'ขออภัยค่ะ มีปัญหาในการสร้างรายการซ่อม', 'reason' => 'backend_error', 'meta' => $resp, 'slots' => $slots];
+                }
+                
+                $data = $resp['data'] ?? [];
+                $tpl = $templates['repair_created'] ?? "รับเรื่องซ่อมแล้วค่ะ 🔧\nรหัส: {{repair_no}}\nสินค้า: {{item_description}}\n\nเจ้าหน้าที่จะติดต่อกลับเพื่อนัดรับของค่ะ ✨";
+                $reply = $this->renderTemplate($tpl, [
+                    'repair_no' => $data['repair_no'] ?? '',
+                    'item_description' => $data['item_description'] ?? $itemDesc
+                ]);
+                
+                $slots['repair_id'] = $data['id'] ?? null;
+                $slots['repair_no'] = $data['repair_no'] ?? null;
+                
+                return ['handled' => true, 'reply_text' => $reply, 'reason' => 'backend_repair_created', 'meta' => $resp, 'slots' => $slots];
+            }
+            
+            // Handle repair_inquiry
+            if ($actionType === 'inquiry') {
+                $repairId = trim((string)($slots['repair_id'] ?? ''));
+                
+                if ($repairId === '') {
+                    $repairs = $this->db->queryAll(
+                        "SELECT * FROM repairs WHERE channel_id = ? AND external_user_id = ? AND status NOT IN ('completed', 'cancelled') ORDER BY created_at DESC",
+                        [$channelId, $externalUserId]
+                    );
+                    
+                    if (empty($repairs)) {
+                        return ['handled' => true, 'reply_text' => 'ไม่มีรายการซ่อมที่กำลังดำเนินการอยู่ค่ะ 📭', 'reason' => 'no_repairs', 'slots' => $slots];
+                    }
+                    
+                    if (count($repairs) === 1) {
+                        $r = $repairs[0];
+                        $statusMap = [
+                            'pending' => 'รอรับของ',
+                            'received' => 'รับของแล้ว',
+                            'diagnosing' => 'กำลังตรวจสอบ',
+                            'quoted' => 'รอลูกค้าอนุมัติ',
+                            'approved' => 'กำลังซ่อม',
+                            'repairing' => 'กำลังซ่อม',
+                            'completed' => 'ซ่อมเสร็จ'
+                        ];
+                        $tpl = $templates['repair_status'] ?? "รายการซ่อม {{repair_no}}\nสินค้า: {{item_description}}\nสถานะ: {{status}} 🔧";
+                        $reply = $this->renderTemplate($tpl, [
+                            'repair_no' => $r['repair_no'] ?? '',
+                            'item_description' => $r['item_description'] ?? '',
+                            'status' => $statusMap[$r['status']] ?? $r['status']
+                        ]);
+                        return ['handled' => true, 'reply_text' => $reply, 'reason' => 'repair_inquiry_single', 'slots' => $slots];
+                    }
+                    
+                    $lines = [];
+                    $statusMap = ['pending' => 'รอรับของ', 'received' => 'รับแล้ว', 'diagnosing' => 'ตรวจสอบ', 'quoted' => 'รออนุมัติ', 'approved' => 'กำลังซ่อม', 'repairing' => 'กำลังซ่อม'];
+                    foreach ($repairs as $i => $r) {
+                        $lines[] = ($i + 1) . ") {$r['item_description']}: " . ($statusMap[$r['status']] ?? $r['status']);
+                    }
+                    
+                    $reply = "รายการซ่อมค่ะ 📋\n" . implode("\n", $lines);
+                    return ['handled' => true, 'reply_text' => $reply, 'reason' => 'repair_inquiry_multiple', 'slots' => $slots];
+                }
+                
+                $endpoint = $ep(['repair_status']);
+                if ($endpoint) {
+                    $endpoint = str_replace('{id}', $repairId, $endpoint);
+                    $resp = $this->callBackendJson($backendCfg, $endpoint, []);
+                    
+                    if ($resp['ok'] && !empty($resp['data'])) {
+                        $r = $resp['data'];
+                        $tpl = $templates['repair_status'] ?? "รายการซ่อม {{repair_no}}\nสินค้า: {{item_description}}\nสถานะ: {{status}} 🔧";
+                        $reply = $this->renderTemplate($tpl, [
+                            'repair_no' => $r['repair_no'] ?? '',
+                            'item_description' => $r['item_description'] ?? '',
+                            'status' => $r['status_display'] ?? $r['status']
+                        ]);
+                        return ['handled' => true, 'reply_text' => $reply, 'reason' => 'backend_repair_status', 'meta' => $resp, 'slots' => $slots];
+                    }
+                }
+                
+                return ['handled' => false, 'reply_text' => 'ไม่พบข้อมูลรายการซ่อมค่ะ 😅', 'reason' => 'repair_not_found', 'slots' => $slots];
+            }
+            
+            $tpl = $templates['repair_choose_action'] ?? 'ต้องการ "ส่งซ่อม / เช็คสถานะ" แบบไหนคะ 😊';
+            return ['handled' => false, 'reply_text' => $tpl, 'reason' => 'missing_repair_action_type', 'slots' => $slots];
+        }
+
         return ['handled' => false, 'reason' => 'intent_not_supported'];
     }
 
@@ -1677,6 +2328,27 @@ class RouterV1Handler implements BotHandlerInterface
                 return $templates['product_availability']
                     ?? 'ลูกค้าสนใจเช็คของใช่ไหมคะ 😊 รบกวนส่ง “ชื่อรุ่น/รหัสสินค้า” หรือส่งรูปสินค้ามาได้เลย เดี๋ยวเช็คให้ค่ะ';
             default:
+            // Deposit intents
+            case 'deposit_new':
+                return $templates['ask_product_for_deposit'] ?? 'สนใจมัดจำสินค้าตัวไหนคะ? 🎁';
+            case 'deposit_payment':
+                return $templates['ask_deposit_slip'] ?? 'รบกวนส่งรูปสลิปโอนมัดจำด้วยนะคะ 📷';
+            case 'deposit_inquiry':
+                return $templates['deposit_inquiry'] ?? 'ต้องการเช็คสถานะมัดจำใช่ไหมคะ? 📋';
+            // Pawn intents
+            case 'pawn_new':
+                return $templates['ask_pawn_item'] ?? 'ต้องการจำนำสินค้าชิ้นไหนคะ? 💎';
+            case 'pawn_pay_interest':
+                return $templates['ask_pawn_interest_slip'] ?? 'รบกวนส่งรูปสลิปชำระดอกเบี้ยด้วยนะคะ 📷';
+            case 'pawn_redeem':
+                return $templates['pawn_redeem'] ?? 'ต้องการไถ่ถอนสินค้าใช่ไหมคะ? 💎';
+            case 'pawn_inquiry':
+                return $templates['pawn_inquiry'] ?? 'ต้องการเช็คสถานะจำนำใช่ไหมคะ? 📋';
+            // Repair intents
+            case 'repair_new':
+                return $templates['ask_repair_item'] ?? 'ต้องการซ่อมสินค้าชิ้นไหนคะ? 🔧';
+            case 'repair_inquiry':
+                return $templates['repair_inquiry'] ?? 'ต้องการเช็คสถานะงานซ่อมใช่ไหมคะ? 🔧';
                 return $fallback;
         }
     }
@@ -1986,6 +2658,12 @@ class RouterV1Handler implements BotHandlerInterface
         if (!preg_match('~^https?://~i', $url)) {
             $url = $base . '/' . ltrim($endpointOrUrl, '/');
         }
+        
+        // Ensure trailing slash for directory endpoints (avoid 404 redirects)
+        // Only add slash if: 1) no file extension, 2) no query string, 3) doesn't already end with /
+        if (!preg_match('~\.\w+$|\?|/$~', $url)) {
+            $url .= '/';
+        }
 
         $headers = ['Content-Type: application/json'];
 
@@ -2028,12 +2706,14 @@ class RouterV1Handler implements BotHandlerInterface
             return ['ok' => true, 'status' => $status, 'data' => ['raw' => $raw], 'url' => $url];
         }
 
-        // Merge API response directly (API already has 'ok' and 'data' keys)
+        // Merge API response directly (API already has 'ok'/'success' and 'data' keys)
         // Don't double-wrap it
-        if (isset($data['ok']) && isset($data['data'])) {
-            // API response format: {"ok": true, "data": {...}}
+        // Support both 'ok' and 'success' keys
+        $isOk = $data['ok'] ?? $data['success'] ?? false;
+        if (isset($data['data'])) {
+            // API response format: {"ok": true, "data": {...}} or {"success": true, "data": {...}}
             // Return: {"ok": <from API>, "data": <from API>, "status": <http>, "url": <url>}
-            return array_merge($data, ['status' => $status, 'url' => $url]);
+            return ['ok' => $isOk, 'data' => $data['data'], 'status' => $status, 'url' => $url];
         }
         
         // Legacy format: API returns data directly

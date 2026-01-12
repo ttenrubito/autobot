@@ -32,7 +32,7 @@ include('../includes/customer/sidebar.php');
                 <div class="stat-icon primary">🤖</div>
                 <div class="stat-content">
                     <div class="stat-label">บริการทั้งหมด</div>
-                    <div class="stat-value" id="totalServices">-</div> ช
+                    <div class="stat-value" id="totalServices">-</div> 
                 </div>
             </div>
         </div>

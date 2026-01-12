@@ -26,6 +26,20 @@ try {
     $db = Database::getInstance();
     $result = $db->queryOne("SELECT 1 as test");
     $health['services']['database'] = $result ? 'connected' : 'disconnected';
+    
+    // Debug: Show cases table columns
+    if (isset($_GET['debug'])) {
+        $tableName = preg_replace('/[^a-z_]/', '', $_GET['debug']);
+        if ($tableName) {
+            try {
+                $pdo = $db->getConnection();
+                $stmt = $pdo->query("DESCRIBE {$tableName}");
+                $health['debug_' . $tableName . '_columns'] = $stmt->fetchAll(PDO::FETCH_COLUMN);
+            } catch (Exception $e) {
+                $health['debug_error'] = $e->getMessage();
+            }
+        }
+    }
 } catch (Exception $e) {
     $health['services']['database'] = 'error';
     $health['status'] = 'unhealthy';

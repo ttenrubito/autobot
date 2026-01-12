@@ -44,6 +44,11 @@ $path = preg_replace('#^/autobot/api#', '', $path);  // Strip /autobot/api prefi
 $path = preg_replace('#^/api#', '', $path);          // Strip /api prefix (Cloud Run)
 $path = preg_replace('#^/index\.php#', '', $path);   // Strip router script prefix when called as /api/index.php/...
 
+// Remove trailing slash (except for root)
+if ($path !== '/' && str_ends_with($path, '/')) {
+    $path = rtrim($path, '/');
+}
+
 if ($path === '') {
     $path = '/';
 }
@@ -272,6 +277,53 @@ try {
     elseif (preg_match('#^/customer/cases/(\d+)$#', $path, $matches) && $method === 'GET') {
         $_GET['id'] = $matches[1];
         require __DIR__ . '/customer/cases.php';
+    }
+    
+    // Customer Deposits routes (มัดจำ)
+    elseif ($path === '/customer/deposits' && in_array($method, ['GET', 'POST'])) {
+        require __DIR__ . '/customer/deposits.php';
+    }
+    elseif (preg_match('#^/customer/deposits/(\d+)$#', $path, $matches) && $method === 'GET') {
+        $_GET['id'] = $matches[1];
+        require __DIR__ . '/customer/deposits.php';
+    }
+    elseif (preg_match('#^/customer/deposits/(\d+)/pay$#', $path, $matches) && $method === 'POST') {
+        $_GET['id'] = $matches[1];
+        $_GET['action'] = 'pay';
+        require __DIR__ . '/customer/deposits.php';
+    }
+    
+    // Customer Pawns routes (ฝากจำนำ)
+    elseif ($path === '/customer/pawns' && in_array($method, ['GET', 'POST'])) {
+        require __DIR__ . '/customer/pawns.php';
+    }
+    elseif (preg_match('#^/customer/pawns/(\d+)$#', $path, $matches) && $method === 'GET') {
+        $_GET['id'] = $matches[1];
+        require __DIR__ . '/customer/pawns.php';
+    }
+    elseif (preg_match('#^/customer/pawns/(\d+)/pay-interest$#', $path, $matches) && $method === 'POST') {
+        $_GET['id'] = $matches[1];
+        $_GET['action'] = 'pay-interest';
+        require __DIR__ . '/customer/pawns.php';
+    }
+    
+    // Customer Repairs routes (งานซ่อม)
+    elseif ($path === '/customer/repairs' && in_array($method, ['GET', 'POST'])) {
+        require __DIR__ . '/customer/repairs.php';
+    }
+    elseif (preg_match('#^/customer/repairs/(\d+)$#', $path, $matches) && $method === 'GET') {
+        $_GET['id'] = $matches[1];
+        require __DIR__ . '/customer/repairs.php';
+    }
+    elseif (preg_match('#^/customer/repairs/(\d+)/approve$#', $path, $matches) && $method === 'POST') {
+        $_GET['id'] = $matches[1];
+        $_GET['action'] = 'approve';
+        require __DIR__ . '/customer/repairs.php';
+    }
+    elseif (preg_match('#^/customer/repairs/(\d+)/pay$#', $path, $matches) && $method === 'POST') {
+        $_GET['id'] = $matches[1];
+        $_GET['action'] = 'pay';
+        require __DIR__ . '/customer/repairs.php';
     }
 
     // Health aliases

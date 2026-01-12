@@ -286,11 +286,12 @@ function getPaymentPlatformIcon(platform) {
 function filterPayments(type, evt) {
     currentFilter = type;
 
-    // Update active tab
-    document.querySelectorAll('.filter-tab').forEach(tab => tab.classList.remove('active'));
+    // Update active tab - support both .filter-tab and .filter-chip
+    document.querySelectorAll('.filter-tab, .filter-chip').forEach(tab => tab.classList.remove('active'));
 
     const target = (evt && (evt.currentTarget || evt.target)) ? (evt.currentTarget || evt.target) : null;
-    const btn = target ? target.closest('.filter-tab') : document.querySelector(`.filter-tab[data-filter="${type}"]`);
+    const btn = target ? target.closest('.filter-tab, .filter-chip') : 
+        (document.querySelector(`.filter-chip[data-filter="${type}"]`) || document.querySelector(`.filter-tab[data-filter="${type}"]`));
     if (btn) btn.classList.add('active');
 
     applyAllFilters(); // Use unified filter function

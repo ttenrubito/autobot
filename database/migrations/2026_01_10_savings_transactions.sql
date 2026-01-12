@@ -1,0 +1,28 @@
+-- Savings Transactions Table
+CREATE TABLE IF NOT EXISTS savings_transactions (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    transaction_no VARCHAR(50) UNIQUE NOT NULL,
+    savings_account_id BIGINT UNSIGNED NOT NULL,
+    tenant_id VARCHAR(50) NOT NULL DEFAULT 'default',
+    transaction_type ENUM('deposit', 'adjustment', 'refund', 'conversion') NOT NULL DEFAULT 'deposit',
+    amount DECIMAL(12,2) NOT NULL,
+    balance_after DECIMAL(12,2) NOT NULL,
+    payment_method ENUM('bank_transfer', 'promptpay', 'credit_card', 'cash', 'other') NULL,
+    slip_image_url VARCHAR(500) NULL,
+    slip_ocr_data JSON NULL,
+    payment_amount DECIMAL(12,2) NULL,
+    payment_time TIMESTAMP NULL,
+    sender_name VARCHAR(255) NULL,
+    status ENUM('pending', 'verified', 'rejected', 'cancelled') NOT NULL DEFAULT 'pending',
+    verified_by INT NULL,
+    verified_at TIMESTAMP NULL,
+    rejection_reason TEXT NULL,
+    notes TEXT NULL,
+    case_id BIGINT UNSIGNED NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_transaction_no (transaction_no),
+    INDEX idx_account (savings_account_id),
+    INDEX idx_status (status),
+    CONSTRAINT fk_savings_tx_account FOREIGN KEY (savings_account_id) REFERENCES savings_accounts(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
