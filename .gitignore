@@ -53,3 +53,5 @@ config-local.php
 
 # Backup files
 *.bak
+google-cloud-sdk/
+*.tar.gz
