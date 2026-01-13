@@ -107,8 +107,54 @@ function createCase($db) {
         return;
     }
     
+    // ✅ CHECK FOR EXISTING OPEN CASE before creating new one
+    $existingCase = $db->queryOne(
+        "SELECT * FROM cases 
+         WHERE channel_id = ? AND external_user_id = ? AND case_type = ? 
+         AND status NOT IN ('resolved', 'cancelled')
+         ORDER BY created_at DESC LIMIT 1",
+        [(int)$input['channel_id'], (string)$input['external_user_id'], $input['case_type']]
+    );
+    
+    if ($existingCase) {
+        // Update existing case with new slots/message instead of creating new
+        $existingSlots = json_decode($existingCase['slots'] ?? '{}', true) ?: [];
+        $newSlots = $input['slots'] ?? [];
+        $mergedSlots = array_merge($existingSlots, $newSlots);
+        
+        // Append message to description if provided
+        $newDescription = $existingCase['description'] ?? '';
+        if (!empty($input['message'])) {
+            $timestamp = date('Y-m-d H:i:s');
+            $newDescription = trim($newDescription . "\n[{$timestamp}] ลูกค้า: " . $input['message']);
+        }
+        
+        $db->execute(
+            "UPDATE cases SET slots = ?, description = ?, updated_at = NOW() WHERE id = ?",
+            [json_encode($mergedSlots), $newDescription, $existingCase['id']]
+        );
+        
+        echo json_encode([
+            'success' => true,
+            'message' => 'Case updated',
+            'data' => [
+                'id' => $existingCase['id'],
+                'case_no' => $existingCase['case_no'],
+                'is_new' => false
+            ]
+        ]);
+        return;
+    }
+    
     $caseNo = generateCaseNo();
     $slots = isset($input['slots']) ? json_encode($input['slots']) : null;
+    
+    // Include initial message in description
+    $description = $input['description'] ?? null;
+    if (!empty($input['message'])) {
+        $timestamp = date('Y-m-d H:i:s');
+        $description = "[{$timestamp}] ลูกค้า: " . $input['message'];
+    }
     
     // Determine initial status based on case_type
     $status = 'open';

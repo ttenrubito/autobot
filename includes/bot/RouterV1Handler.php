@@ -670,6 +670,7 @@ class RouterV1Handler implements BotHandlerInterface
                                     'case_type' => $caseType,
                                     'slots' => $slots,
                                     'intent' => $intent,
+                                    'message' => $text, // ✅ Include customer message
                                 ];
                                 
                                 // Call API endpoint
@@ -917,6 +918,7 @@ class RouterV1Handler implements BotHandlerInterface
                                 'case_type' => $caseType,
                                 'slots' => $slots,
                                 'intent' => $intent,
+                                'message' => $text, // ✅ Include customer message
                             ];
                             
                             // Call API endpoint
