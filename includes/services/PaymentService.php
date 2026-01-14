@@ -80,21 +80,24 @@ class PaymentService
             $channelId = $context['channel']['id'] ?? ($context['channel_id'] ?? null);
             
             $customer = $this->findCustomerByExternalId($externalUserId);
-            // customer_profiles has 'id' not 'user_id'
-            $customerId = $customer['id'] ?? 0;
+            // Note: customer_profiles.id != users.id (different tables)
+            // payments.customer_id has FK to users.id, but chatbot users aren't in users table
+            // So we set customer_id = NULL for chatbot payments
+            $customerId = null; // FK constraint: payments.customer_id -> users.id
+            $customerProfileId = $customer['id'] ?? null; // For reference only
             $customerName = $customer['full_name'] ?? ($customer['display_name'] ?? $senderName);
             $customerPhone = $customer['phone'] ?? null;
             
             $this->log('INFO', 'PaymentService - Customer lookup', [
                 'external_user_id' => $externalUserId,
                 'found_customer' => !empty($customer),
-                'customer_id' => $customerId
+                'customer_profile_id' => $customerProfileId
             ]);
             
-            // 3. Try to auto-match with pending order
+            // 3. Try to auto-match with pending order (use customerProfileId for lookup)
             $matchedOrder = null;
-            if ($amount > 0 && ($customerId > 0 || $externalUserId)) {
-                $matchedOrder = $this->tryAutoMatchOrder($amount, $customerId, $externalUserId);
+            if ($amount > 0 && ($customerProfileId || $externalUserId)) {
+                $matchedOrder = $this->tryAutoMatchOrder($amount, $customerProfileId, $externalUserId);
             }
             
             $this->log('INFO', 'PaymentService - Order matching', [
@@ -170,7 +173,7 @@ class PaymentService
             $params = [
                 ':payment_no' => $paymentNo,
                 ':order_id' => $orderId,
-                ':customer_id' => $customerId ?: 0,
+                ':customer_id' => null, // NULL because chatbot users aren't in users table
                 ':tenant_id' => $tenantId,
                 ':amount' => $amount,
                 ':slip_image' => $imageUrl,
@@ -180,7 +183,8 @@ class PaymentService
             
             $this->log('INFO', 'PaymentService - Executing INSERT', [
                 'payment_no' => $paymentNo,
-                'customer_id' => $customerId,
+                'customer_id' => 'NULL (chatbot user)',
+                'customer_profile_id' => $customerProfileId,
                 'order_id' => $orderId,
                 'amount' => $amount,
                 'sql_full' => $sql,
@@ -276,15 +280,16 @@ class PaymentService
     /**
      * Try to auto-match payment with a pending order
      * Match by amount and customer (within reasonable time window)
+     * Note: $customerProfileId is from customer_profiles.id, not users.id
      */
-    private function tryAutoMatchOrder(float $amount, int $customerId, ?string $externalUserId): ?array
+    private function tryAutoMatchOrder(float $amount, ?int $customerProfileId, ?string $externalUserId): ?array
     {
         if ($amount <= 0) {
             return null;
         }
         
-        // Try to match by customer_id first
-        if ($customerId > 0) {
+        // Try to match by customer_profile_id first (orders.customer_id = customer_profiles.id)
+        if ($customerProfileId > 0) {
             $sql = "
                 SELECT id, order_number, total_amount, status
                 FROM orders
@@ -298,14 +303,14 @@ class PaymentService
             
             $stmt = $this->pdo->prepare($sql);
             $stmt->execute([
-                ':customer_id' => $customerId,
+                ':customer_id' => $customerProfileId,
                 ':amount' => $amount
             ]);
             $order = $stmt->fetch(PDO::FETCH_ASSOC);
             
             if ($order) {
-                $this->log('INFO', 'PaymentService - Matched order by customer_id', [
-                    'customer_id' => $customerId,
+                $this->log('INFO', 'PaymentService - Matched order by customer_profile_id', [
+                    'customer_profile_id' => $customerProfileId,
                     'order_id' => $order['id'],
                     'order_number' => $order['order_number']
                 ]);
