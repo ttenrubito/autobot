@@ -35,6 +35,7 @@ try {
         $details = json_decode($payment['payment_details'] ?? '{}', true);
         $payment['ocr_sender_name'] = $details['sender_name'] ?? null;
         $payment['ocr_external_user_id'] = $details['external_user_id'] ?? null;
+        $payment['channel_id'] = $details['channel_id'] ?? null;
         $payment['payment_details'] = 'HIDDEN'; // Don't expose full details
     }
     
@@ -49,10 +50,20 @@ try {
     ");
     $profiles = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
+    // Check conversations
+    $stmt = $pdo->query("SELECT COUNT(*) as cnt FROM conversations");
+    $convCount = $stmt->fetch(PDO::FETCH_ASSOC)['cnt'];
+    
+    // Check chat_events
+    $stmt = $pdo->query("SELECT COUNT(*) as cnt FROM chat_events");
+    $chatCount = $stmt->fetch(PDO::FETCH_ASSOC)['cnt'];
+    
     echo json_encode([
         'success' => true,
         'latest_payments' => $payments,
-        'customer_profiles' => $profiles
+        'customer_profiles' => $profiles,
+        'conversations_count' => $convCount,
+        'chat_events_count' => $chatCount
     ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
     
 } catch (Throwable $e) {
