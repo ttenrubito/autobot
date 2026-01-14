@@ -56,14 +56,35 @@ try {
     
     // Check chat_events
     $stmt = $pdo->query("SELECT COUNT(*) as cnt FROM chat_events");
-    $chatCount = $stmt->fetch(PDO::FETCH_ASSOC)['cnt'];
+    $chatEventsCount = $stmt->fetch(PDO::FETCH_ASSOC)['cnt'];
+    
+    // Check chat_messages
+    $stmt = $pdo->query("SELECT COUNT(*) as cnt FROM chat_messages");
+    $chatMsgCount = $stmt->fetch(PDO::FETCH_ASSOC)['cnt'];
+    
+    // Check chat_sessions for latest payment user
+    $chatSession = null;
+    if (!empty($payments[0]['ocr_external_user_id'])) {
+        $stmt = $pdo->prepare("SELECT id, channel_id, external_user_id FROM chat_sessions WHERE external_user_id = ? LIMIT 1");
+        $stmt->execute([$payments[0]['ocr_external_user_id']]);
+        $chatSession = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        // Get messages count for this session
+        if ($chatSession) {
+            $stmt = $pdo->prepare("SELECT COUNT(*) as cnt FROM chat_messages WHERE session_id = ?");
+            $stmt->execute([$chatSession['id']]);
+            $chatSession['messages_count'] = $stmt->fetch(PDO::FETCH_ASSOC)['cnt'];
+        }
+    }
     
     echo json_encode([
         'success' => true,
         'latest_payments' => $payments,
         'customer_profiles' => $profiles,
         'conversations_count' => $convCount,
-        'chat_events_count' => $chatCount
+        'chat_events_count' => $chatEventsCount,
+        'chat_messages_count' => $chatMsgCount,
+        'latest_payment_session' => $chatSession
     ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
     
 } catch (Throwable $e) {
