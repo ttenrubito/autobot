@@ -32,9 +32,10 @@ try {
 
     $db = Database::getInstance();
     $method = $_SERVER['REQUEST_METHOD'];
-    
+
     // Detect schema for compatibility
-    function getPawnsColumns() {
+    function getPawnsColumns()
+    {
         global $db;
         try {
             $columns = $db->query("SHOW COLUMNS FROM pawns");
@@ -44,46 +45,47 @@ try {
             return [];
         }
     }
-    
+
     $columns = getPawnsColumns();
     $hasItemType = in_array('item_type', $columns);
     $hasCategory = in_array('category', $columns);
     $hasLoanAmount = in_array('loan_amount', $columns);
     $hasPrincipalAmount = in_array('principal_amount', $columns);
-    
+
     // Column mappings
     $categoryCol = $hasItemType ? 'item_type' : ($hasCategory ? 'category' : 'item_type');
     $loanCol = $hasLoanAmount ? 'loan_amount' : ($hasPrincipalAmount ? 'principal_amount' : 'loan_amount');
-    
+
     // GET - List or Get Single
     if ($method === 'GET') {
         $id = $_GET['id'] ?? null;
-        
+
         if ($id) {
             // Get single pawn with details
             $pawn = $db->queryOne(
                 "SELECT p.*, 
                         p.{$loanCol} as loan_amount,
                         p.{$categoryCol} as item_type,
-                        COALESCE(c.display_name, c.full_name, 'ไม่ระบุ') as customer_name,
-                        c.profile_picture as customer_avatar
+                        COALESCE(cp.display_name, cp.full_name, 'ไม่ระบุ') as customer_name,
+                        COALESCE(cp.avatar_url, cp.profile_pic_url) as customer_avatar
                  FROM pawns p
-                 LEFT JOIN customers c ON p.customer_id = c.id
+                 LEFT JOIN customer_profiles cp ON p.platform_user_id = cp.platform_user_id 
+                    AND cp.platform = COALESCE(p.platform, 'line')
                  WHERE p.id = ?",
                 [$id]
             );
-            
+
             if (!$pawn) {
                 http_response_code(404);
                 echo json_encode(['success' => false, 'message' => 'Pawn not found']);
                 exit;
             }
-            
+
             // Calculate monthly interest
             $interestRate = $pawn['interest_rate'] ?? 2;
             $loanAmount = $pawn['loan_amount'] ?? 0;
             $pawn['monthly_interest'] = round($loanAmount * ($interestRate / 100), 2);
-            
+
             http_response_code(200);
             echo json_encode([
                 'success' => true,
@@ -91,59 +93,61 @@ try {
             ]);
         } else {
             // List all pawns with pagination and filters
-            $page = max(1, (int)($_GET['page'] ?? 1));
-            $perPage = (int)($_GET['limit'] ?? 20);
+            $page = max(1, (int) ($_GET['page'] ?? 1));
+            $perPage = (int) ($_GET['limit'] ?? 20);
             $offset = ($page - 1) * $perPage;
             $status = $_GET['status'] ?? '';
             $search = $_GET['search'] ?? '';
-            
+
             $where = [];
             $params = [];
-            
+
             if ($status) {
                 $where[] = "p.status = ?";
                 $params[] = $status;
             }
-            
+
             if ($search) {
-                $where[] = "(p.pawn_no LIKE ? OR c.display_name LIKE ? OR c.full_name LIKE ? OR p.item_description LIKE ?)";
+                $where[] = "(p.pawn_no LIKE ? OR cp.display_name LIKE ? OR cp.full_name LIKE ? OR p.item_description LIKE ?)";
                 $searchParam = "%{$search}%";
                 $params = array_merge($params, [$searchParam, $searchParam, $searchParam, $searchParam]);
             }
-            
+
             $whereClause = $where ? "WHERE " . implode(" AND ", $where) : "";
-            
+
             // Get total count
             $countResult = $db->queryOne(
                 "SELECT COUNT(*) as total FROM pawns p
-                 LEFT JOIN customers c ON p.customer_id = c.id
+                 LEFT JOIN customer_profiles cp ON p.platform_user_id = cp.platform_user_id 
+                    AND cp.platform = COALESCE(p.platform, 'line')
                  {$whereClause}",
                 $params
             );
             $total = $countResult['total'] ?? 0;
-            
+
             // Get pawns
             $pawns = $db->query(
                 "SELECT p.id, p.pawn_no, p.customer_id, p.status, 
                         p.{$loanCol} as loan_amount, p.{$categoryCol} as item_type,
                         p.interest_rate, p.item_description, p.due_date,
                         p.created_at,
-                        COALESCE(c.display_name, c.full_name, 'ไม่ระบุ') as customer_name,
-                        c.profile_picture as customer_avatar
+                        COALESCE(cp.display_name, cp.full_name, 'ไม่ระบุ') as customer_name,
+                        COALESCE(cp.avatar_url, cp.profile_pic_url) as customer_avatar
                  FROM pawns p
-                 LEFT JOIN customers c ON p.customer_id = c.id
+                 LEFT JOIN customer_profiles cp ON p.platform_user_id = cp.platform_user_id 
+                    AND cp.platform = COALESCE(p.platform, 'line')
                  {$whereClause}
                  ORDER BY p.created_at DESC
                  LIMIT ? OFFSET ?",
                 array_merge($params, [$perPage, $offset])
             );
-            
+
             // Calculate monthly interest for each pawn
             foreach ($pawns as &$pawn) {
                 $interestRate = $pawn['interest_rate'] ?? 2;
                 $loanAmount = $pawn['loan_amount'] ?? 0;
                 $pawn['monthly_interest'] = round($loanAmount * ($interestRate / 100), 2);
-                
+
                 // Check if overdue
                 if ($pawn['due_date']) {
                     $dueDate = new DateTime($pawn['due_date']);
@@ -152,7 +156,7 @@ try {
                     $pawn['days_until_due'] = $today->diff($dueDate)->format('%r%a');
                 }
             }
-            
+
             // Get summary
             $summary = $db->queryOne(
                 "SELECT 
@@ -162,7 +166,7 @@ try {
                     SUM(CASE WHEN status = 'redeemed' THEN {$loanCol} ELSE 0 END) as redeemed_amount
                  FROM pawns"
             );
-            
+
             http_response_code(200);
             echo json_encode([
                 'success' => true,
@@ -177,11 +181,11 @@ try {
             ]);
         }
     }
-    
+
     // POST - Create Pawn
     elseif ($method === 'POST') {
         $input = json_decode(file_get_contents('php://input'), true);
-        
+
         // Validate required fields
         $required = ['customer_id', 'item_type', 'item_name', 'loan_amount', 'interest_rate'];
         foreach ($required as $field) {
@@ -191,30 +195,30 @@ try {
                 exit;
             }
         }
-        
+
         // Generate pawn number
         $lastPawn = $db->queryOne(
             "SELECT pawn_no FROM pawns ORDER BY id DESC LIMIT 1"
         );
         $nextNum = 1;
         if ($lastPawn && preg_match('/PWN(\d+)/', $lastPawn['pawn_no'], $matches)) {
-            $nextNum = (int)$matches[1] + 1;
+            $nextNum = (int) $matches[1] + 1;
         }
         $pawnNo = 'PWN' . str_pad($nextNum, 6, '0', STR_PAD_LEFT);
-        
+
         // Calculate due date if not provided
         $dueDate = $input['due_date'] ?? null;
         if (!$dueDate) {
-            $months = (int)($input['period_months'] ?? 3);
+            $months = (int) ($input['period_months'] ?? 3);
             $dueDate = date('Y-m-d', strtotime("+{$months} months"));
         }
-        
+
         // Insert pawn
         $sql = "INSERT INTO pawns (
                     pawn_no, customer_id, {$categoryCol}, item_description,
                     {$loanCol}, interest_rate, due_date, status, notes, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, NOW())";
-        
+
         $db->execute($sql, [
             $pawnNo,
             $input['customer_id'],
@@ -225,9 +229,9 @@ try {
             $dueDate,
             $input['notes'] ?? null
         ]);
-        
+
         $pawnId = $db->lastInsertId();
-        
+
         http_response_code(201);
         echo json_encode([
             'success' => true,
@@ -239,7 +243,7 @@ try {
             ]
         ]);
     }
-    
+
     // PUT - Update Pawn
     elseif ($method === 'PUT') {
         $id = $_GET['id'] ?? null;
@@ -248,12 +252,12 @@ try {
             echo json_encode(['success' => false, 'message' => 'Pawn ID required']);
             exit;
         }
-        
+
         $input = json_decode(file_get_contents('php://input'), true);
-        
+
         $updates = [];
         $params = [];
-        
+
         $allowedFields = ['status', 'interest_rate', 'due_date', 'notes'];
         foreach ($allowedFields as $field) {
             if (isset($input[$field])) {
@@ -261,29 +265,29 @@ try {
                 $params[] = $input[$field];
             }
         }
-        
+
         // Handle loan_amount with schema compatibility
         if (isset($input['loan_amount'])) {
             $updates[] = "{$loanCol} = ?";
             $params[] = $input['loan_amount'];
         }
-        
+
         if (empty($updates)) {
             http_response_code(400);
             echo json_encode(['success' => false, 'message' => 'No fields to update']);
             exit;
         }
-        
+
         $params[] = $id;
         $db->execute(
             "UPDATE pawns SET " . implode(", ", $updates) . ", updated_at = NOW() WHERE id = ?",
             $params
         );
-        
+
         http_response_code(200);
         echo json_encode(['success' => true, 'message' => 'อัพเดทสำเร็จ']);
     }
-    
+
     // DELETE - Delete Pawn
     elseif ($method === 'DELETE') {
         $id = $_GET['id'] ?? null;
@@ -292,14 +296,12 @@ try {
             echo json_encode(['success' => false, 'message' => 'Pawn ID required']);
             exit;
         }
-        
+
         $db->execute("DELETE FROM pawns WHERE id = ?", [$id]);
-        
+
         http_response_code(200);
         echo json_encode(['success' => true, 'message' => 'ลบสำเร็จ']);
-    }
-    
-    else {
+    } else {
         http_response_code(405);
         echo json_encode(['success' => false, 'message' => 'Method not allowed']);
     }

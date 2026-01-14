@@ -31,68 +31,72 @@ $action = $_GET['action'] ?? null;
 try {
     $pdo = getDB();
     $db = Database::getInstance();
-    
+
     if ($method === 'GET') {
         if (isset($_GET['id']) && is_numeric($_GET['id'])) {
             // GET /api/admin/payments/{id}
-            $payment_id = (int)$_GET['id'];
-            
+            $payment_id = (int) $_GET['id'];
+
             $stmt = $pdo->prepare("
                 SELECT 
                     p.*,
                     o.order_no,
+                    o.order_number,
                     o.product_name,
-                    u.full_name as customer_name,
-                    u.email as customer_email
+                    COALESCE(cp.display_name, cp.full_name) as customer_name,
+                    cp.email as customer_email,
+                    COALESCE(cp.avatar_url, cp.profile_pic_url) as customer_avatar,
+                    cp.platform as customer_platform
                 FROM payments p
                 LEFT JOIN orders o ON p.order_id = o.id
-                LEFT JOIN users u ON p.customer_id = u.id
+                LEFT JOIN customer_profiles cp ON p.platform_user_id = cp.platform_user_id 
+                    AND cp.platform = COALESCE(p.platform, 'line')
                 WHERE p.id = ?
             ");
             $stmt->execute([$payment_id]);
             $payment = $stmt->fetch(PDO::FETCH_ASSOC);
-            
+
             if (!$payment) {
                 http_response_code(404);
                 echo json_encode(['success' => false, 'message' => 'Payment not found']);
                 exit;
             }
-            
+
             // Decode JSON
-            $payment['payment_details'] = $payment['payment_details'] ? 
+            $payment['payment_details'] = $payment['payment_details'] ?
                 json_decode($payment['payment_details'], true) : null;
-            
+
             echo json_encode(['success' => true, 'data' => $payment]);
-            
+
         } else {
             // GET /api/admin/payments - List all
-            $page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
-            $limit = isset($_GET['limit']) ? min(100, max(1, (int)$_GET['limit'])) : 50;
+            $page = isset($_GET['page']) ? max(1, (int) $_GET['page']) : 1;
+            $limit = isset($_GET['limit']) ? min(100, max(1, (int) $_GET['limit'])) : 50;
             $offset = ($page - 1) * $limit;
-            
+
             $status = isset($_GET['status']) ? $_GET['status'] : null;
             $payment_type = isset($_GET['payment_type']) ? $_GET['payment_type'] : null;
             $search = isset($_GET['search']) ? $_GET['search'] : null;
             $pending_only = isset($_GET['pending']) && $_GET['pending'] === '1';
-            
+
             // Build query
             $where = ['1=1'];
             $params = [];
-            
+
             if ($status) {
                 $where[] = 'p.status = ?';
                 $params[] = $status;
             }
-            
+
             if ($pending_only) {
                 $where[] = "p.status IN ('pending', 'verifying')";
             }
-            
+
             if ($payment_type) {
                 $where[] = 'p.payment_type = ?';
                 $params[] = $payment_type;
             }
-            
+
             if ($search) {
                 $where[] = '(p.payment_no LIKE ? OR u.full_name LIKE ? OR u.email LIKE ? OR p.payment_ref LIKE ?)';
                 $searchTerm = '%' . $search . '%';
@@ -101,9 +105,9 @@ try {
                 $params[] = $searchTerm;
                 $params[] = $searchTerm;
             }
-            
+
             $where_clause = implode(' AND ', $where);
-            
+
             // Get stats
             $stmt = $pdo->prepare("
                 SELECT 
@@ -113,22 +117,24 @@ try {
                     COUNT(CASE WHEN status = 'rejected' THEN 1 END) as rejected,
                     COALESCE(SUM(CASE WHEN status = 'pending' THEN amount END), 0) as pending_amount
                 FROM payments p
-                LEFT JOIN users u ON p.customer_id = u.id
+                LEFT JOIN customer_profiles cp ON p.platform_user_id = cp.platform_user_id 
+                    AND cp.platform = COALESCE(p.platform, 'line')
                 WHERE $where_clause
             ");
             $stmt->execute($params);
             $stats = $stmt->fetch(PDO::FETCH_ASSOC);
-            
+
             // Get total count
             $stmt = $pdo->prepare("
                 SELECT COUNT(*) as total
                 FROM payments p
-                LEFT JOIN users u ON p.customer_id = u.id
+                LEFT JOIN customer_profiles cp ON p.platform_user_id = cp.platform_user_id 
+                    AND cp.platform = COALESCE(p.platform, 'line')
                 WHERE $where_clause
             ");
             $stmt->execute($params);
             $total = $stmt->fetch(PDO::FETCH_ASSOC)['total'];
-            
+
             // Get payments
             $stmt = $pdo->prepare("
                 SELECT 
@@ -147,11 +153,14 @@ try {
                     p.created_at,
                     o.order_no,
                     o.product_name,
-                    u.full_name as customer_name,
-                    u.email as customer_email
+                    COALESCE(cp.display_name, cp.full_name) as customer_name,
+                    cp.email as customer_email,
+                    COALESCE(cp.avatar_url, cp.profile_pic_url) as customer_avatar,
+                    cp.platform as customer_platform
                 FROM payments p
                 LEFT JOIN orders o ON p.order_id = o.id
-                LEFT JOIN users u ON p.customer_id = u.id
+                LEFT JOIN customer_profiles cp ON p.platform_user_id = cp.platform_user_id 
+                    AND cp.platform = COALESCE(p.platform, 'line')
                 WHERE $where_clause
                 ORDER BY 
                     CASE WHEN p.status = 'pending' THEN 0 ELSE 1 END,
@@ -162,13 +171,13 @@ try {
             $params[] = $offset;
             $stmt->execute($params);
             $payments = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            
+
             // Parse payment_details JSON
             foreach ($payments as &$payment) {
-                $payment['payment_details'] = $payment['payment_details'] ? 
+                $payment['payment_details'] = $payment['payment_details'] ?
                     json_decode($payment['payment_details'], true) : null;
             }
-            
+
             echo json_encode([
                 'success' => true,
                 'data' => [
@@ -183,41 +192,41 @@ try {
                 ]
             ]);
         }
-        
+
     } elseif ($method === 'POST' && isset($_GET['id']) && $action === 'verify') {
         // POST /api/admin/payments/{id}/verify - Verify with push notification
-        verifyPayment($db, $pdo, (int)$_GET['id'], $adminId);
-        
+        verifyPayment($db, $pdo, (int) $_GET['id'], $adminId);
+
     } elseif ($method === 'POST' && isset($_GET['id']) && $action === 'reject') {
         // POST /api/admin/payments/{id}/reject - Reject with push notification
-        rejectPayment($db, $pdo, (int)$_GET['id'], $adminId);
-        
+        rejectPayment($db, $pdo, (int) $_GET['id'], $adminId);
+
     } elseif ($method === 'POST' && $action === 'manual') {
         // POST /api/admin/payments/manual - Add manual payment entry
         addManualPayment($db, $pdo, $adminId);
-        
+
     } elseif ($method === 'PUT' && isset($_GET['id']) && is_numeric($_GET['id'])) {
         // Legacy PUT endpoints (backward compatibility)
-        $payment_id = (int)$_GET['id'];
-        
+        $payment_id = (int) $_GET['id'];
+
         if ($action === 'approve') {
             // PUT /api/admin/payments/{id}/approve (legacy)
             verifyPaymentLegacy($pdo, $payment_id);
-            
+
         } elseif ($action === 'reject') {
             // PUT /api/admin/payments/{id}/reject (legacy)
             rejectPaymentLegacy($pdo, $payment_id);
-            
+
         } else {
             http_response_code(400);
             echo json_encode(['success' => false, 'message' => 'Invalid action']);
         }
-        
+
     } else {
         http_response_code(405);
         echo json_encode(['success' => false, 'message' => 'Method not allowed']);
     }
-    
+
 } catch (Exception $e) {
     error_log("Admin Payments API Error: " . $e->getMessage());
     http_response_code(500);
@@ -231,10 +240,11 @@ try {
 /**
  * Verify payment with push notification
  */
-function verifyPayment($db, $pdo, int $paymentId, $adminId) {
+function verifyPayment($db, $pdo, int $paymentId, $adminId)
+{
     $input = json_decode(file_get_contents('php://input'), true);
     $notes = $input['notes'] ?? null;
-    
+
     // Get payment with platform info
     $payment = $db->queryOne("
         SELECT p.*, 
@@ -249,19 +259,19 @@ function verifyPayment($db, $pdo, int $paymentId, $adminId) {
         ) pd ON pd.payment_no = p.payment_no
         WHERE p.id = ?
     ", [$paymentId]);
-    
+
     if (!$payment) {
         http_response_code(404);
         echo json_encode(['success' => false, 'message' => 'Payment not found']);
         return;
     }
-    
+
     if ($payment['status'] === 'verified') {
         http_response_code(400);
         echo json_encode(['success' => false, 'message' => 'Payment already verified']);
         return;
     }
-    
+
     // Update payment status
     $stmt = $pdo->prepare("
         UPDATE payments
@@ -271,7 +281,7 @@ function verifyPayment($db, $pdo, int $paymentId, $adminId) {
         WHERE id = ?
     ");
     $stmt->execute([$notes, $paymentId]);
-    
+
     // Update order if linked
     if ($payment['order_id']) {
         $stmt = $pdo->prepare("
@@ -283,7 +293,7 @@ function verifyPayment($db, $pdo, int $paymentId, $adminId) {
         ");
         $stmt->execute([$payment['order_id']]);
     }
-    
+
     // If installment payment, update schedule
     if ($payment['payment_type'] === 'installment' && $payment['current_period']) {
         $stmt = $pdo->prepare("
@@ -296,14 +306,14 @@ function verifyPayment($db, $pdo, int $paymentId, $adminId) {
         ");
         $stmt->execute([$paymentId, $payment['order_id'], $payment['current_period']]);
     }
-    
+
     Logger::info('Payment verified', [
         'payment_id' => $paymentId,
         'payment_no' => $payment['payment_no'],
         'amount' => $payment['amount'],
         'admin_id' => $adminId
     ]);
-    
+
     // Send push notification if platform info available
     if ($payment['platform'] && $payment['external_user_id']) {
         try {
@@ -317,15 +327,15 @@ function verifyPayment($db, $pdo, int $paymentId, $adminId) {
                     'verified_date' => date('d/m/Y H:i'),
                     'order_number' => $payment['order_no'] ?? ''
                 ],
-                $payment['channel_id'] ? (int)$payment['channel_id'] : null
+                $payment['channel_id'] ? (int) $payment['channel_id'] : null
             );
         } catch (Exception $e) {
             Logger::error('Failed to send push notification: ' . $e->getMessage());
         }
     }
-    
+
     echo json_encode([
-        'success' => true, 
+        'success' => true,
         'message' => 'Payment verified successfully',
         'data' => ['payment_no' => $payment['payment_no']]
     ]);
@@ -334,10 +344,11 @@ function verifyPayment($db, $pdo, int $paymentId, $adminId) {
 /**
  * Reject payment with push notification
  */
-function rejectPayment($db, $pdo, int $paymentId, $adminId) {
+function rejectPayment($db, $pdo, int $paymentId, $adminId)
+{
     $input = json_decode(file_get_contents('php://input'), true);
     $reason = $input['reason'] ?? 'ไม่สามารถยืนยันการชำระเงินได้';
-    
+
     // Get payment with platform info
     $payment = $db->queryOne("
         SELECT p.*, 
@@ -352,13 +363,13 @@ function rejectPayment($db, $pdo, int $paymentId, $adminId) {
         ) pd ON pd.payment_no = p.payment_no
         WHERE p.id = ?
     ", [$paymentId]);
-    
+
     if (!$payment) {
         http_response_code(404);
         echo json_encode(['success' => false, 'message' => 'Payment not found']);
         return;
     }
-    
+
     // Update payment status
     $stmt = $pdo->prepare("
         UPDATE payments
@@ -368,14 +379,14 @@ function rejectPayment($db, $pdo, int $paymentId, $adminId) {
         WHERE id = ?
     ");
     $stmt->execute([$reason, $paymentId]);
-    
+
     Logger::info('Payment rejected', [
         'payment_id' => $paymentId,
         'payment_no' => $payment['payment_no'],
         'reason' => $reason,
         'admin_id' => $adminId
     ]);
-    
+
     // Send push notification if platform info available
     if ($payment['platform'] && $payment['external_user_id']) {
         try {
@@ -388,15 +399,15 @@ function rejectPayment($db, $pdo, int $paymentId, $adminId) {
                     'payment_ref' => $payment['payment_no'],
                     'reason' => $reason
                 ],
-                $payment['channel_id'] ? (int)$payment['channel_id'] : null
+                $payment['channel_id'] ? (int) $payment['channel_id'] : null
             );
         } catch (Exception $e) {
             Logger::error('Failed to send push notification: ' . $e->getMessage());
         }
     }
-    
+
     echo json_encode([
-        'success' => true, 
+        'success' => true,
         'message' => 'Payment rejected',
         'data' => ['payment_no' => $payment['payment_no']]
     ]);
@@ -405,18 +416,19 @@ function rejectPayment($db, $pdo, int $paymentId, $adminId) {
 /**
  * Add manual payment entry
  */
-function addManualPayment($db, $pdo, $adminId) {
+function addManualPayment($db, $pdo, $adminId)
+{
     $input = json_decode(file_get_contents('php://input'), true);
-    
+
     // Validate required fields
     if (empty($input['amount']) || $input['amount'] <= 0) {
         http_response_code(400);
         echo json_encode(['success' => false, 'message' => 'Valid amount is required']);
         return;
     }
-    
+
     $paymentNo = 'PAY-' . date('Ymd') . '-' . strtoupper(substr(bin2hex(random_bytes(3)), 0, 5));
-    
+
     $stmt = $pdo->prepare("
         INSERT INTO payments (
             payment_no, order_id, customer_id, tenant_id,
@@ -430,28 +442,28 @@ function addManualPayment($db, $pdo, $adminId) {
             NOW(), NOW()
         )
     ");
-    
+
     $stmt->execute([
         $paymentNo,
         $input['order_id'] ?? 0,
         $input['customer_id'] ?? 0,
         $input['tenant_id'] ?? 'default',
-        (float)$input['amount'],
+        (float) $input['amount'],
         $input['payment_type'] ?? 'full',
         $input['payment_method'] ?? 'cash',
         $input['payment_date'] ?? date('Y-m-d'),
         $input['notes'] ?? "Manual entry by admin ID: {$adminId}"
     ]);
-    
+
     $newId = $pdo->lastInsertId();
-    
+
     Logger::info('Manual payment added', [
         'payment_id' => $newId,
         'payment_no' => $paymentNo,
         'amount' => $input['amount'],
         'admin_id' => $adminId
     ]);
-    
+
     echo json_encode([
         'success' => true,
         'message' => 'Manual payment added successfully',
@@ -465,7 +477,8 @@ function addManualPayment($db, $pdo, $adminId) {
 /**
  * Legacy verify function (backward compatibility)
  */
-function verifyPaymentLegacy($pdo, int $paymentId) {
+function verifyPaymentLegacy($pdo, int $paymentId)
+{
     $stmt = $pdo->prepare("
         SELECT p.*, o.installment_months
         FROM payments p
@@ -474,13 +487,13 @@ function verifyPaymentLegacy($pdo, int $paymentId) {
     ");
     $stmt->execute([$paymentId]);
     $payment = $stmt->fetch(PDO::FETCH_ASSOC);
-    
+
     if (!$payment) {
         http_response_code(404);
         echo json_encode(['success' => false, 'message' => 'Payment not found']);
         return;
     }
-    
+
     $stmt = $pdo->prepare("
         UPDATE payments
         SET status = 'verified',
@@ -488,7 +501,7 @@ function verifyPaymentLegacy($pdo, int $paymentId) {
         WHERE id = ?
     ");
     $stmt->execute([$paymentId]);
-    
+
     if ($payment['payment_type'] === 'installment' && $payment['current_period']) {
         $stmt = $pdo->prepare("
             UPDATE installment_schedules
@@ -500,17 +513,18 @@ function verifyPaymentLegacy($pdo, int $paymentId) {
         ");
         $stmt->execute([$paymentId, $payment['order_id'], $payment['current_period']]);
     }
-    
+
     echo json_encode(['success' => true, 'message' => 'Payment approved']);
 }
 
 /**
  * Legacy reject function (backward compatibility)
  */
-function rejectPaymentLegacy($pdo, int $paymentId) {
+function rejectPaymentLegacy($pdo, int $paymentId)
+{
     $input = json_decode(file_get_contents('php://input'), true);
     $reason = $input['reason'] ?? 'ไม่ระบุเหตุผล';
-    
+
     $stmt = $pdo->prepare("
         UPDATE payments
         SET status = 'rejected',
@@ -519,6 +533,6 @@ function rejectPaymentLegacy($pdo, int $paymentId) {
         WHERE id = ?
     ");
     $stmt->execute([$reason, $paymentId]);
-    
+
     echo json_encode(['success' => true, 'message' => 'Payment rejected']);
 }

@@ -46,12 +46,12 @@ $payment_id = null;
 
 // First check query string (used by JS frontend)
 if (isset($_GET['id']) && is_numeric($_GET['id'])) {
-    $payment_id = (int)$_GET['id'];
+    $payment_id = (int) $_GET['id'];
 } else {
     // Fallback to URI path parsing
     foreach ($uri_parts as $i => $part) {
         if ($part === 'payments' && isset($uri_parts[$i + 1]) && is_numeric($uri_parts[$i + 1])) {
-            $payment_id = (int)$uri_parts[$i + 1];
+            $payment_id = (int) $uri_parts[$i + 1];
             break;
         }
     }
@@ -59,7 +59,7 @@ if (isset($_GET['id']) && is_numeric($_GET['id'])) {
 
 try {
     $pdo = getDB();
-    
+
     if ($method === 'GET') {
         if ($payment_id) {
             // GET /api/customer/payments/{id} - Single payment detail
@@ -95,42 +95,75 @@ try {
                     COALESCE(cp.avatar_url, cp.profile_pic_url) as customer_avatar,
                     cp.phone as customer_phone
                 FROM payments p
-                LEFT JOIN customer_profiles cp ON p.customer_id = cp.id
+                LEFT JOIN customer_profiles cp ON p.platform_user_id = cp.platform_user_id 
+                    AND cp.platform = COALESCE(p.platform, JSON_UNQUOTE(JSON_EXTRACT(p.payment_details, '$.platform')), 'line')
                 WHERE p.id = ? AND p.tenant_id = ?
             ");
             $stmt->execute([$payment_id, $tenant_id]);
             $payment = $stmt->fetch(PDO::FETCH_ASSOC);
-            
+
             if (!$payment) {
                 http_response_code(404);
                 echo json_encode(['success' => false, 'message' => 'Payment not found']);
                 exit;
             }
-            
+
             // Parse payment_details
             $details = [];
             if ($payment['payment_details']) {
                 $details = json_decode($payment['payment_details'], true) ?: [];
             }
-            
+
             // Get customer name
-            $payment['customer_name'] = $payment['customer_full_name'] 
-                ?? $payment['customer_display_name'] 
+            $payment['customer_name'] = $payment['customer_full_name']
+                ?? $payment['customer_display_name']
                 ?? ($details['customer_name'] ?? null)
                 ?? ($details['sender_name'] ?? null)
                 ?? 'ไม่ระบุลูกค้า';
-            
+
             // Extract OCR/bank info
             $payment['bank_name'] = $details['bank_name'] ?? ($details['ocr_result']['bank'] ?? null);
             $payment['payment_ref'] = $details['payment_ref'] ?? ($details['ocr_result']['ref'] ?? null);
             $payment['sender_name'] = $details['sender_name'] ?? ($details['ocr_result']['sender_name'] ?? null);
             $payment['receiver_name'] = $details['receiver_name'] ?? ($details['ocr_result']['receiver_name'] ?? null);
-            
+
             // Ensure customer_platform is set
             if (empty($payment['customer_platform']) && !empty($details['platform'])) {
                 $payment['customer_platform'] = $details['platform'];
             }
-            
+
+            // If customer_avatar is null, try to get from customer_profiles using external_user_id (like cases.php does)
+            if (empty($payment['customer_avatar'])) {
+                $external_user_id_for_profile = $details['external_user_id'] ?? null;
+                $platform_for_profile = $details['platform'] ?? $payment['customer_platform'] ?? null;
+
+                if (!empty($external_user_id_for_profile) && !empty($platform_for_profile)) {
+                    $stmt = $pdo->prepare("
+                        SELECT 
+                            display_name,
+                            full_name,
+                            COALESCE(avatar_url, profile_pic_url) as avatar_url,
+                            phone
+                        FROM customer_profiles 
+                        WHERE platform_user_id = ? AND platform = ?
+                        LIMIT 1
+                    ");
+                    $stmt->execute([$external_user_id_for_profile, $platform_for_profile]);
+                    $profile = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                    if ($profile) {
+                        $payment['customer_avatar'] = $profile['avatar_url'];
+                        // Also update customer_name if not already set
+                        if (empty($payment['customer_name']) || $payment['customer_name'] === 'ไม่ระบุลูกค้า') {
+                            $payment['customer_name'] = $profile['full_name'] ?? $profile['display_name'] ?? $payment['customer_name'];
+                        }
+                        if (empty($payment['customer_phone']) && !empty($profile['phone'])) {
+                            $payment['customer_phone'] = $profile['phone'];
+                        }
+                    }
+                }
+            }
+
             // Get related order info
             if ($payment['order_id']) {
                 $stmt = $pdo->prepare("
@@ -152,14 +185,14 @@ try {
                     $payment['order_status'] = $order['order_status'];
                 }
             }
-            
+
             // Get chat messages related to this payment (from chat_sessions + chat_messages)
             $payment['chat_messages'] = [];
-            
+
             // Get external_user_id from: 1) payment_details, 2) customer_profiles
             $external_user_id = $details['external_user_id'] ?? $payment['customer_platform_id'] ?? null;
             $channel_id = $details['channel_id'] ?? null;
-            
+
             if (!empty($external_user_id)) {
                 // If no channel_id, find it from chat_sessions
                 if (empty($channel_id)) {
@@ -183,7 +216,7 @@ try {
                     $stmt->execute([$channel_id, $external_user_id]);
                     $session = $stmt->fetch(PDO::FETCH_ASSOC);
                 }
-                
+
                 if ($session) {
                     // Get recent messages from chat_messages table
                     $stmt = $pdo->prepare("
@@ -199,42 +232,42 @@ try {
                     ");
                     $stmt->execute([$session['session_id']]);
                     $messages = $stmt->fetchAll(PDO::FETCH_ASSOC);
-                    
+
                     // Reverse to show oldest first
                     $payment['chat_messages'] = array_reverse($messages);
                 }
             }
-            
+
             // Clean up internal fields
             unset($payment['customer_full_name'], $payment['customer_display_name']);
-            
+
             echo json_encode(['success' => true, 'data' => $payment]);
-            
+
         } else {
             // GET /api/customer/payments - List all payments
-            $page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
-            $limit = isset($_GET['limit']) ? min(100, max(1, (int)$_GET['limit'])) : 20;
+            $page = isset($_GET['page']) ? max(1, (int) $_GET['page']) : 1;
+            $limit = isset($_GET['limit']) ? min(100, max(1, (int) $_GET['limit'])) : 20;
             $offset = ($page - 1) * $limit;
-            
+
             $status = isset($_GET['status']) ? $_GET['status'] : null;
             $payment_type = isset($_GET['payment_type']) ? $_GET['payment_type'] : null;
-            
+
             // Build query - filter by tenant_id (shop's payments)
             $where = ['p.tenant_id = ?'];
             $params = [$tenant_id];
-            
+
             if ($status) {
                 $where[] = 'p.status = ?';
                 $params[] = $status;
             }
-            
+
             if ($payment_type) {
                 $where[] = 'p.payment_type = ?';
                 $params[] = $payment_type;
             }
-            
+
             $where_clause = implode(' AND ', $where);
-            
+
             // Get total count
             $stmt = $pdo->prepare("
                 SELECT COUNT(*) as total
@@ -243,7 +276,7 @@ try {
             ");
             $stmt->execute($params);
             $total = $stmt->fetch(PDO::FETCH_ASSOC)['total'];
-            
+
             // Get payments with order info - join with customer_profiles
             $stmt = $pdo->prepare("
                 SELECT 
@@ -277,7 +310,8 @@ try {
                     cp.phone as customer_phone,
                     NULL as product_name
                 FROM payments p
-                LEFT JOIN customer_profiles cp ON p.customer_id = cp.id
+                LEFT JOIN customer_profiles cp ON p.platform_user_id = cp.platform_user_id 
+                    AND cp.platform = COALESCE(p.platform, JSON_UNQUOTE(JSON_EXTRACT(p.payment_details, '$.platform')), 'line')
                 WHERE $where_clause
                 ORDER BY p.created_at DESC
                 LIMIT ? OFFSET ?
@@ -286,7 +320,7 @@ try {
             $params[] = $offset;
             $stmt->execute($params);
             $payments = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            
+
             // Process payments for display
             foreach ($payments as &$payment) {
                 // Parse payment_details for extra info (OCR data, chat context)
@@ -294,29 +328,61 @@ try {
                 if ($payment['payment_details']) {
                     $details = json_decode($payment['payment_details'], true) ?: [];
                 }
-                
+
                 // Get customer name: prefer profile, then OCR, then fallback
-                $payment['customer_name'] = $payment['customer_full_name'] 
-                    ?? $payment['customer_display_name'] 
+                $payment['customer_name'] = $payment['customer_full_name']
+                    ?? $payment['customer_display_name']
                     ?? ($details['customer_name'] ?? null)
                     ?? ($details['sender_name'] ?? null)
                     ?? 'ไม่ระบุลูกค้า';
-                
+
                 // Ensure customer_platform is set
                 if (empty($payment['customer_platform']) && !empty($details['platform'])) {
                     $payment['customer_platform'] = $details['platform'];
                 }
-                
+
+                // If customer_avatar is null, try to get from customer_profiles using external_user_id (like cases.php does)
+                if (empty($payment['customer_avatar'])) {
+                    $external_user_id_for_profile = $details['external_user_id'] ?? null;
+                    $platform_for_profile = $details['platform'] ?? $payment['customer_platform'] ?? null;
+
+                    if (!empty($external_user_id_for_profile) && !empty($platform_for_profile)) {
+                        $profileStmt = $pdo->prepare("
+                            SELECT 
+                                display_name,
+                                full_name,
+                                COALESCE(avatar_url, profile_pic_url) as avatar_url,
+                                phone
+                            FROM customer_profiles 
+                            WHERE platform_user_id = ? AND platform = ?
+                            LIMIT 1
+                        ");
+                        $profileStmt->execute([$external_user_id_for_profile, $platform_for_profile]);
+                        $profile = $profileStmt->fetch(PDO::FETCH_ASSOC);
+
+                        if ($profile) {
+                            $payment['customer_avatar'] = $profile['avatar_url'];
+                            // Also update customer_name if not already set properly
+                            if (empty($payment['customer_name']) || $payment['customer_name'] === 'ไม่ระบุลูกค้า') {
+                                $payment['customer_name'] = $profile['full_name'] ?? $profile['display_name'] ?? $payment['customer_name'];
+                            }
+                            if (empty($payment['customer_phone']) && !empty($profile['phone'])) {
+                                $payment['customer_phone'] = $profile['phone'];
+                            }
+                        }
+                    }
+                }
+
                 // Extract OCR data for display
                 $payment['bank_name'] = $details['bank_name'] ?? ($details['ocr_result']['bank'] ?? null);
                 $payment['payment_ref'] = $details['payment_ref'] ?? ($details['ocr_result']['ref'] ?? null);
                 $payment['sender_name'] = $details['sender_name'] ?? ($details['ocr_result']['sender_name'] ?? null);
-                
+
                 // Clean up internal fields
                 unset($payment['customer_full_name'], $payment['customer_display_name']);
             }
             unset($payment);
-            
+
             // Get summary counts for this tenant
             $stmt = $pdo->prepare("
                 SELECT 
@@ -329,7 +395,7 @@ try {
             ");
             $stmt->execute([$tenant_id]);
             $summary = $stmt->fetch(PDO::FETCH_ASSOC);
-            
+
             echo json_encode([
                 'success' => true,
                 'data' => [
@@ -337,19 +403,19 @@ try {
                     'pagination' => [
                         'page' => $page,
                         'limit' => $limit,
-                        'total' => (int)$total,
+                        'total' => (int) $total,
                         'total_pages' => ceil($total / $limit)
                     ],
                     'summary' => $summary
                 ]
             ]);
         }
-        
+
     } elseif ($method === 'POST') {
         // POST /api/customer/payments or /notify
         $is_notify = strpos($uri, '/notify') !== false;
         $action = $_GET['action'] ?? null;
-        
+
         if ($is_notify) {
             // Handle payment notification with slip upload
             submitPaymentNotification($pdo, $user_id);
@@ -359,31 +425,31 @@ try {
         } else {
             // Handle other POST actions
             $input = json_decode(file_get_contents('php://input'), true);
-            
+
             if (!$action) {
                 http_response_code(400);
                 echo json_encode(['success' => false, 'message' => 'Missing action parameter']);
                 exit;
             }
-            
+
             $pid = $input['payment_id'] ?? $_GET['id'] ?? null;
             if (!$pid) {
                 http_response_code(400);
                 echo json_encode(['success' => false, 'message' => 'Missing payment_id']);
                 exit;
             }
-            
+
             // Get payment
             $stmt = $pdo->prepare("SELECT * FROM payments WHERE id = ?");
             $stmt->execute([$pid]);
             $payment = $stmt->fetch(PDO::FETCH_ASSOC);
-            
+
             if (!$payment) {
                 http_response_code(404);
                 echo json_encode(['success' => false, 'message' => 'Payment not found']);
                 exit;
             }
-            
+
             switch ($action) {
                 case 'approve':
                     approvePayment($pdo, $payment, $user_id);
@@ -402,12 +468,12 @@ try {
                     echo json_encode(['success' => false, 'message' => 'Invalid action']);
             }
         }
-        
+
     } else {
         http_response_code(405);
         echo json_encode(['success' => false, 'message' => 'Method not allowed']);
     }
-    
+
 } catch (Exception $e) {
     error_log("Payments API Error: " . $e->getMessage());
     http_response_code(500);
@@ -421,7 +487,8 @@ try {
 /**
  * Submit payment notification with slip upload
  */
-function submitPaymentNotification($pdo, $user_id) {
+function submitPaymentNotification($pdo, $user_id)
+{
     // Handle file upload (slip image)
     $slip_url = null;
     if (isset($_FILES['slip_image']) && $_FILES['slip_image']['error'] === UPLOAD_ERR_OK) {
@@ -429,29 +496,29 @@ function submitPaymentNotification($pdo, $user_id) {
         if (!is_dir($upload_dir)) {
             mkdir($upload_dir, 0755, true);
         }
-        
+
         $file_ext = pathinfo($_FILES['slip_image']['name'], PATHINFO_EXTENSION);
         $filename = 'slip_' . $user_id . '_' . time() . '.' . $file_ext;
         $filepath = $upload_dir . $filename;
-        
+
         if (move_uploaded_file($_FILES['slip_image']['tmp_name'], $filepath)) {
             $slip_url = '/public/uploads/slips/' . $filename;
         }
     }
-    
+
     // Get form data
     $order_id = $_POST['order_id'] ?? null;
     $amount = floatval($_POST['amount'] ?? 0);
     $payment_method = $_POST['payment_method'] ?? 'bank_transfer';
     $payment_type = $_POST['payment_type'] ?? 'full';
     $note = trim($_POST['note'] ?? '');
-    
+
     if ($amount <= 0) {
         http_response_code(400);
         echo json_encode(['success' => false, 'message' => 'กรุณาระบุจำนวนเงิน']);
         return;
     }
-    
+
     try {
         $stmt = $pdo->prepare("
             INSERT INTO payments (
@@ -467,7 +534,7 @@ function submitPaymentNotification($pdo, $user_id) {
                 updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, NOW(), NOW())
         ");
-        
+
         $stmt->execute([
             $user_id,
             $order_id ?: null,
@@ -477,9 +544,9 @@ function submitPaymentNotification($pdo, $user_id) {
             $slip_url,
             $note ?: null
         ]);
-        
+
         $payment_id = $pdo->lastInsertId();
-        
+
         echo json_encode([
             'success' => true,
             'message' => 'บันทึกการแจ้งชำระเงินเรียบร้อย',
@@ -488,7 +555,7 @@ function submitPaymentNotification($pdo, $user_id) {
                 'slip_url' => $slip_url
             ]
         ]);
-        
+
     } catch (Exception $e) {
         error_log("Submit payment error: " . $e->getMessage());
         http_response_code(500);
@@ -502,7 +569,8 @@ function submitPaymentNotification($pdo, $user_id) {
 /**
  * Create manual payment (admin adds payment manually)
  */
-function createManualPayment($pdo, $user_id) {
+function createManualPayment($pdo, $user_id)
+{
     // Handle file upload (slip image)
     $slip_url = null;
     if (isset($_FILES['slip_image']) && $_FILES['slip_image']['error'] === UPLOAD_ERR_OK) {
@@ -510,16 +578,16 @@ function createManualPayment($pdo, $user_id) {
         if (!is_dir($upload_dir)) {
             mkdir($upload_dir, 0755, true);
         }
-        
+
         $file_ext = pathinfo($_FILES['slip_image']['name'], PATHINFO_EXTENSION);
         $filename = 'slip_manual_' . $user_id . '_' . time() . '.' . $file_ext;
         $filepath = $upload_dir . $filename;
-        
+
         if (move_uploaded_file($_FILES['slip_image']['tmp_name'], $filepath)) {
             $slip_url = '/public/uploads/slips/' . $filename;
         }
     }
-    
+
     // Get form data
     $payment_type = $_POST['payment_type'] ?? 'full';
     $customer_profile_id = intval($_POST['customer_profile_id'] ?? 0);
@@ -529,32 +597,32 @@ function createManualPayment($pdo, $user_id) {
     $payment_method = $_POST['payment_method'] ?? 'bank_transfer';
     $note = trim($_POST['note'] ?? '');
     $source = $_POST['source'] ?? 'manual';
-    
+
     if ($amount <= 0) {
         http_response_code(400);
         echo json_encode(['success' => false, 'message' => 'กรุณาระบุจำนวนเงิน']);
         return;
     }
-    
+
     try {
         // Get tenant_id from user
         $stmt = $pdo->prepare("SELECT tenant_id FROM users WHERE id = ? LIMIT 1");
         $stmt->execute([$user_id]);
         $userRow = $stmt->fetch(PDO::FETCH_ASSOC);
         $tenant_id = $userRow['tenant_id'] ?? 'default';
-        
+
         // Get customer info if customer_profile_id provided
         $customer_name = null;
         $customer_phone = null;
         $customer_platform = null;
         $customer_avatar = null;
         $platform_user_id = null;
-        
+
         if ($customer_profile_id > 0) {
             $stmt = $pdo->prepare("SELECT * FROM customer_profiles WHERE id = ?");
             $stmt->execute([$customer_profile_id]);
             $customer = $stmt->fetch(PDO::FETCH_ASSOC);
-            
+
             if ($customer) {
                 $customer_name = $customer['display_name'] ?? $customer['full_name'];
                 $customer_phone = $customer['phone'];
@@ -563,15 +631,15 @@ function createManualPayment($pdo, $user_id) {
                 $platform_user_id = $customer['platform_user_id'];
             }
         }
-        
+
         // Generate payment_no
         $payment_no = 'PAY-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6));
-        
+
         // Determine order_id, installment_id, savings_goal_id based on reference_type
         $order_id = null;
         $installment_id = null;
         $savings_goal_id = null;
-        
+
         if ($reference_id > 0) {
             switch ($reference_type) {
                 case 'order':
@@ -585,7 +653,7 @@ function createManualPayment($pdo, $user_id) {
                     break;
             }
         }
-        
+
         $stmt = $pdo->prepare("
             INSERT INTO payments (
                 payment_no,
@@ -614,7 +682,7 @@ function createManualPayment($pdo, $user_id) {
                 updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW())
         ");
-        
+
         $stmt->execute([
             $payment_no,
             $user_id,
@@ -637,9 +705,9 @@ function createManualPayment($pdo, $user_id) {
             $note ?: null,
             $source
         ]);
-        
+
         $payment_id = $pdo->lastInsertId();
-        
+
         echo json_encode([
             'success' => true,
             'message' => 'บันทึกรายการชำระเงินเรียบร้อย',
@@ -649,7 +717,7 @@ function createManualPayment($pdo, $user_id) {
                 'slip_url' => $slip_url
             ]
         ]);
-        
+
     } catch (Exception $e) {
         error_log("Create manual payment error: " . $e->getMessage());
         http_response_code(500);
@@ -663,10 +731,11 @@ function createManualPayment($pdo, $user_id) {
 /**
  * Approve payment
  */
-function approvePayment($pdo, $payment, $admin_id) {
+function approvePayment($pdo, $payment, $admin_id)
+{
     try {
         $pdo->beginTransaction();
-        
+
         // Update payment status
         $stmt = $pdo->prepare("
             UPDATE payments 
@@ -674,7 +743,7 @@ function approvePayment($pdo, $payment, $admin_id) {
             WHERE id = ?
         ");
         $stmt->execute([$admin_id, $payment['id']]);
-        
+
         // Update order paid_amount if linked
         if ($payment['order_id']) {
             $stmt = $pdo->prepare("
@@ -689,14 +758,14 @@ function approvePayment($pdo, $payment, $admin_id) {
             ");
             $stmt->execute([$payment['amount'], $payment['amount'], $payment['order_id']]);
         }
-        
+
         $pdo->commit();
-        
+
         echo json_encode([
             'success' => true,
             'message' => 'อนุมัติการชำระเงินเรียบร้อย'
         ]);
-        
+
     } catch (Exception $e) {
         $pdo->rollBack();
         error_log("Approve payment error: " . $e->getMessage());
@@ -711,9 +780,10 @@ function approvePayment($pdo, $payment, $admin_id) {
 /**
  * Reject payment
  */
-function rejectPayment($pdo, $payment, $input, $admin_id) {
+function rejectPayment($pdo, $payment, $input, $admin_id)
+{
     $reason = trim($input['reason'] ?? '');
-    
+
     try {
         $stmt = $pdo->prepare("
             UPDATE payments 
@@ -725,12 +795,12 @@ function rejectPayment($pdo, $payment, $input, $admin_id) {
             WHERE id = ?
         ");
         $stmt->execute([$admin_id, $reason ?: null, $payment['id']]);
-        
+
         echo json_encode([
             'success' => true,
             'message' => 'ปฏิเสธการชำระเงินเรียบร้อย'
         ]);
-        
+
     } catch (Exception $e) {
         error_log("Reject payment error: " . $e->getMessage());
         http_response_code(500);
@@ -744,27 +814,28 @@ function rejectPayment($pdo, $payment, $input, $admin_id) {
 /**
  * Link order to payment (manual matching)
  */
-function linkOrderToPayment($pdo, $payment, $input, $admin_id, $tenant_id) {
+function linkOrderToPayment($pdo, $payment, $input, $admin_id, $tenant_id)
+{
     $order_id = $input['order_id'] ?? null;
-    
+
     if (!$order_id) {
         http_response_code(400);
         echo json_encode(['success' => false, 'message' => 'กรุณาระบุคำสั่งซื้อ']);
         return;
     }
-    
+
     try {
         // Verify order exists and belongs to same tenant
         $stmt = $pdo->prepare("SELECT id, order_number FROM orders WHERE id = ? AND tenant_id = ?");
         $stmt->execute([$order_id, $tenant_id]);
         $order = $stmt->fetch(PDO::FETCH_ASSOC);
-        
+
         if (!$order) {
             http_response_code(404);
             echo json_encode(['success' => false, 'message' => 'ไม่พบคำสั่งซื้อ']);
             return;
         }
-        
+
         // Update payment with order_id
         $stmt = $pdo->prepare("
             UPDATE payments 
@@ -773,12 +844,12 @@ function linkOrderToPayment($pdo, $payment, $input, $admin_id, $tenant_id) {
             WHERE id = ?
         ");
         $stmt->execute([$order_id, $payment['id']]);
-        
+
         echo json_encode([
             'success' => true,
             'message' => 'เชื่อมโยงคำสั่งซื้อ ' . $order['order_number'] . ' เรียบร้อย'
         ]);
-        
+
     } catch (Exception $e) {
         error_log("Link order error: " . $e->getMessage());
         http_response_code(500);
@@ -792,7 +863,8 @@ function linkOrderToPayment($pdo, $payment, $input, $admin_id, $tenant_id) {
 /**
  * Unlink order from payment
  */
-function unlinkOrderFromPayment($pdo, $payment, $admin_id) {
+function unlinkOrderFromPayment($pdo, $payment, $admin_id)
+{
     try {
         $stmt = $pdo->prepare("
             UPDATE payments 
@@ -801,12 +873,12 @@ function unlinkOrderFromPayment($pdo, $payment, $admin_id) {
             WHERE id = ?
         ");
         $stmt->execute([$payment['id']]);
-        
+
         echo json_encode([
             'success' => true,
             'message' => 'ยกเลิกการเชื่อมโยงเรียบร้อย'
         ]);
-        
+
     } catch (Exception $e) {
         error_log("Unlink order error: " . $e->getMessage());
         http_response_code(500);
