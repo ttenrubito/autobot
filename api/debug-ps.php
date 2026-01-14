@@ -28,11 +28,19 @@ $lineCount = count(explode("\n", $content));
 $lines = explode("\n", $content);
 $insertArea = array_slice($lines, 130, 50);
 
+// Get checkDuplicate area (lines 225-250)
+$checkDuplicateArea = array_slice($lines, 225, 30);
+
+// Get findCustomer area (lines 250-280)
+$findCustomerArea = array_slice($lines, 250, 30);
+
 echo json_encode([
     'success' => true,
     'file_exists' => file_exists($file),
     'line_count' => $lineCount,
     'has_user_id_param' => $hasUserId,
     'insert_columns' => trim($columns),
-    'insert_area_lines_131_180' => implode("\n", $insertArea)
+    'insert_area_lines_131_180' => implode("\n", $insertArea),
+    'checkDuplicate_lines_226_255' => implode("\n", $checkDuplicateArea),
+    'findCustomer_lines_251_280' => implode("\n", $findCustomerArea)
 ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
