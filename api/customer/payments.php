@@ -148,16 +148,34 @@ try {
             
             // Get chat messages related to this payment (from chat_sessions + chat_messages)
             $payment['chat_messages'] = [];
-            if (!empty($details['external_user_id']) && !empty($details['channel_id'])) {
-                // First find the chat_session
-                $stmt = $pdo->prepare("
-                    SELECT id as session_id
-                    FROM chat_sessions
-                    WHERE channel_id = ? AND external_user_id = ?
-                    LIMIT 1
-                ");
-                $stmt->execute([$details['channel_id'], $details['external_user_id']]);
-                $session = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            // Get external_user_id from: 1) payment_details, 2) customer_profiles
+            $external_user_id = $details['external_user_id'] ?? $payment['customer_platform_id'] ?? null;
+            $channel_id = $details['channel_id'] ?? null;
+            
+            if (!empty($external_user_id)) {
+                // If no channel_id, find it from chat_sessions
+                if (empty($channel_id)) {
+                    $stmt = $pdo->prepare("
+                        SELECT id as session_id, channel_id
+                        FROM chat_sessions
+                        WHERE external_user_id = ?
+                        ORDER BY updated_at DESC
+                        LIMIT 1
+                    ");
+                    $stmt->execute([$external_user_id]);
+                    $session = $stmt->fetch(PDO::FETCH_ASSOC);
+                } else {
+                    // First find the chat_session with channel_id
+                    $stmt = $pdo->prepare("
+                        SELECT id as session_id, channel_id
+                        FROM chat_sessions
+                        WHERE channel_id = ? AND external_user_id = ?
+                        LIMIT 1
+                    ");
+                    $stmt->execute([$channel_id, $external_user_id]);
+                    $session = $stmt->fetch(PDO::FETCH_ASSOC);
+                }
                 
                 if ($session) {
                     // Get recent messages from chat_messages table

@@ -512,24 +512,45 @@ function renderPaymentDetails(payment) {
 
     const canModerate = true; // allow all logged-in users to approve/reject from this view
 
-    // Extract customer profile from conversation metadata (from API JOIN)
-    let customerName = payment.platform_user_name || 'ลูกค้า';
-    let metadata = payment.conversation_metadata || {};
-    let profileUrl = metadata.line_profile_url || '';
-    let userPhone = metadata.user_phone || '';
-    
-    // Fallback: check payment_details for conversation info
-    if (!customerName || customerName === 'ลูกค้า') {
-        const pd = payment.payment_details || {};
-        if (pd.line_user) customerName = pd.line_user;
-    }
+    // Extract customer profile - use API-provided customer_name/customer_avatar
+    let customerName = payment.customer_name || payment.sender_name || 'ลูกค้า';
+    let customerAvatar = validatePaymentAvatarUrl(payment.customer_avatar);
+    let customerPlatform = payment.customer_platform || 'web';
+    let customerPhone = payment.customer_phone || '';
     
     // Generate initials for placeholder
-    const initials = customerName.split(' ').map(n => n.charAt(0)).join('').substr(0, 2).toUpperCase();
+    const initials = customerName.split(' ').map(n => n.charAt(0)).join('').substr(0, 2).toUpperCase() || 'U';
+    
+    // Build platform icon
+    const platformIcon = getPaymentPlatformIcon(customerPlatform);
+    const platformLabel = customerPlatform === 'line' ? 'LINE' : 
+                          customerPlatform === 'facebook' ? 'Facebook' : 
+                          customerPlatform === 'instagram' ? 'Instagram' : 'Web';
     
     let html = `
         <div class="slip-chat-layout">
-            <!-- SLIP IMAGE FIRST (Most Important) -->
+            <!-- Customer Profile Card -->
+            <div class="detail-section customer-profile-card">
+                <div class="profile-header">
+                    <div class="profile-avatar">
+                        ${customerAvatar 
+                            ? `<img src="${customerAvatar}" alt="${customerName}" onerror="this.outerHTML='<div class=\\'profile-avatar-placeholder\\'>${initials}</div>'">`
+                            : `<div class="profile-avatar-placeholder">${initials}</div>`
+                        }
+                    </div>
+                    <div class="profile-info">
+                        <h3 class="profile-name">${customerName}</h3>
+                        ${customerPhone ? `<div class="profile-phone"><i class="fas fa-phone"></i> ${customerPhone}</div>` : ''}
+                        <div class="profile-platform">
+                            <span class="platform-badge platform-${customerPlatform}">
+                                ${platformIcon} ${platformLabel}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- SLIP IMAGE (Most Important) -->
             ${payment.slip_image ? (() => {
                 const slipSrc = normalizeSlipUrl(payment.slip_image);
                 return `
