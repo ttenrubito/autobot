@@ -181,7 +181,9 @@ class PaymentService
                 'payment_no' => $paymentNo,
                 'customer_id' => $customerId,
                 'order_id' => $orderId,
-                'amount' => $amount
+                'amount' => $amount,
+                'sql_full' => $sql,
+                'params_keys' => array_keys($params)
             ]);
             
             $stmt = $this->pdo->prepare($sql);
