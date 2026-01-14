@@ -40,13 +40,20 @@ $stmt->execute([$user_id]);
 $user_row = $stmt->fetch(PDO::FETCH_ASSOC);
 $tenant_id = $user_row['tenant_id'] ?? 'default';
 
-// Parse URI for payment ID
+// Parse payment ID from URI path (/payments/34) or query string (?id=34)
 $uri_parts = explode('/', trim(parse_url($uri, PHP_URL_PATH), '/'));
 $payment_id = null;
-foreach ($uri_parts as $i => $part) {
-    if ($part === 'payments' && isset($uri_parts[$i + 1]) && is_numeric($uri_parts[$i + 1])) {
-        $payment_id = (int)$uri_parts[$i + 1];
-        break;
+
+// First check query string (used by JS frontend)
+if (isset($_GET['id']) && is_numeric($_GET['id'])) {
+    $payment_id = (int)$_GET['id'];
+} else {
+    // Fallback to URI path parsing
+    foreach ($uri_parts as $i => $part) {
+        if ($part === 'payments' && isset($uri_parts[$i + 1]) && is_numeric($uri_parts[$i + 1])) {
+            $payment_id = (int)$uri_parts[$i + 1];
+            break;
+        }
     }
 }
 
@@ -383,6 +390,12 @@ try {
                     break;
                 case 'reject':
                     rejectPayment($pdo, $payment, $input, $user_id);
+                    break;
+                case 'link_order':
+                    linkOrderToPayment($pdo, $payment, $input, $user_id, $tenant_id);
+                    break;
+                case 'unlink_order':
+                    unlinkOrderFromPayment($pdo, $payment, $user_id);
                     break;
                 default:
                     http_response_code(400);
@@ -724,6 +737,82 @@ function rejectPayment($pdo, $payment, $input, $admin_id) {
         echo json_encode([
             'success' => false,
             'message' => 'ไม่สามารถปฏิเสธได้: ' . $e->getMessage()
+        ]);
+    }
+}
+
+/**
+ * Link order to payment (manual matching)
+ */
+function linkOrderToPayment($pdo, $payment, $input, $admin_id, $tenant_id) {
+    $order_id = $input['order_id'] ?? null;
+    
+    if (!$order_id) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'กรุณาระบุคำสั่งซื้อ']);
+        return;
+    }
+    
+    try {
+        // Verify order exists and belongs to same tenant
+        $stmt = $pdo->prepare("SELECT id, order_number FROM orders WHERE id = ? AND tenant_id = ?");
+        $stmt->execute([$order_id, $tenant_id]);
+        $order = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if (!$order) {
+            http_response_code(404);
+            echo json_encode(['success' => false, 'message' => 'ไม่พบคำสั่งซื้อ']);
+            return;
+        }
+        
+        // Update payment with order_id
+        $stmt = $pdo->prepare("
+            UPDATE payments 
+            SET order_id = ?,
+                updated_at = NOW()
+            WHERE id = ?
+        ");
+        $stmt->execute([$order_id, $payment['id']]);
+        
+        echo json_encode([
+            'success' => true,
+            'message' => 'เชื่อมโยงคำสั่งซื้อ ' . $order['order_number'] . ' เรียบร้อย'
+        ]);
+        
+    } catch (Exception $e) {
+        error_log("Link order error: " . $e->getMessage());
+        http_response_code(500);
+        echo json_encode([
+            'success' => false,
+            'message' => 'ไม่สามารถเชื่อมโยงได้: ' . $e->getMessage()
+        ]);
+    }
+}
+
+/**
+ * Unlink order from payment
+ */
+function unlinkOrderFromPayment($pdo, $payment, $admin_id) {
+    try {
+        $stmt = $pdo->prepare("
+            UPDATE payments 
+            SET order_id = NULL,
+                updated_at = NOW()
+            WHERE id = ?
+        ");
+        $stmt->execute([$payment['id']]);
+        
+        echo json_encode([
+            'success' => true,
+            'message' => 'ยกเลิกการเชื่อมโยงเรียบร้อย'
+        ]);
+        
+    } catch (Exception $e) {
+        error_log("Unlink order error: " . $e->getMessage());
+        http_response_code(500);
+        echo json_encode([
+            'success' => false,
+            'message' => 'ไม่สามารถยกเลิกได้: ' . $e->getMessage()
         ]);
     }
 }

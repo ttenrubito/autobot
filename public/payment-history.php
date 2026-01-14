@@ -112,7 +112,7 @@ include('../includes/customer/sidebar.php');
     <!-- Pagination -->
     <div id="paymentPagination" class="pagination-container" style="display: none;">
         <!-- Rendered by JavaScript -->
-    </div>
+    </div> เช่นกรณี
 </main>
 
 <!-- Payment Details Modal (Outside of main-content) -->
@@ -2168,6 +2168,67 @@ include('../includes/customer/sidebar.php');
     font-weight: 600;
     color: #374151;
     margin-bottom: 0.5rem;
+}
+
+/* Order Reference Container */
+.order-reference-container {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.current-order-link {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.order-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    color: white;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 0.95rem;
+}
+
+.order-search-inline {
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-start;
+}
+
+.order-search-inline .form-control {
+    padding: 0.625rem 1rem;
+    border: 2px solid #e5e7eb;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    transition: border-color 0.2s;
+}
+
+.order-search-inline .form-control:focus {
+    outline: none;
+    border-color: #6366f1;
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+
+.order-search-inline .autocomplete-suggestions {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: white;
+    border: 1px solid #e5e7eb;
+    border-top: none;
+    border-radius: 0 0 8px 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    z-index: 100;
+    max-height: 200px;
+    overflow-y: auto;
 }
 </style>
 

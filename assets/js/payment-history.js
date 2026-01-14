@@ -583,15 +583,37 @@ function renderPaymentDetails(payment) {
                 </div>
             `}
 
-            <!-- Link to Order -->
-            <div class="detail-section" style="margin-top: -0.5rem;">
-                <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;">
-                    <span style="font-weight:600;">🔗 อ้างอิงคำสั่งซื้อ:</span>
+            <!-- Link to Order with Autocomplete -->
+            <div class="detail-section">
+                <h3>🔗 อ้างอิงคำสั่งซื้อ</h3>
+                <div class="order-reference-container">
                     ${payment.order_no ? `
-                        <a class="btn btn-outline" style="padding:.4rem .75rem;" href="${pageUrlSafe('orders.php')}?order_no=${encodeURIComponent(payment.order_no)}" onclick="event.preventDefault(); goToOrderFromPayment('${String(payment.order_no).replace(/'/g, "\\'")}');">
-                            <i class=\"fas fa-external-link-alt\"></i> ${payment.order_no}
-                        </a>
-                    ` : `<span>-</span>`}
+                        <div class="current-order-link">
+                            <span class="order-badge">
+                                <i class="fas fa-shopping-cart"></i> ${payment.order_no}
+                            </span>
+                            <a class="btn btn-outline btn-sm" href="${pageUrlSafe('orders.php')}?order_no=${encodeURIComponent(payment.order_no)}" onclick="event.preventDefault(); goToOrderFromPayment('${String(payment.order_no).replace(/'/g, "\\'")}');">
+                                <i class="fas fa-external-link-alt"></i> ดูคำสั่งซื้อ
+                            </a>
+                            <button class="btn btn-outline btn-sm" onclick="clearOrderMapping(${payment.id})" title="ยกเลิกการเชื่อมโยง">
+                                <i class="fas fa-unlink"></i>
+                            </button>
+                        </div>
+                    ` : `
+                        <div class="order-search-inline">
+                            <div class="autocomplete-wrapper" style="flex:1;">
+                                <input type="text" id="orderSearchModal-${payment.id}" class="form-control" 
+                                       placeholder="ค้นหาเลขคำสั่งซื้อเพื่อเชื่อมโยง..." 
+                                       autocomplete="off"
+                                       oninput="searchOrdersForPayment(${payment.id}, this.value)">
+                                <div id="orderSuggestionsModal-${payment.id}" class="autocomplete-suggestions"></div>
+                            </div>
+                            <button class="btn btn-primary btn-sm" onclick="linkOrderToPayment(${payment.id})" id="linkOrderBtn-${payment.id}" disabled>
+                                <i class="fas fa-link"></i> เชื่อมโยง
+                            </button>
+                        </div>
+                        <input type="hidden" id="selectedOrderId-${payment.id}" value="">
+                    `}
                 </div>
             </div>
 
@@ -617,12 +639,12 @@ function renderPaymentDetails(payment) {
                         <div class="detail-value">${formatDateTime(payment.payment_date)}</div>
                     </div>
                     <div class="detail-item">
-                        <div class="detail-label">อ้างอิงคำสั่งซื้อ</div>
-                        <div class="detail-value">${payment.order_no || '-'}</div>
-                    </div>
-                    <div class="detail-item">
                         <div class="detail-label">วิธีชำระ</div>
                         <div class="detail-value">${getPaymentMethodText(payment.payment_method)}</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">ธนาคาร</div>
+                        <div class="detail-value">${payment.bank_name || '-'}</div>
                     </div>
                 </div>
             </div>
@@ -1041,6 +1063,141 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+/**
+ * Search orders for payment modal autocomplete
+ */
+let orderSearchModalTimeout = null;
+async function searchOrdersForPayment(paymentId, query) {
+    const suggestions = document.getElementById(`orderSuggestionsModal-${paymentId}`);
+    const linkBtn = document.getElementById(`linkOrderBtn-${paymentId}`);
+    
+    if (!suggestions) return;
+    
+    // Clear previous timeout
+    clearTimeout(orderSearchModalTimeout);
+    
+    // Hide if query is too short
+    if (!query || query.length < 2) {
+        suggestions.classList.remove('show');
+        suggestions.innerHTML = '';
+        if (linkBtn) linkBtn.disabled = true;
+        return;
+    }
+    
+    // Debounce
+    orderSearchModalTimeout = setTimeout(async () => {
+        try {
+            const result = await apiCall(`${API_ENDPOINTS.SEARCH_ORDERS}?q=${encodeURIComponent(query)}`);
+            
+            if (result.success && result.data && result.data.length > 0) {
+                suggestions.innerHTML = result.data.map(order => `
+                    <div class="autocomplete-item" onclick="selectOrderForPayment(${paymentId}, ${JSON.stringify(order).replace(/"/g, '&quot;')})">
+                        <div class="autocomplete-item-info">
+                            <div class="autocomplete-item-name">
+                                <i class="fas fa-shopping-cart" style="color:#6366f1;"></i>
+                                ${escapeHtml(order.order_no || order.order_number || '#' + order.id)}
+                            </div>
+                            <div class="autocomplete-item-meta">
+                                ${order.customer_name ? escapeHtml(order.customer_name) + ' • ' : ''}
+                                ${order.total_amount ? '฿' + formatNumber(order.total_amount) : ''}
+                                ${order.status ? ` • ${order.status}` : ''}
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+                suggestions.classList.add('show');
+            } else {
+                suggestions.innerHTML = '<div class="autocomplete-item"><em style="color:#9ca3af;">ไม่พบคำสั่งซื้อ</em></div>';
+                suggestions.classList.add('show');
+            }
+        } catch (error) {
+            console.error('Search orders error:', error);
+            suggestions.classList.remove('show');
+        }
+    }, 300);
+}
+
+/**
+ * Select order from autocomplete for payment
+ */
+function selectOrderForPayment(paymentId, order) {
+    const input = document.getElementById(`orderSearchModal-${paymentId}`);
+    const suggestions = document.getElementById(`orderSuggestionsModal-${paymentId}`);
+    const hiddenInput = document.getElementById(`selectedOrderId-${paymentId}`);
+    const linkBtn = document.getElementById(`linkOrderBtn-${paymentId}`);
+    
+    if (input) input.value = order.order_no || order.order_number || '#' + order.id;
+    if (suggestions) suggestions.classList.remove('show');
+    if (hiddenInput) hiddenInput.value = order.id;
+    if (linkBtn) linkBtn.disabled = false;
+}
+
+/**
+ * Link order to payment (API call)
+ */
+async function linkOrderToPayment(paymentId) {
+    const orderId = document.getElementById(`selectedOrderId-${paymentId}`)?.value;
+    
+    if (!orderId) {
+        showToast('กรุณาเลือกคำสั่งซื้อก่อน', 'error');
+        return;
+    }
+    
+    try {
+        showToast('กำลังเชื่อมโยง...', 'info');
+        
+        const result = await apiCall(API_ENDPOINTS.CUSTOMER_PAYMENTS + '?action=link_order', {
+            method: 'POST',
+            body: JSON.stringify({
+                payment_id: paymentId,
+                order_id: orderId
+            })
+        });
+        
+        if (result.success) {
+            showToast('✅ เชื่อมโยงคำสั่งซื้อเรียบร้อย', 'success');
+            // Reload payment detail
+            await viewPaymentDetail(paymentId);
+            // Refresh list
+            loadPayments();
+        } else {
+            showToast('❌ ' + (result.message || 'ไม่สามารถเชื่อมโยงได้'), 'error');
+        }
+    } catch (error) {
+        console.error('Link order error:', error);
+        showToast('❌ เกิดข้อผิดพลาด', 'error');
+    }
+}
+
+/**
+ * Clear order mapping
+ */
+async function clearOrderMapping(paymentId) {
+    if (!confirm('ยกเลิกการเชื่อมโยงคำสั่งซื้อนี้หรือไม่?')) return;
+    
+    try {
+        showToast('กำลังยกเลิก...', 'info');
+        
+        const result = await apiCall(API_ENDPOINTS.CUSTOMER_PAYMENTS + '?action=unlink_order', {
+            method: 'POST',
+            body: JSON.stringify({
+                payment_id: paymentId
+            })
+        });
+        
+        if (result.success) {
+            showToast('✅ ยกเลิกการเชื่อมโยงเรียบร้อย', 'success');
+            await viewPaymentDetail(paymentId);
+            loadPayments();
+        } else {
+            showToast('❌ ' + (result.message || 'ไม่สามารถยกเลิกได้'), 'error');
+        }
+    } catch (error) {
+        console.error('Unlink order error:', error);
+        showToast('❌ เกิดข้อผิดพลาด', 'error');
+    }
 }
 
 function showError(message, details, canRetry = false) {
