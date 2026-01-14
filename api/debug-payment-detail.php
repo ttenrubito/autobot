@@ -29,7 +29,7 @@ try {
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
     } else {
         // Get recent payments
-        $stmt = $pdo->query("SELECT id, payment_no, customer_id, order_id, amount, status, source, payment_details, created_at FROM payments ORDER BY id DESC LIMIT 10");
+        $stmt = $pdo->query("SELECT id, payment_no, customer_id, tenant_id, order_id, amount, status, source, payment_details, created_at FROM payments ORDER BY id DESC LIMIT 10");
         $payments = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
         echo json_encode([

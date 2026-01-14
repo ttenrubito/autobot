@@ -14,6 +14,8 @@ namespace Autobot\Services;
 use PDO;
 use Exception;
 
+require_once __DIR__ . '/../GoogleCloudStorage.php';
+
 class PaymentService
 {
     private PDO $pdo;
@@ -21,6 +23,75 @@ class PaymentService
     public function __construct(?PDO $pdo = null)
     {
         $this->pdo = $pdo ?? \getDB();
+    }
+    
+    /**
+     * Download image from URL and upload to GCS
+     */
+    private function uploadImageToGCS(string $imageUrl, string $tenantId): ?string
+    {
+        try {
+            $this->log('INFO', 'PaymentService - Downloading image for GCS upload', [
+                'url' => substr($imageUrl, 0, 100) . '...'
+            ]);
+            
+            // Download image from URL (Facebook CDN, etc.)
+            $ch = curl_init($imageUrl);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+            $imageContent = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $contentType = curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
+            curl_close($ch);
+            
+            if ($httpCode !== 200 || empty($imageContent)) {
+                $this->log('WARNING', 'PaymentService - Failed to download image', [
+                    'http_code' => $httpCode,
+                    'url' => $imageUrl
+                ]);
+                return $imageUrl; // Return original URL as fallback
+            }
+            
+            // Determine file extension from content type
+            $ext = 'jpg';
+            if (strpos($contentType, 'png') !== false) $ext = 'png';
+            elseif (strpos($contentType, 'gif') !== false) $ext = 'gif';
+            elseif (strpos($contentType, 'webp') !== false) $ext = 'webp';
+            
+            $fileName = 'slip_' . date('Ymd_His') . '_' . uniqid() . '.' . $ext;
+            
+            // Upload to GCS
+            $gcs = \GoogleCloudStorage::getInstance();
+            $result = $gcs->uploadFile(
+                $imageContent,
+                $fileName,
+                $contentType ?: 'image/jpeg',
+                'payment-slips/' . $tenantId,
+                ['tenant_id' => $tenantId, 'type' => 'payment_slip']
+            );
+            
+            if ($result['success']) {
+                $this->log('INFO', 'PaymentService - Image uploaded to GCS', [
+                    'path' => $result['path'],
+                    'signed_url' => substr($result['signed_url'] ?? '', 0, 100) . '...'
+                ]);
+                // Return signed URL for display
+                return $result['signed_url'] ?? $result['url'];
+            }
+            
+            $this->log('WARNING', 'PaymentService - GCS upload failed', [
+                'error' => $result['error'] ?? 'unknown'
+            ]);
+            return $imageUrl; // Return original URL as fallback
+            
+        } catch (Exception $e) {
+            $this->log('ERROR', 'PaymentService - GCS upload exception', [
+                'error' => $e->getMessage()
+            ]);
+            return $imageUrl; // Return original URL as fallback
+        }
     }
     
     /**
@@ -110,6 +181,15 @@ class PaymentService
             // 5. Generate payment_no
             $paymentNo = 'PAY-BOT-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6));
             
+            // 5.5. Upload image to GCS (if it's an external URL like Facebook CDN)
+            $finalImageUrl = $imageUrl;
+            if ($imageUrl && (strpos($imageUrl, 'http') === 0)) {
+                $gcsUrl = $this->uploadImageToGCS($imageUrl, $tenantId);
+                if ($gcsUrl) {
+                    $finalImageUrl = $gcsUrl;
+                }
+            }
+            
             // 6. Build payment_details JSON (store ALL extra data here)
             $paymentDetails = json_encode([
                 'source' => 'chatbot',
@@ -125,6 +205,7 @@ class PaymentService
                 'transfer_time' => $transferTime,
                 'ocr_result' => $slipData,
                 'matched_order_id' => $matchedOrder['id'] ?? null,
+                'original_image_url' => $imageUrl, // Keep original for reference
             ], JSON_UNESCAPED_UNICODE);
             
             // 7. Determine order_id (NULL if no match)
@@ -174,7 +255,7 @@ class PaymentService
                 ':customer_id' => $customerId, // Now FK to customer_profiles.id
                 ':tenant_id' => $tenantId,
                 ':amount' => $amount,
-                ':slip_image' => $imageUrl,
+                ':slip_image' => $finalImageUrl, // Use GCS URL if upload succeeded, else original
                 ':payment_details' => $paymentDetails,
                 ':payment_date' => $transferTime ?: date('Y-m-d H:i:s'),
             ];

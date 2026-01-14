@@ -59,45 +59,69 @@ try {
             $stmt = $pdo->prepare("
                 SELECT 
                     p.id,
-                    p.user_id,
-                    p.customer_profile_id,
-                    p.payment_type,
-                    p.reference_type,
-                    p.reference_id,
+                    p.payment_no,
                     p.order_id,
-                    p.installment_id,
-                    p.savings_goal_id,
+                    p.customer_id,
+                    p.tenant_id,
                     p.amount,
+                    p.payment_type,
                     p.payment_method,
+                    p.installment_period,
+                    p.current_period,
                     p.status,
-                    p.slip_image_url,
-                    p.slip_image_url as slip_image,
-                    p.ocr_data,
-                    p.payment_ref,
-                    p.sender_name,
-                    p.transfer_time,
-                    p.transfer_time as payment_date,
-                    p.customer_name,
-                    p.customer_phone,
-                    p.customer_platform,
-                    p.customer_platform_id,
-                    p.customer_avatar,
+                    p.slip_image,
+                    p.slip_image as slip_image_url,
+                    p.payment_details,
+                    p.payment_date,
+                    p.payment_date as transfer_time,
                     p.verified_by,
                     p.verified_at,
                     p.rejection_reason,
-                    p.note,
+                    p.source,
                     p.created_at,
-                    p.updated_at
+                    p.updated_at,
+                    -- Customer profile info
+                    cp.display_name as customer_display_name,
+                    cp.full_name as customer_full_name,
+                    cp.platform as customer_platform,
+                    cp.platform_user_id as customer_platform_id,
+                    COALESCE(cp.avatar_url, cp.profile_pic_url) as customer_avatar,
+                    cp.phone as customer_phone
                 FROM payments p
-                WHERE p.id = ? AND p.customer_id = ?
+                LEFT JOIN customer_profiles cp ON p.customer_id = cp.id
+                WHERE p.id = ? AND p.tenant_id = ?
             ");
-            $stmt->execute([$payment_id, $user_id]);
+            $stmt->execute([$payment_id, $tenant_id]);
             $payment = $stmt->fetch(PDO::FETCH_ASSOC);
             
             if (!$payment) {
                 http_response_code(404);
                 echo json_encode(['success' => false, 'message' => 'Payment not found']);
                 exit;
+            }
+            
+            // Parse payment_details
+            $details = [];
+            if ($payment['payment_details']) {
+                $details = json_decode($payment['payment_details'], true) ?: [];
+            }
+            
+            // Get customer name
+            $payment['customer_name'] = $payment['customer_full_name'] 
+                ?? $payment['customer_display_name'] 
+                ?? ($details['customer_name'] ?? null)
+                ?? ($details['sender_name'] ?? null)
+                ?? 'ไม่ระบุลูกค้า';
+            
+            // Extract OCR/bank info
+            $payment['bank_name'] = $details['bank_name'] ?? ($details['ocr_result']['bank'] ?? null);
+            $payment['payment_ref'] = $details['payment_ref'] ?? ($details['ocr_result']['ref'] ?? null);
+            $payment['sender_name'] = $details['sender_name'] ?? ($details['ocr_result']['sender_name'] ?? null);
+            $payment['receiver_name'] = $details['receiver_name'] ?? ($details['ocr_result']['receiver_name'] ?? null);
+            
+            // Ensure customer_platform is set
+            if (empty($payment['customer_platform']) && !empty($details['platform'])) {
+                $payment['customer_platform'] = $details['platform'];
             }
             
             // Get related order info
@@ -122,10 +146,42 @@ try {
                 }
             }
             
-            // Decode OCR data if JSON
-            if ($payment['ocr_data']) {
-                $payment['ocr_data'] = json_decode($payment['ocr_data'], true);
+            // Get chat messages related to this payment (from chat_events)
+            $payment['chat_messages'] = [];
+            if (!empty($details['external_user_id']) && !empty($details['channel_id'])) {
+                // Get recent messages from this user
+                $stmt = $pdo->prepare("
+                    SELECT 
+                        ce.event_type,
+                        ce.event_data,
+                        ce.created_at
+                    FROM chat_events ce
+                    JOIN conversations c ON ce.conversation_id = c.conversation_id
+                    WHERE c.platform_user_id = ?
+                    AND c.tenant_id = ?
+                    ORDER BY ce.created_at DESC
+                    LIMIT 20
+                ");
+                $stmt->execute([$details['external_user_id'], $tenant_id]);
+                $events = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                
+                // Convert to chat messages format
+                foreach ($events as $event) {
+                    $eventData = json_decode($event['event_data'], true) ?: [];
+                    $payment['chat_messages'][] = [
+                        'type' => $event['event_type'],
+                        'text' => $eventData['text'] ?? ($eventData['message'] ?? ''),
+                        'image' => $eventData['image_url'] ?? null,
+                        'created_at' => $event['created_at'],
+                        'is_bot' => ($event['event_type'] === 'bot_response')
+                    ];
+                }
+                // Reverse to show oldest first
+                $payment['chat_messages'] = array_reverse($payment['chat_messages']);
             }
+            
+            // Clean up internal fields
+            unset($payment['customer_full_name'], $payment['customer_display_name']);
             
             echo json_encode(['success' => true, 'data' => $payment]);
             
@@ -167,25 +223,33 @@ try {
             $stmt = $pdo->prepare("
                 SELECT 
                     p.id,
+                    p.payment_no,
                     p.order_id,
                     p.amount,
                     p.payment_type,
                     p.payment_method,
+                    p.installment_period,
+                    p.current_period,
                     p.status,
                     p.slip_image,
                     p.slip_image as slip_image_url,
                     p.payment_date,
                     p.payment_date as transfer_time,
+                    p.payment_details,
                     p.verified_at,
                     p.created_at,
                     p.customer_id,
-                    p.payment_details,
+                    p.source,
                     -- Get order info via subquery
                     (SELECT o.order_number FROM orders o WHERE o.id = p.order_id) as order_no,
                     (SELECT o.order_number FROM orders o WHERE o.id = p.order_id) as order_number,
-                    -- Get customer name from customer_profiles (not users)
-                    cp.display_name as customer_name,
+                    -- Get customer info from customer_profiles
+                    cp.display_name as customer_display_name,
                     cp.full_name as customer_full_name,
+                    cp.platform as customer_platform,
+                    cp.platform_user_id as customer_platform_id,
+                    COALESCE(cp.avatar_url, cp.profile_pic_url) as customer_avatar,
+                    cp.phone as customer_phone,
                     NULL as product_name
                 FROM payments p
                 LEFT JOIN customer_profiles cp ON p.customer_id = cp.id
@@ -200,19 +264,31 @@ try {
             
             // Process payments for display
             foreach ($payments as &$payment) {
-                // Use full_name if available, otherwise display_name, otherwise from payment_details
+                // Parse payment_details for extra info (OCR data, chat context)
+                $details = [];
+                if ($payment['payment_details']) {
+                    $details = json_decode($payment['payment_details'], true) ?: [];
+                }
+                
+                // Get customer name: prefer profile, then OCR, then fallback
                 $payment['customer_name'] = $payment['customer_full_name'] 
-                    ?? $payment['customer_name'] 
+                    ?? $payment['customer_display_name'] 
+                    ?? ($details['customer_name'] ?? null)
+                    ?? ($details['sender_name'] ?? null)
                     ?? 'ไม่ระบุลูกค้า';
                 
-                // Parse payment_details for extra info
-                if ($payment['payment_details']) {
-                    $details = json_decode($payment['payment_details'], true);
-                    if ($details && isset($details['customer_name']) && $payment['customer_name'] === 'ไม่ระบุลูกค้า') {
-                        $payment['customer_name'] = $details['customer_name'];
-                    }
+                // Ensure customer_platform is set
+                if (empty($payment['customer_platform']) && !empty($details['platform'])) {
+                    $payment['customer_platform'] = $details['platform'];
                 }
-                unset($payment['customer_full_name']);
+                
+                // Extract OCR data for display
+                $payment['bank_name'] = $details['bank_name'] ?? ($details['ocr_result']['bank'] ?? null);
+                $payment['payment_ref'] = $details['payment_ref'] ?? ($details['ocr_result']['ref'] ?? null);
+                $payment['sender_name'] = $details['sender_name'] ?? ($details['ocr_result']['sender_name'] ?? null);
+                
+                // Clean up internal fields
+                unset($payment['customer_full_name'], $payment['customer_display_name']);
             }
             unset($payment);
             
