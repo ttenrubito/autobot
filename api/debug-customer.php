@@ -30,7 +30,7 @@ try {
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
     } else {
         // Get recent customers
-        $stmt = $pdo->query("SELECT id, platform, platform_user_id, display_name, full_name, created_at FROM customer_profiles ORDER BY id DESC LIMIT 10");
+        $stmt = $pdo->query("SELECT id, tenant_id, platform, platform_user_id, display_name, full_name, created_at FROM customer_profiles ORDER BY id DESC LIMIT 10");
         $customers = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
         echo json_encode([
