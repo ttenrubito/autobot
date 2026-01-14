@@ -146,38 +146,38 @@ try {
                 }
             }
             
-            // Get chat messages related to this payment (from chat_events)
+            // Get chat messages related to this payment (from chat_sessions + chat_messages)
             $payment['chat_messages'] = [];
             if (!empty($details['external_user_id']) && !empty($details['channel_id'])) {
-                // Get recent messages from this user
+                // First find the chat_session
                 $stmt = $pdo->prepare("
-                    SELECT 
-                        ce.event_type,
-                        ce.event_data,
-                        ce.created_at
-                    FROM chat_events ce
-                    JOIN conversations c ON ce.conversation_id = c.conversation_id
-                    WHERE c.platform_user_id = ?
-                    AND c.tenant_id = ?
-                    ORDER BY ce.created_at DESC
-                    LIMIT 20
+                    SELECT id as session_id
+                    FROM chat_sessions
+                    WHERE channel_id = ? AND external_user_id = ?
+                    LIMIT 1
                 ");
-                $stmt->execute([$details['external_user_id'], $tenant_id]);
-                $events = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                $stmt->execute([$details['channel_id'], $details['external_user_id']]);
+                $session = $stmt->fetch(PDO::FETCH_ASSOC);
                 
-                // Convert to chat messages format
-                foreach ($events as $event) {
-                    $eventData = json_decode($event['event_data'], true) ?: [];
-                    $payment['chat_messages'][] = [
-                        'type' => $event['event_type'],
-                        'text' => $eventData['text'] ?? ($eventData['message'] ?? ''),
-                        'image' => $eventData['image_url'] ?? null,
-                        'created_at' => $event['created_at'],
-                        'is_bot' => ($event['event_type'] === 'bot_response')
-                    ];
+                if ($session) {
+                    // Get recent messages from chat_messages table
+                    $stmt = $pdo->prepare("
+                        SELECT 
+                            role,
+                            text as message_text,
+                            created_at as sent_at,
+                            CASE WHEN role IN ('assistant', 'system') THEN 'bot' ELSE 'customer' END as sender_type
+                        FROM chat_messages
+                        WHERE session_id = ?
+                        ORDER BY created_at DESC
+                        LIMIT 20
+                    ");
+                    $stmt->execute([$session['session_id']]);
+                    $messages = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                    
+                    // Reverse to show oldest first
+                    $payment['chat_messages'] = array_reverse($messages);
                 }
-                // Reverse to show oldest first
-                $payment['chat_messages'] = array_reverse($payment['chat_messages']);
             }
             
             // Clean up internal fields
