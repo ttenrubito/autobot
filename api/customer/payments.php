@@ -33,6 +33,13 @@ $user_id = $auth['user_id'];
 $method = $_SERVER['REQUEST_METHOD'];
 $uri = $_SERVER['REQUEST_URI'];
 
+// Get tenant_id for this user
+$pdo_init = getDB();
+$stmt = $pdo_init->prepare("SELECT tenant_id FROM users WHERE id = ?");
+$stmt->execute([$user_id]);
+$user_row = $stmt->fetch(PDO::FETCH_ASSOC);
+$tenant_id = $user_row['tenant_id'] ?? 'default';
+
 // Parse URI for payment ID
 $uri_parts = explode('/', trim(parse_url($uri, PHP_URL_PATH), '/'));
 $payment_id = null;
@@ -131,9 +138,9 @@ try {
             $status = isset($_GET['status']) ? $_GET['status'] : null;
             $payment_type = isset($_GET['payment_type']) ? $_GET['payment_type'] : null;
             
-            // Build query - filter by customer_id
-            $where = ['p.customer_id = ?'];
-            $params = [$user_id];
+            // Build query - filter by tenant_id (shop's payments)
+            $where = ['p.tenant_id = ?'];
+            $params = [$tenant_id];
             
             if ($status) {
                 $where[] = 'p.status = ?';
@@ -156,7 +163,7 @@ try {
             $stmt->execute($params);
             $total = $stmt->fetch(PDO::FETCH_ASSOC)['total'];
             
-            // Get payments with order info - use only existing columns
+            // Get payments with order info - join with customer_profiles
             $stmt = $pdo->prepare("
                 SELECT 
                     p.id,
@@ -172,12 +179,16 @@ try {
                     p.verified_at,
                     p.created_at,
                     p.customer_id,
+                    p.payment_details,
                     -- Get order info via subquery
                     (SELECT o.order_number FROM orders o WHERE o.id = p.order_id) as order_no,
                     (SELECT o.order_number FROM orders o WHERE o.id = p.order_id) as order_number,
-                    (SELECT u.full_name FROM users u WHERE u.id = p.customer_id) as customer_name,
+                    -- Get customer name from customer_profiles (not users)
+                    cp.display_name as customer_name,
+                    cp.full_name as customer_full_name,
                     NULL as product_name
                 FROM payments p
+                LEFT JOIN customer_profiles cp ON p.customer_id = cp.id
                 WHERE $where_clause
                 ORDER BY p.created_at DESC
                 LIMIT ? OFFSET ?
@@ -189,11 +200,23 @@ try {
             
             // Process payments for display
             foreach ($payments as &$payment) {
-                $payment['customer_name'] = $payment['customer_name'] ?? 'ไม่ระบุลูกค้า';
+                // Use full_name if available, otherwise display_name, otherwise from payment_details
+                $payment['customer_name'] = $payment['customer_full_name'] 
+                    ?? $payment['customer_name'] 
+                    ?? 'ไม่ระบุลูกค้า';
+                
+                // Parse payment_details for extra info
+                if ($payment['payment_details']) {
+                    $details = json_decode($payment['payment_details'], true);
+                    if ($details && isset($details['customer_name']) && $payment['customer_name'] === 'ไม่ระบุลูกค้า') {
+                        $payment['customer_name'] = $details['customer_name'];
+                    }
+                }
+                unset($payment['customer_full_name']);
             }
             unset($payment);
             
-            // Get summary counts for this user
+            // Get summary counts for this tenant
             $stmt = $pdo->prepare("
                 SELECT 
                     COUNT(*) as total,
@@ -201,9 +224,9 @@ try {
                     SUM(CASE WHEN status = 'verified' THEN 1 ELSE 0 END) as verified_count,
                     SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected_count
                 FROM payments
-                WHERE customer_id = ?
+                WHERE tenant_id = ?
             ");
-            $stmt->execute([$user_id]);
+            $stmt->execute([$tenant_id]);
             $summary = $stmt->fetch(PDO::FETCH_ASSOC);
             
             echo json_encode([

@@ -79,25 +79,23 @@ class PaymentService
             $tenantId = $context['tenant_id'] ?? 'default';
             $channelId = $context['channel']['id'] ?? ($context['channel_id'] ?? null);
             
-            $customer = $this->findCustomerByExternalId($externalUserId);
-            // Note: customer_profiles.id != users.id (different tables)
-            // payments.customer_id has FK to users.id, but chatbot users aren't in users table
-            // So we set customer_id = NULL for chatbot payments
-            $customerId = null; // FK constraint: payments.customer_id -> users.id
-            $customerProfileId = $customer['id'] ?? null; // For reference only
+            // Find or create customer_profile for this chatbot user
+            $customer = $this->findOrCreateCustomerProfile($externalUserId, $platform, $tenantId, $senderName);
+            // Now payments.customer_id -> customer_profiles.id (after schema migration)
+            $customerId = $customer['id'] ?? null;
             $customerName = $customer['full_name'] ?? ($customer['display_name'] ?? $senderName);
             $customerPhone = $customer['phone'] ?? null;
             
             $this->log('INFO', 'PaymentService - Customer lookup', [
                 'external_user_id' => $externalUserId,
                 'found_customer' => !empty($customer),
-                'customer_profile_id' => $customerProfileId
+                'customer_id' => $customerId
             ]);
             
-            // 3. Try to auto-match with pending order (use customerProfileId for lookup)
+            // 3. Try to auto-match with pending order
             $matchedOrder = null;
-            if ($amount > 0 && ($customerProfileId || $externalUserId)) {
-                $matchedOrder = $this->tryAutoMatchOrder($amount, $customerProfileId, $externalUserId);
+            if ($amount > 0 && ($customerId || $externalUserId)) {
+                $matchedOrder = $this->tryAutoMatchOrder($amount, $customerId, $externalUserId);
             }
             
             $this->log('INFO', 'PaymentService - Order matching', [
@@ -173,7 +171,7 @@ class PaymentService
             $params = [
                 ':payment_no' => $paymentNo,
                 ':order_id' => $orderId,
-                ':customer_id' => null, // NULL because chatbot users aren't in users table
+                ':customer_id' => $customerId, // Now FK to customer_profiles.id
                 ':tenant_id' => $tenantId,
                 ':amount' => $amount,
                 ':slip_image' => $imageUrl,
@@ -183,8 +181,7 @@ class PaymentService
             
             $this->log('INFO', 'PaymentService - Executing INSERT', [
                 'payment_no' => $paymentNo,
-                'customer_id' => 'NULL (chatbot user)',
-                'customer_profile_id' => $customerProfileId,
+                'customer_id' => $customerId,
                 'order_id' => $orderId,
                 'amount' => $amount,
                 'sql_full' => $sql,
@@ -253,7 +250,67 @@ class PaymentService
     }
     
     /**
-     * Find customer by external platform user ID
+     * Find or create customer profile for chatbot user
+     */
+    private function findOrCreateCustomerProfile(?string $externalUserId, string $platform, string $tenantId, ?string $displayName): ?array
+    {
+        if (!$externalUserId) {
+            return null;
+        }
+        
+        // First try to find existing
+        $sql = "
+            SELECT id, full_name, phone, email, platform, display_name, tenant_id
+            FROM customer_profiles
+            WHERE platform_user_id = :external_id AND tenant_id = :tenant_id
+            LIMIT 1
+        ";
+        
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute([':external_id' => $externalUserId, ':tenant_id' => $tenantId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($row) {
+            return $row;
+        }
+        
+        // Create new customer_profile
+        $sql = "
+            INSERT INTO customer_profiles (tenant_id, platform, platform_user_id, display_name, first_seen_at, last_active_at, created_at, updated_at)
+            VALUES (:tenant_id, :platform, :external_id, :display_name, NOW(), NOW(), NOW(), NOW())
+        ";
+        
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute([
+            ':tenant_id' => $tenantId,
+            ':platform' => $platform,
+            ':external_id' => $externalUserId,
+            ':display_name' => $displayName ?? 'Unknown'
+        ]);
+        
+        $newId = (int)$this->pdo->lastInsertId();
+        
+        $this->log('INFO', 'PaymentService - Created new customer_profile', [
+            'id' => $newId,
+            'tenant_id' => $tenantId,
+            'platform' => $platform,
+            'external_id' => $externalUserId
+        ]);
+        
+        return [
+            'id' => $newId,
+            'tenant_id' => $tenantId,
+            'platform' => $platform,
+            'platform_user_id' => $externalUserId,
+            'display_name' => $displayName,
+            'full_name' => null,
+            'phone' => null,
+            'email' => null
+        ];
+    }
+    
+    /**
+     * Find customer by external platform user ID (legacy - without tenant filter)
      */
     private function findCustomerByExternalId(?string $externalUserId): ?array
     {
@@ -261,10 +318,9 @@ class PaymentService
             return null;
         }
         
-        // customer_profiles schema: id, platform, platform_user_id, display_name, full_name, phone, email
-        // Note: NO user_id column in customer_profiles
+        // customer_profiles schema: id, tenant_id, platform, platform_user_id, display_name, full_name, phone, email
         $sql = "
-            SELECT id, full_name, phone, email, platform, display_name
+            SELECT id, tenant_id, full_name, phone, email, platform, display_name
             FROM customer_profiles
             WHERE platform_user_id = :external_id
             LIMIT 1
@@ -280,16 +336,16 @@ class PaymentService
     /**
      * Try to auto-match payment with a pending order
      * Match by amount and customer (within reasonable time window)
-     * Note: $customerProfileId is from customer_profiles.id, not users.id
+     * Note: $customerId is from customer_profiles.id (after schema migration)
      */
-    private function tryAutoMatchOrder(float $amount, ?int $customerProfileId, ?string $externalUserId): ?array
+    private function tryAutoMatchOrder(float $amount, ?int $customerId, ?string $externalUserId): ?array
     {
         if ($amount <= 0) {
             return null;
         }
         
-        // Try to match by customer_profile_id first (orders.customer_id = customer_profiles.id)
-        if ($customerProfileId > 0) {
+        // Try to match by customer_id first (orders.customer_id = customer_profiles.id)
+        if ($customerId > 0) {
             $sql = "
                 SELECT id, order_number, total_amount, status
                 FROM orders
@@ -303,14 +359,14 @@ class PaymentService
             
             $stmt = $this->pdo->prepare($sql);
             $stmt->execute([
-                ':customer_id' => $customerProfileId,
+                ':customer_id' => $customerId,
                 ':amount' => $amount
             ]);
             $order = $stmt->fetch(PDO::FETCH_ASSOC);
             
             if ($order) {
-                $this->log('INFO', 'PaymentService - Matched order by customer_profile_id', [
-                    'customer_profile_id' => $customerProfileId,
+                $this->log('INFO', 'PaymentService - Matched order by customer_id', [
+                    'customer_id' => $customerId,
                     'order_id' => $order['id'],
                     'order_number' => $order['order_number']
                 ]);
