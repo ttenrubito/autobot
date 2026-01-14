@@ -28,8 +28,8 @@ try {
     ];
     
     $context = [
-        'external_user_id' => 'test_user_123',
-        'platform' => 'test',
+        'external_user_id' => 'test_user_' . time(),
+        'platform' => 'facebook', // Must be: facebook, line, web, instagram, manual
         'tenant_id' => 'default',
         'channel' => ['id' => 1]
     ];
