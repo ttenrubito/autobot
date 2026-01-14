@@ -80,8 +80,9 @@ class PaymentService
             $channelId = $context['channel']['id'] ?? ($context['channel_id'] ?? null);
             
             $customer = $this->findCustomerByExternalId($externalUserId);
-            $customerId = $customer['user_id'] ?? ($customer['id'] ?? 0);
-            $customerName = $customer['full_name'] ?? $senderName;
+            // customer_profiles has 'id' not 'user_id'
+            $customerId = $customer['id'] ?? 0;
+            $customerName = $customer['full_name'] ?? ($customer['display_name'] ?? $senderName);
             $customerPhone = $customer['phone'] ?? null;
             
             $this->log('INFO', 'PaymentService - Customer lookup', [
@@ -256,8 +257,10 @@ class PaymentService
             return null;
         }
         
+        // customer_profiles schema: id, platform, platform_user_id, display_name, full_name, phone, email
+        // Note: NO user_id column in customer_profiles
         $sql = "
-            SELECT id, user_id, full_name, phone, email, platform
+            SELECT id, full_name, phone, email, platform, display_name
             FROM customer_profiles
             WHERE platform_user_id = :external_id
             LIMIT 1
@@ -312,10 +315,11 @@ class PaymentService
         
         // Try to match by external_user_id via customer_profiles
         if ($externalUserId) {
+            // orders.customer_id links to customer_profiles.id (not user_id)
             $sql = "
                 SELECT o.id, o.order_number, o.total_amount, o.status
                 FROM orders o
-                JOIN customer_profiles cp ON o.customer_id = cp.user_id
+                JOIN customer_profiles cp ON o.customer_id = cp.id
                 WHERE cp.platform_user_id = :external_id
                 AND o.status IN ('pending_payment', 'awaiting_payment')
                 AND o.total_amount = :amount
