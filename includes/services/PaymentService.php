@@ -73,12 +73,16 @@ class PaymentService
             );
             
             if ($result['success']) {
+                // Use signed_url if available, otherwise use public url
+                $finalUrl = !empty($result['signed_url']) ? $result['signed_url'] : $result['url'];
+                
                 $this->log('INFO', 'PaymentService - Image uploaded to GCS', [
                     'path' => $result['path'],
-                    'signed_url' => substr($result['signed_url'] ?? '', 0, 100) . '...'
+                    'using_signed_url' => !empty($result['signed_url']),
+                    'final_url' => substr($finalUrl ?? '', 0, 100) . '...'
                 ]);
-                // Return signed URL for display
-                return $result['signed_url'] ?? $result['url'];
+                
+                return $finalUrl;
             }
             
             $this->log('WARNING', 'PaymentService - GCS upload failed', [
