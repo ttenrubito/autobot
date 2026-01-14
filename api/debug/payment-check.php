@@ -64,16 +64,39 @@ try {
     
     // Check chat_sessions for latest payment user
     $chatSession = null;
-    if (!empty($payments[0]['ocr_external_user_id'])) {
-        $stmt = $pdo->prepare("SELECT id, channel_id, external_user_id FROM chat_sessions WHERE external_user_id = ? LIMIT 1");
-        $stmt->execute([$payments[0]['ocr_external_user_id']]);
+    // Use platform_user_id from customer_profiles (like the updated API does)
+    $external_user_id = $payments[0]['ocr_external_user_id'] ?? $payments[0]['cp_platform_user_id'] ?? null;
+    
+    if (!empty($external_user_id)) {
+        // First try with channel_id if available
+        $channel_id = $payments[0]['channel_id'] ?? null;
+        
+        if ($channel_id) {
+            $stmt = $pdo->prepare("SELECT id, channel_id, external_user_id FROM chat_sessions WHERE channel_id = ? AND external_user_id = ? LIMIT 1");
+            $stmt->execute([$channel_id, $external_user_id]);
+        } else {
+            // Fallback: find by external_user_id only
+            $stmt = $pdo->prepare("SELECT id, channel_id, external_user_id FROM chat_sessions WHERE external_user_id = ? ORDER BY updated_at DESC LIMIT 1");
+            $stmt->execute([$external_user_id]);
+        }
         $chatSession = $stmt->fetch(PDO::FETCH_ASSOC);
         
-        // Get messages count for this session
+        // Get messages count and sample for this session
         if ($chatSession) {
             $stmt = $pdo->prepare("SELECT COUNT(*) as cnt FROM chat_messages WHERE session_id = ?");
             $stmt->execute([$chatSession['id']]);
             $chatSession['messages_count'] = $stmt->fetch(PDO::FETCH_ASSOC)['cnt'];
+            
+            // Get last 3 messages as sample
+            $stmt = $pdo->prepare("
+                SELECT role, LEFT(text, 100) as text_preview, created_at 
+                FROM chat_messages 
+                WHERE session_id = ? 
+                ORDER BY created_at DESC 
+                LIMIT 3
+            ");
+            $stmt->execute([$chatSession['id']]);
+            $chatSession['sample_messages'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
         }
     }
     
