@@ -107,32 +107,55 @@ function createCase($db) {
         return;
     }
     
-    // ✅ CHECK FOR EXISTING OPEN CASE before creating new one
+    // ✅ SESSION-BASED CASE: Find ANY open case for this customer (ignore case_type)
+    // Case expires after 24 hours of inactivity
     $existingCase = $db->queryOne(
         "SELECT * FROM cases 
-         WHERE channel_id = ? AND external_user_id = ? AND case_type = ? 
+         WHERE channel_id = ? AND external_user_id = ? 
          AND status NOT IN ('resolved', 'cancelled')
-         ORDER BY created_at DESC LIMIT 1",
-        [(int)$input['channel_id'], (string)$input['external_user_id'], $input['case_type']]
+         AND updated_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)
+         ORDER BY updated_at DESC LIMIT 1",
+        [(int)$input['channel_id'], (string)$input['external_user_id']]
     );
     
     if ($existingCase) {
-        // Update existing case with new slots/message instead of creating new
+        // Update existing case with new slots/message
         $existingSlots = json_decode($existingCase['slots'] ?? '{}', true) ?: [];
         $newSlots = $input['slots'] ?? [];
         $mergedSlots = array_merge($existingSlots, $newSlots);
         
-        // Append message to description if provided
+        // Append message to description (chat history)
         $newDescription = $existingCase['description'] ?? '';
         if (!empty($input['message'])) {
             $timestamp = date('Y-m-d H:i:s');
             $newDescription = trim($newDescription . "\n[{$timestamp}] ลูกค้า: " . $input['message']);
         }
         
+        // Update case_type if new type is more specific (e.g. payment > inquiry)
+        $caseTypePriority = [
+            'product_inquiry' => 1,
+            'general_inquiry' => 1,
+            'payment_full' => 2,
+            'payment_installment' => 2,
+            'payment_savings' => 2,
+            'complaint' => 3,
+            'other' => 0
+        ];
+        $existingPriority = $caseTypePriority[$existingCase['case_type']] ?? 0;
+        $newPriority = $caseTypePriority[$input['case_type']] ?? 0;
+        $finalCaseType = ($newPriority > $existingPriority) ? $input['case_type'] : $existingCase['case_type'];
+        
         $db->execute(
-            "UPDATE cases SET slots = ?, description = ?, updated_at = NOW() WHERE id = ?",
-            [json_encode($mergedSlots), $newDescription, $existingCase['id']]
+            "UPDATE cases SET slots = ?, description = ?, case_type = ?, updated_at = NOW() WHERE id = ?",
+            [json_encode($mergedSlots), $newDescription, $finalCaseType, $existingCase['id']]
         );
+        
+        Logger::info('[CASE_API] Case updated (session-based)', [
+            'case_id' => $existingCase['id'],
+            'case_no' => $existingCase['case_no'],
+            'case_type' => $finalCaseType,
+            'message_appended' => !empty($input['message'])
+        ]);
         
         echo json_encode([
             'success' => true,
@@ -140,6 +163,7 @@ function createCase($db) {
             'data' => [
                 'id' => $existingCase['id'],
                 'case_no' => $existingCase['case_no'],
+                'case_type' => $finalCaseType,
                 'is_new' => false
             ]
         ]);

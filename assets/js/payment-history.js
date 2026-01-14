@@ -1315,3 +1315,411 @@ function goToOrderFromPayment(orderNo) {
     const q = encodeURIComponent(String(orderNo));
     window.location.href = `${pageUrlSafe('orders.php')}?order_no=${q}`;
 }
+
+// =========================================================
+// ADD PAYMENT MODAL FUNCTIONS
+// =========================================================
+
+let customerSearchTimeout = null;
+let orderSearchTimeout = null;
+
+function openAddPaymentModal() {
+    const modal = document.getElementById('addPaymentModal');
+    if (modal) {
+        modal.style.display = 'flex';
+        document.body.style.overflow = 'hidden';
+        
+        // Reset form
+        const form = document.getElementById('addPaymentForm');
+        if (form) form.reset();
+        
+        // Reset selections
+        document.getElementById('selectedCustomer').style.display = 'none';
+        document.getElementById('selectedOrder').style.display = 'none';
+        document.getElementById('customerSearch').value = '';
+        document.getElementById('orderSearch').value = '';
+        document.getElementById('customerProfileId').value = '';
+        document.getElementById('referenceId').value = '';
+        removeSlipPreview();
+        
+        // Setup event listeners
+        setupAddPaymentEvents();
+    }
+}
+
+function closeAddPaymentModal() {
+    const modal = document.getElementById('addPaymentModal');
+    if (modal) {
+        modal.style.display = 'none';
+        document.body.style.overflow = '';
+    }
+}
+
+function setupAddPaymentEvents() {
+    // Customer search autocomplete
+    const customerSearch = document.getElementById('customerSearch');
+    const customerSuggestions = document.getElementById('customerSuggestions');
+    
+    customerSearch.addEventListener('input', (e) => {
+        clearTimeout(customerSearchTimeout);
+        const query = e.target.value.trim();
+        
+        if (query.length < 2) {
+            customerSuggestions.classList.remove('show');
+            return;
+        }
+        
+        customerSearchTimeout = setTimeout(() => {
+            searchCustomers(query);
+        }, 300);
+    });
+    
+    customerSearch.addEventListener('focus', () => {
+        if (customerSearch.value.length >= 2) {
+            searchCustomers(customerSearch.value.trim());
+        }
+    });
+    
+    // Order search autocomplete  
+    const orderSearch = document.getElementById('orderSearch');
+    const orderSuggestions = document.getElementById('orderSuggestions');
+    
+    orderSearch.addEventListener('input', (e) => {
+        clearTimeout(orderSearchTimeout);
+        const query = e.target.value.trim();
+        
+        if (query.length < 2) {
+            orderSuggestions.classList.remove('show');
+            return;
+        }
+        
+        orderSearchTimeout = setTimeout(() => {
+            searchOrders(query);
+        }, 300);
+    });
+    
+    // Payment type change - update reference label
+    const paymentTypeInputs = document.querySelectorAll('input[name="payment_type"]');
+    paymentTypeInputs.forEach(input => {
+        input.addEventListener('change', (e) => {
+            updateReferenceFieldLabel(e.target.value);
+        });
+    });
+    
+    // Slip image upload
+    setupSlipUpload();
+    
+    // Form submit
+    const form = document.getElementById('addPaymentForm');
+    form.addEventListener('submit', handleAddPaymentSubmit);
+    
+    // Close suggestions when clicking outside
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('.autocomplete-wrapper')) {
+            customerSuggestions.classList.remove('show');
+            orderSuggestions.classList.remove('show');
+        }
+    });
+}
+
+async function searchCustomers(query) {
+    const suggestions = document.getElementById('customerSuggestions');
+    
+    try {
+        // Search customer profiles
+        const result = await apiCall(`${API_ENDPOINTS.SEARCH_CUSTOMERS}?q=${encodeURIComponent(query)}`);
+        
+        if (result.success && result.data && result.data.length > 0) {
+            suggestions.innerHTML = result.data.map(customer => `
+                <div class="autocomplete-item" onclick="selectCustomer(${JSON.stringify(customer).replace(/"/g, '&quot;')})">
+                    <div class="autocomplete-item-avatar">
+                        ${customer.avatar_url 
+                            ? `<img src="${escapeHtml(customer.avatar_url)}" alt="">` 
+                            : `<i class="fas fa-user"></i>`}
+                    </div>
+                    <div class="autocomplete-item-info">
+                        <div class="autocomplete-item-name">${escapeHtml(customer.display_name || customer.full_name || 'ไม่ระบุชื่อ')}</div>
+                        <div class="autocomplete-item-meta">
+                            ${customer.platform ? `<i class="fab fa-${customer.platform === 'line' ? 'line' : 'facebook-messenger'}"></i> ` : ''}
+                            ${customer.phone || customer.platform_user_id?.substring(0, 12) + '...' || ''}
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+            suggestions.classList.add('show');
+        } else {
+            suggestions.innerHTML = '<div class="autocomplete-item"><em>ไม่พบลูกค้า</em></div>';
+            suggestions.classList.add('show');
+        }
+    } catch (error) {
+        console.error('Search customers error:', error);
+        suggestions.classList.remove('show');
+    }
+}
+
+function selectCustomer(customer) {
+    const customerSearch = document.getElementById('customerSearch');
+    const customerProfileId = document.getElementById('customerProfileId');
+    const selectedCustomer = document.getElementById('selectedCustomer');
+    const suggestions = document.getElementById('customerSuggestions');
+    
+    customerProfileId.value = customer.id;
+    customerSearch.value = '';
+    suggestions.classList.remove('show');
+    
+    selectedCustomer.innerHTML = `
+        <div class="autocomplete-item-avatar">
+            ${customer.avatar_url 
+                ? `<img src="${escapeHtml(customer.avatar_url)}" alt="">` 
+                : `<i class="fas fa-user"></i>`}
+        </div>
+        <div class="autocomplete-item-info">
+            <div class="autocomplete-item-name">${escapeHtml(customer.display_name || customer.full_name || 'ไม่ระบุชื่อ')}</div>
+            <div class="autocomplete-item-meta">
+                ${customer.platform ? `<i class="fab fa-${customer.platform === 'line' ? 'line' : 'facebook-messenger'}"></i> ` : ''}
+                ${customer.phone || ''}
+            </div>
+        </div>
+        <span class="remove-btn" onclick="removeSelectedCustomer()"><i class="fas fa-times"></i></span>
+    `;
+    selectedCustomer.style.display = 'flex';
+}
+
+function removeSelectedCustomer() {
+    document.getElementById('customerProfileId').value = '';
+    document.getElementById('selectedCustomer').style.display = 'none';
+    document.getElementById('customerSearch').value = '';
+}
+
+async function searchOrders(query) {
+    const suggestions = document.getElementById('orderSuggestions');
+    const paymentType = document.querySelector('input[name="payment_type"]:checked')?.value || 'full';
+    
+    try {
+        let endpoint = API_ENDPOINTS.SEARCH_ORDERS;
+        let referenceType = 'order';
+        
+        // Determine reference type based on payment type
+        if (paymentType === 'installment') {
+            endpoint = API_ENDPOINTS.SEARCH_INSTALLMENTS || endpoint;
+            referenceType = 'installment_contract';
+        } else if (paymentType === 'savings') {
+            endpoint = API_ENDPOINTS.SEARCH_SAVINGS || endpoint;
+            referenceType = 'savings_account';
+        }
+        
+        const result = await apiCall(`${endpoint}?q=${encodeURIComponent(query)}`);
+        
+        if (result.success && result.data && result.data.length > 0) {
+            suggestions.innerHTML = result.data.map(item => `
+                <div class="autocomplete-item" onclick="selectOrder(${JSON.stringify({...item, reference_type: referenceType}).replace(/"/g, '&quot;')})">
+                    <div class="autocomplete-item-info">
+                        <div class="autocomplete-item-name">${escapeHtml(item.order_no || item.contract_no || item.account_no || '#' + item.id)}</div>
+                        <div class="autocomplete-item-meta">
+                            ${item.product_name ? escapeHtml(item.product_name) + ' • ' : ''}
+                            ${item.total_amount ? formatCurrency(item.total_amount) : ''}
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+            suggestions.classList.add('show');
+        } else {
+            suggestions.innerHTML = '<div class="autocomplete-item"><em>ไม่พบรายการ</em></div>';
+            suggestions.classList.add('show');
+        }
+    } catch (error) {
+        console.error('Search orders error:', error);
+        suggestions.classList.remove('show');
+    }
+}
+
+function selectOrder(item) {
+    const orderSearch = document.getElementById('orderSearch');
+    const referenceId = document.getElementById('referenceId');
+    const referenceType = document.getElementById('referenceType');
+    const selectedOrder = document.getElementById('selectedOrder');
+    const suggestions = document.getElementById('orderSuggestions');
+    
+    referenceId.value = item.id;
+    referenceType.value = item.reference_type || 'order';
+    orderSearch.value = '';
+    suggestions.classList.remove('show');
+    
+    selectedOrder.innerHTML = `
+        <div class="autocomplete-item-info">
+            <div class="autocomplete-item-name">${escapeHtml(item.order_no || item.contract_no || item.account_no || '#' + item.id)}</div>
+            <div class="autocomplete-item-meta">
+                ${item.product_name ? escapeHtml(item.product_name) : ''}
+                ${item.total_amount ? ' • ' + formatCurrency(item.total_amount) : ''}
+            </div>
+        </div>
+        <span class="remove-btn" onclick="removeSelectedOrder()"><i class="fas fa-times"></i></span>
+    `;
+    selectedOrder.style.display = 'flex';
+    
+    // Auto-fill amount if available
+    if (item.total_amount) {
+        document.getElementById('paymentAmount').value = item.total_amount;
+    }
+}
+
+function removeSelectedOrder() {
+    document.getElementById('referenceId').value = '';
+    document.getElementById('selectedOrder').style.display = 'none';
+    document.getElementById('orderSearch').value = '';
+}
+
+function updateReferenceFieldLabel(paymentType) {
+    const label = document.querySelector('#orderSearchGroup .form-label');
+    const input = document.getElementById('orderSearch');
+    
+    switch (paymentType) {
+        case 'installment':
+            label.textContent = 'สัญญาผ่อนชำระ';
+            input.placeholder = 'พิมพ์เลขที่สัญญา...';
+            break;
+        case 'savings':
+            label.textContent = 'บัญชีออมเงิน';
+            input.placeholder = 'พิมพ์เลขบัญชีออม...';
+            break;
+        case 'deposit':
+            label.textContent = 'รายการมัดจำ';
+            input.placeholder = 'พิมพ์เลขที่มัดจำ...';
+            break;
+        default:
+            label.textContent = 'คำสั่งซื้อ/สัญญา';
+            input.placeholder = 'พิมพ์เลขที่คำสั่งซื้อ/สัญญา...';
+    }
+    
+    // Clear selection when type changes
+    removeSelectedOrder();
+}
+
+function setupSlipUpload() {
+    const uploadArea = document.getElementById('slipUploadArea');
+    const fileInput = document.getElementById('slipImage');
+    
+    // Drag and drop
+    uploadArea.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        uploadArea.classList.add('dragover');
+    });
+    
+    uploadArea.addEventListener('dragleave', () => {
+        uploadArea.classList.remove('dragover');
+    });
+    
+    uploadArea.addEventListener('drop', (e) => {
+        e.preventDefault();
+        uploadArea.classList.remove('dragover');
+        
+        const files = e.dataTransfer.files;
+        if (files.length > 0 && files[0].type.startsWith('image/')) {
+            fileInput.files = files;
+            previewSlipImage(files[0]);
+        }
+    });
+    
+    // File input change
+    fileInput.addEventListener('change', (e) => {
+        if (e.target.files.length > 0) {
+            previewSlipImage(e.target.files[0]);
+        }
+    });
+}
+
+function previewSlipImage(file) {
+    const preview = document.getElementById('slipPreview');
+    const previewImg = document.getElementById('slipPreviewImg');
+    const placeholder = document.querySelector('.upload-placeholder');
+    
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        previewImg.src = e.target.result;
+        preview.style.display = 'block';
+        placeholder.style.display = 'none';
+    };
+    reader.readAsDataURL(file);
+}
+
+function removeSlipPreview() {
+    const preview = document.getElementById('slipPreview');
+    const placeholder = document.querySelector('.upload-placeholder');
+    const fileInput = document.getElementById('slipImage');
+    
+    preview.style.display = 'none';
+    placeholder.style.display = 'flex';
+    fileInput.value = '';
+}
+
+async function handleAddPaymentSubmit(e) {
+    e.preventDefault();
+    
+    const submitBtn = document.getElementById('submitPaymentBtn');
+    const originalText = submitBtn.innerHTML;
+    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> กำลังบันทึก...';
+    submitBtn.disabled = true;
+    
+    try {
+        const formData = new FormData(document.getElementById('addPaymentForm'));
+        
+        // Validate required fields
+        const amount = parseFloat(formData.get('amount'));
+        if (!amount || amount <= 0) {
+            showToast('กรุณาระบุจำนวนเงิน', 'error');
+            submitBtn.innerHTML = originalText;
+            submitBtn.disabled = false;
+            return;
+        }
+        
+        // Add source as manual
+        formData.append('source', 'manual');
+        
+        // Call API
+        const result = await apiCallFormData(API_ENDPOINTS.CUSTOMER_PAYMENTS_CREATE, formData);
+        
+        if (result.success) {
+            showToast('บันทึกรายการชำระเงินเรียบร้อย', 'success');
+            closeAddPaymentModal();
+            loadPayments(); // Refresh list
+        } else {
+            showToast(result.message || 'ไม่สามารถบันทึกข้อมูลได้', 'error');
+        }
+    } catch (error) {
+        console.error('Submit payment error:', error);
+        showToast('เกิดข้อผิดพลาด: ' + error.message, 'error');
+    } finally {
+        submitBtn.innerHTML = originalText;
+        submitBtn.disabled = false;
+    }
+}
+
+// API call with FormData (for file uploads)
+async function apiCallFormData(url, formData) {
+    const token = localStorage.getItem('auth_token');
+    
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${token}`
+        },
+        body: formData
+    });
+    
+    return response.json();
+}
+
+function formatCurrency(amount) {
+    return new Intl.NumberFormat('th-TH', {
+        style: 'currency',
+        currency: 'THB'
+    }).format(amount);
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+

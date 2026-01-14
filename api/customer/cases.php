@@ -181,6 +181,9 @@ function getCaseDetail($pdo, $case_id, $tenant_id) {
     $stmt = $pdo->prepare("
         SELECT 
             c.*,
+            COALESCE(cp.display_name, cp.full_name, c.customer_name, CONCAT('ลูกค้า ', RIGHT(c.external_user_id, 6))) as customer_name,
+            COALESCE(cp.avatar_url, cp.profile_pic_url, c.customer_avatar) as customer_avatar,
+            c.platform as customer_platform,
             o.order_no,
             o.product_name as order_product_name,
             o.total_amount as order_amount,
@@ -190,6 +193,7 @@ function getCaseDetail($pdo, $case_id, $tenant_id) {
             sa.product_name as savings_product_name,
             u.full_name as assigned_to_name
         FROM cases c
+        LEFT JOIN customer_profiles cp ON c.external_user_id = cp.platform_user_id AND c.platform = cp.platform
         LEFT JOIN orders o ON c.order_id = o.id
         LEFT JOIN payments p ON c.payment_id = p.id
         LEFT JOIN savings_accounts sa ON c.savings_account_id = sa.id

@@ -51,6 +51,20 @@ class CaseEngine
             return null;
         }
         
+        // ✅ EXCLUDE GREETING INTENTS - Don't create case for greetings
+        $greetingIntents = [
+            'greeting', 'welcome', 'hello', 'hi', 
+            'thanks', 'thank_you', 'goodbye', 'bye',
+            'general_greeting', 'chitchat', 'small_talk',
+            'unknown', 'unclear', 'fallback'
+        ];
+        if (in_array($intent, $greetingIntents)) {
+            Logger::debug('[CaseEngine] Skipping case creation for greeting/non-actionable intent', [
+                'intent' => $intent
+            ]);
+            return null;
+        }
+        
         $caseFlows = $this->config['case_flows'] ?? [];
         
         // Check each case flow for matching intent

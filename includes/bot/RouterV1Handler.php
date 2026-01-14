@@ -1461,22 +1461,36 @@ class RouterV1Handler implements BotHandlerInterface
             $time   = trim((string)($slots['time'] ?? ''));
             $sender = trim((string)($slots['sender_name'] ?? ''));
             $paymentRef = trim((string)($slots['payment_ref'] ?? ''));
+            $bank = trim((string)($slots['bank'] ?? ''));
 
             $slipImageUrl = $extra['slip_image_url'] ?? null;
             if (!$slipImageUrl) $slipImageUrl = $context['message']['attachments'][0]['url'] ?? null;
+            
+            $visionText = $extra['vision_text'] ?? null;
+            $geminiDetails = $extra['gemini_details'] ?? [];
 
             if ($amount === '' && $time === '' && $sender === '' && $paymentRef === '' && !$slipImageUrl) {
                 return ['handled' => false, 'reply_text' => $askSlipMissing, 'reason' => 'missing_slip_info', 'slots' => $slots];
             }
 
+            // ✅ Build comprehensive payload with customer context for auto-matching
             $payload = [
                 'channel_id' => $channelId,
                 'external_user_id' => $externalUserId,
+                'customer_id' => $context['customer']['id'] ?? null,
+                'customer_profile_id' => $context['customer']['profile_id'] ?? ($context['customer_profile_id'] ?? null),
+                'customer_name' => $context['customer']['name'] ?? ($context['customer']['display_name'] ?? null),
+                'customer_phone' => $context['customer']['phone'] ?? null,
+                'customer_platform' => $context['channel']['platform'] ?? null,
+                'customer_avatar' => $context['customer']['avatar'] ?? null,
                 'amount' => $amount ?: null,
                 'time' => $time ?: null,
                 'sender_name' => $sender ?: null,
                 'payment_ref' => $paymentRef ?: null,
+                'bank' => $bank ?: null,
                 'slip_image_url' => $slipImageUrl ?: null,
+                'vision_text' => $visionText,
+                'gemini_details' => $geminiDetails,
                 'note' => 'customer_reported_payment_via_chat'
             ];
 
@@ -1486,13 +1500,24 @@ class RouterV1Handler implements BotHandlerInterface
             }
 
             $status = $resp['data']['status'] ?? null;
+            $paymentNo = $resp['data']['payment_no'] ?? null;
+            $matchedOrderNo = $resp['data']['matched_order_no'] ?? null;
+            
             if ($status === 'ok' || $status === 'paid' || $status === 'matched') {
                 $tpl = $templates['payment_verify_ok'] ?? 'ตรวจสอบแล้วค่ะ ✅ ยอดเข้าเรียบร้อย ขอบคุณมากนะคะ 🙏';
                 return ['handled' => true, 'reply_text' => $tpl, 'reason' => 'backend_payment_ok', 'meta' => $resp, 'slots' => $slots];
             }
 
-            $tpl = $templates['payment_verify_pending'] ?? 'ได้รับข้อมูลแล้วค่ะ 😊 ขอเวลาเช็คกับระบบสักครู่นะคะ';
-            return ['handled' => true, 'reply_text' => $tpl, 'reason' => 'backend_payment_pending', 'meta' => $resp, 'slots' => $slots];
+            // ✅ Build informative pending message
+            $pendingMsg = $templates['payment_verify_pending'] ?? 'ได้รับข้อมูลแล้วค่ะ 😊 บันทึกเข้าระบบให้แล้ว รอเจ้าหน้าที่ตรวจสอบนะคะ';
+            if ($paymentNo) {
+                $pendingMsg .= "\n📋 เลขอ้างอิง: {$paymentNo}";
+            }
+            if ($matchedOrderNo) {
+                $pendingMsg .= "\n📦 จับคู่กับออเดอร์: #{$matchedOrderNo}";
+            }
+            
+            return ['handled' => true, 'reply_text' => $pendingMsg, 'reason' => 'backend_payment_pending', 'meta' => $resp, 'slots' => $slots];
         }
 
         // -------------------------
@@ -2368,14 +2393,65 @@ class RouterV1Handler implements BotHandlerInterface
         ?array $llmIntegration,
         array $message
     ): array {
-        $imageUrl = $message['attachments'][0]['url'] ?? null;
+        // ✅ FIX: Facebook sends URL in payload.url, LINE sends in url
+        $attachment = $message['attachments'][0] ?? null;
+        $imageUrl = $attachment['url'] 
+            ?? ($attachment['payload']['url'] ?? null);
 
         $detectedRoute = 'image_generic';
         $visionMeta = null;
         $labels = [];
         $visionText = '';
+        $geminiDetails = []; // ✅ Store Gemini extracted details
 
-        if ($googleVision && $imageUrl) {
+        // ✅ PRIORITY 1: Use Gemini Multimodal if LLM integration is Gemini
+        // Gemini 2.5 Flash can analyze images natively without separate Vision API
+        $usedGemini = false;
+        
+        // Debug: Log conditions for Gemini Vision
+        Logger::info("handleImageFlow - Gemini Vision check", [
+            'has_llmIntegration' => !empty($llmIntegration),
+            'has_imageUrl' => !empty($imageUrl),
+            'imageUrl_preview' => $imageUrl ? substr($imageUrl, 0, 100) : null
+        ]);
+        
+        if ($llmIntegration && $imageUrl) {
+            $llmConfig = $this->decodeJsonArray($llmIntegration['config'] ?? null);
+            $llmEndpoint = $llmConfig['endpoint'] ?? '';
+            
+            Logger::info("handleImageFlow - LLM config", [
+                'llmEndpoint' => $llmEndpoint,
+                'is_gemini' => stripos($llmEndpoint, 'generativelanguage.googleapis.com') !== false
+            ]);
+            
+            // Check if LLM is Gemini
+            if (stripos($llmEndpoint, 'generativelanguage.googleapis.com') !== false) {
+                Logger::info("handleImageFlow - Calling analyzeImageWithGemini");
+                $geminiResult = $this->analyzeImageWithGemini($llmIntegration, $imageUrl, $config);
+                
+                if (empty($geminiResult['error'])) {
+                    $usedGemini = true;
+                    $detectedRoute = $geminiResult['route'] ?? 'image_generic';
+                    $visionMeta = $geminiResult['meta'] ?? null;
+                    $labels = $visionMeta['labels'] ?? [];
+                    $visionText = $geminiResult['description'] ?? '';
+                    $geminiDetails = $geminiResult['details'] ?? [];
+                    
+                    Logger::info("Image analyzed with Gemini Vision", [
+                        'route' => $detectedRoute,
+                        'confidence' => $geminiResult['confidence'] ?? 0,
+                        'has_details' => !empty($geminiDetails)
+                    ]);
+                } else {
+                    Logger::warning("Gemini Vision failed, will try Google Vision", [
+                        'error' => $geminiResult['error']
+                    ]);
+                }
+            }
+        }
+
+        // ✅ FALLBACK: Use Google Vision API if Gemini not available or failed
+        if (!$usedGemini && $googleVision && $imageUrl) {
             $visionResult = $this->analyzeImageWithGoogleVision($googleVision, $imageUrl);
             $visionMeta = $visionResult['meta'] ?? null;
 
@@ -2409,6 +2485,7 @@ class RouterV1Handler implements BotHandlerInterface
 
         $meta['vision'] = $visionMeta;
         $meta['route'] = $detectedRoute;
+        $meta['gemini_details'] = $geminiDetails; // ✅ Store extracted details from Gemini
 
         // ✅ Persist last image context for follow-up (สำคัญ!)
         if ($sessionId && $imageUrl) {
@@ -2420,6 +2497,7 @@ class RouterV1Handler implements BotHandlerInterface
                 'last_vision_top_descriptions' => $visionMeta['top_descriptions'] ?? [],
                 'last_vision_text' => $visionMeta['text'] ?? '',
                 'last_vision_web_entities' => $visionMeta['web_entities'] ?? [],
+                'last_gemini_details' => $geminiDetails, // ✅ NEW: Store Gemini extracted data
             ];
             $this->updateSessionState($sessionId, 'last_media', $slots);
         }
@@ -2433,22 +2511,108 @@ class RouterV1Handler implements BotHandlerInterface
             $reply = $templates['payment_proof']
                 ?? 'ได้รับสลิปเรียบร้อยแล้วค่ะ ขอเวลาเช็คยอดสักครู่นะคะ 💳';
 
+            // ✅ Use Gemini extracted details for payment info
+            $slipAmount = $geminiDetails['amount'] ?? null;
+            $slipBank = $geminiDetails['bank'] ?? null;
+            $slipDate = $geminiDetails['date'] ?? null;
+            $slipRef = $geminiDetails['ref'] ?? null;
+            $slipSender = $geminiDetails['sender_name'] ?? null;
+            $slipReceiver = $geminiDetails['receiver_name'] ?? null;
+
+            // ✅ Build informative reply with extracted data
+            if ($slipAmount) {
+                $extractedInfo = "📋 ข้อมูลจากสลิป:\n";
+                if ($slipAmount) $extractedInfo .= "💰 จำนวนเงิน: {$slipAmount} บาท\n";
+                if ($slipBank) $extractedInfo .= "🏦 ธนาคาร: {$slipBank}\n";
+                if ($slipDate) $extractedInfo .= "📅 วันที่: {$slipDate}\n";
+                if ($slipRef) $extractedInfo .= "🔢 เลขอ้างอิง: {$slipRef}\n";
+                if ($slipSender) $extractedInfo .= "👤 ผู้โอน: {$slipSender}\n";
+                
+                $reply = "ได้รับสลิปเรียบร้อยแล้วค่ะ 💳\n\n" . $extractedInfo . "\nกำลังตรวจสอบยอดให้นะคะ...";
+            }
+
+            // ✅ Use PaymentService for proper insert with auto-matching
+            $savedPaymentId = null;
+            try {
+                require_once __DIR__ . '/../services/PaymentService.php';
+                $paymentService = new \Autobot\Services\PaymentService();
+                
+                $paymentResult = $paymentService->processSlipFromChatbot(
+                    $geminiDetails, // OCR data from Gemini
+                    $context,       // Chat context
+                    $imageUrl       // Slip image URL
+                );
+                
+                Logger::info("PaymentService result", $paymentResult);
+                
+                if ($paymentResult['success']) {
+                    $savedPaymentId = $paymentResult['payment_id'];
+                    $paymentNo = $paymentResult['payment_no'];
+                    $matchedOrderNo = $paymentResult['matched_order_no'] ?? null;
+                    
+                    $meta['payment_saved'] = true;
+                    $meta['payment_id'] = $savedPaymentId;
+                    $meta['payment_no'] = $paymentNo;
+                    $meta['matched_order_no'] = $matchedOrderNo;
+                    $meta['reason'] = 'image_payment_saved';
+                    
+                    // Build reply with payment info
+                    if ($matchedOrderNo) {
+                        $reply = "ได้รับสลิปเรียบร้อยแล้วค่ะ 💳\n\n" . $extractedInfo 
+                            . "\n📝 เลขที่รายการ: {$paymentNo}"
+                            . "\n🛒 ตรงกับออเดอร์: #{$matchedOrderNo}"
+                            . "\nรอเจ้าหน้าที่ตรวจสอบนะคะ 😊";
+                    } else {
+                        $reply = "ได้รับสลิปเรียบร้อยแล้วค่ะ 💳\n\n" . $extractedInfo 
+                            . "\n📝 เลขที่รายการ: {$paymentNo}"
+                            . "\nรอเจ้าหน้าที่ตรวจสอบและ matching กับออเดอร์นะคะ 😊";
+                    }
+                    
+                } elseif (!empty($paymentResult['is_duplicate'])) {
+                    // Duplicate slip
+                    $existingPaymentNo = $paymentResult['existing_payment_no'] ?? '';
+                    $meta['payment_saved'] = false;
+                    $meta['payment_duplicate'] = true;
+                    $meta['existing_payment_id'] = $paymentResult['existing_payment_id'];
+                    $reply = "สลิปนี้เคยส่งมาแล้วค่ะ 📋 (เลขอ้างอิง: {$existingPaymentNo})\nรอเจ้าหน้าที่ตรวจสอบนะคะ 😊";
+                    
+                    if ($sessionId && $reply !== '') $this->storeMessage($sessionId, 'assistant', $reply);
+                    $this->logBotReply($context, $reply, 'text');
+                    return ['reply_text' => $reply, 'actions' => [], 'meta' => $meta];
+                    
+                } else {
+                    // Error
+                    $meta['payment_saved'] = false;
+                    $meta['payment_error'] = $paymentResult['error'] ?? 'Unknown error';
+                    Logger::error("PaymentService failed", $paymentResult);
+                }
+                
+            } catch (\Exception $e) {
+                Logger::error("Failed to save payment via PaymentService", [
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString()
+                ]);
+                $meta['payment_saved'] = false;
+                $meta['payment_error'] = $e->getMessage();
+            }
+
             if (!empty($backendCfg['enabled'])) {
                 $endpoint = $endpoints['receipt_get'] ?? ($endpoints['payment_verify'] ?? null);
                 if ($endpoint) {
                     $handled = $this->tryHandleByIntentWithBackend(
                         'payment_slip_verify',
                         [
-                            'amount' => null,
-                            'time' => null,
-                            'sender_name' => null,
-                            'payment_ref' => null
+                            'amount' => $slipAmount,
+                            'time' => $slipDate,
+                            'sender_name' => $slipSender,
+                            'payment_ref' => $slipRef,
+                            'bank' => $slipBank,
                         ],
                         $context,
                         $config,
                         $templates,
                         $message['text'] ?? '',
-                        ['slip_image_url' => $imageUrl, 'vision_text' => $visionText]
+                        ['slip_image_url' => $imageUrl, 'vision_text' => $visionText, 'gemini_details' => $geminiDetails]
                     );
 
                     if (!empty($handled['handled'])) {
@@ -2472,8 +2636,27 @@ class RouterV1Handler implements BotHandlerInterface
 
         // product image => call image_search (searchImage)
         if ($detectedRoute === 'product_image') {
+            // ✅ Use Gemini extracted details for product info
+            $productBrand = $geminiDetails['brand'] ?? null;
+            $productModel = $geminiDetails['model'] ?? null;
+            $productDesc = $geminiDetails['description'] ?? $visionText;
+            $productCategory = $geminiDetails['category'] ?? null;
+
+            // ✅ Build informative reply with extracted data
+            $productInfo = "";
+            if ($productBrand || $productModel) {
+                $productInfo = "🔍 วิเคราะห์รูปได้:\n";
+                if ($productBrand) $productInfo .= "🏷️ แบรนด์: {$productBrand}\n";
+                if ($productModel) $productInfo .= "📋 รุ่น: {$productModel}\n";
+                if ($productCategory) $productInfo .= "📁 หมวด: {$productCategory}\n";
+            }
+
             $reply = $templates['product_image']
                 ?? 'ได้รับรูปสินค้ามาแล้วค่ะ 😊 เดี๋ยวขออนุญาตนำรูปไปวิเคราะห์และเช็คในระบบให้นะคะ';
+            
+            if ($productInfo) {
+                $reply = "ได้รับรูปสินค้าแล้วค่ะ 😊\n\n" . $productInfo . "\nกำลังค้นหาในระบบให้นะคะ...";
+            }
 
             // ✅ FIX: Initialize actionsOut early to prevent undefined variable
             $actionsOut = [];
@@ -2491,6 +2674,13 @@ class RouterV1Handler implements BotHandlerInterface
                         'top_descriptions' => $visionMeta['top_descriptions'] ?? [],
                         'text' => $visionMeta['text'] ?? '',
                         'web_entities' => $visionMeta['web_entities'] ?? [],
+                    ],
+                    // ✅ NEW: Include Gemini extracted details
+                    'gemini_details' => [
+                        'brand' => $productBrand,
+                        'model' => $productModel,
+                        'description' => $productDesc,
+                        'category' => $productCategory,
                     ],
                 ];
 
@@ -3028,6 +3218,175 @@ class RouterV1Handler implements BotHandlerInterface
             if ($n !== '' && mb_stripos($haystackLower, $n, 0, 'UTF-8') !== false) return true;
         }
         return false;
+    }
+
+    /**
+     * ✅ Analyze image using Gemini Multimodal (Vision capability)
+     * Gemini 2.5 Flash can understand images natively without separate Vision API
+     */
+    protected function analyzeImageWithGemini(array $llmIntegration, string $imageUrl, array $config): array
+    {
+        $apiKey = $llmIntegration['api_key'] ?? null;
+        $cfg = $this->decodeJsonArray($llmIntegration['config'] ?? null);
+        $endpoint = $cfg['endpoint'] ?? 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+
+        if (!$apiKey) {
+            return ['error' => 'missing_api_key', 'route' => 'image_generic', 'meta' => null];
+        }
+
+        // Check if this is actually Gemini
+        if (stripos($endpoint, 'generativelanguage.googleapis.com') === false) {
+            return ['error' => 'not_gemini', 'route' => 'image_generic', 'meta' => null];
+        }
+
+        // Download image and convert to base64
+        $imageData = @file_get_contents($imageUrl);
+        if ($imageData === false) {
+            Logger::warning("Failed to download image for Gemini analysis", ['url' => $imageUrl]);
+            return ['error' => 'download_failed', 'route' => 'image_generic', 'meta' => null];
+        }
+
+        // Detect mime type
+        $finfo = new \finfo(FILEINFO_MIME_TYPE);
+        $mimeType = $finfo->buffer($imageData);
+        if (!$mimeType || !in_array($mimeType, ['image/jpeg', 'image/png', 'image/gif', 'image/webp'])) {
+            $mimeType = 'image/jpeg'; // fallback
+        }
+
+        $base64Image = base64_encode($imageData);
+
+        // Get vision routing config for context
+        $vr = $config['vision_routing'] ?? [];
+        $productHints = $vr['product_hints_labels'] ?? ['watch', 'bag', 'shoe', 'ring', 'jewelry', 'phone', 'luxury', 'brand'];
+        $payHints = $vr['payment_hints_text_th'] ?? ['สลิป', 'โอนเงิน', 'ชำระเงิน', 'ใบเสร็จ', 'receipt', 'transfer', 'payment'];
+
+        // Build analysis prompt
+        $analysisPrompt = "วิเคราะห์รูปภาพนี้และระบุข้อมูลสำคัญ:\n\n"
+            . "1. ประเภทรูป (image_type): ระบุเป็น payment_proof | product_image | image_generic\n"
+            . "   - payment_proof: สลิปโอนเงิน, ใบเสร็จ, หลักฐานการชำระเงิน\n"
+            . "   - product_image: รูปสินค้า, นาฬิกา, กระเป๋า, เครื่องประดับ, สินค้าแบรนด์เนม\n"
+            . "   - image_generic: รูปอื่นๆ ที่ไม่ใช่ 2 ประเภทข้างต้น\n\n"
+            . "2. ถ้าเป็นสลิป (payment_proof) ดึงข้อมูล:\n"
+            . "   - amount: จำนวนเงิน (ตัวเลข)\n"
+            . "   - bank: ธนาคาร\n"
+            . "   - date: วันที่/เวลา\n"
+            . "   - ref: เลขอ้างอิง\n"
+            . "   - sender_name: ชื่อผู้โอน\n"
+            . "   - receiver_name: ชื่อผู้รับ\n\n"
+            . "3. ถ้าเป็นสินค้า (product_image) ดึงข้อมูล:\n"
+            . "   - brand: แบรนด์/ยี่ห้อ\n"
+            . "   - model: รุ่น/ชื่อสินค้า\n"
+            . "   - description: คำอธิบายสินค้าโดยย่อ\n"
+            . "   - category: หมวดหมู่ (watch/bag/jewelry/etc)\n\n"
+            . "ตอบเป็น JSON อย่างเดียว ไม่ต้องมีข้อความอื่น:\n"
+            . "{\n"
+            . "  \"image_type\": \"payment_proof\" | \"product_image\" | \"image_generic\",\n"
+            . "  \"confidence\": 0.0-1.0,\n"
+            . "  \"details\": { ... ข้อมูลที่ดึงได้ ... },\n"
+            . "  \"description\": \"คำอธิบายสั้นๆ ของรูป\"\n"
+            . "}";
+
+        // Build Gemini multimodal request with inline image
+        $payload = [
+            'contents' => [
+                [
+                    'parts' => [
+                        [
+                            'text' => $analysisPrompt
+                        ],
+                        [
+                            'inline_data' => [
+                                'mime_type' => $mimeType,
+                                'data' => $base64Image
+                            ]
+                        ]
+                    ]
+                ]
+            ],
+            'generationConfig' => [
+                'temperature' => 0.2,
+                'maxOutputTokens' => 2048
+            ]
+        ];
+
+        $url = $endpoint . (strpos($endpoint, '?') !== false ? '&' : '?') . 'key=' . $apiKey;
+
+        $startTime = microtime(true);
+        Logger::info("Gemini Vision API call starting", [
+            'endpoint' => $endpoint,
+            'image_size' => strlen($imageData),
+            'mime_type' => $mimeType
+        ]);
+
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST => true,
+            CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+            CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE),
+            CURLOPT_TIMEOUT => 30,
+        ]);
+
+        $resp = curl_exec($ch);
+        $err = curl_error($ch);
+        $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        $duration = round((microtime(true) - $startTime) * 1000, 2);
+        Logger::info("Gemini Vision API call completed", [
+            'duration_ms' => $duration,
+            'status' => $status,
+            'has_error' => !empty($err)
+        ]);
+
+        if ($err || $status >= 400) {
+            Logger::error("Gemini Vision API error", ['error' => $err, 'status' => $status, 'response' => $resp]);
+            return ['error' => $err ?: ('http_' . $status), 'route' => 'image_generic', 'meta' => null];
+        }
+
+        $data = json_decode($resp, true);
+        $content = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
+
+        // Parse JSON response from Gemini
+        $parsed = $this->extractJsonObject($content);
+        if (!is_array($parsed)) {
+            Logger::warning("Gemini Vision returned non-JSON", ['content' => $content]);
+            return ['error' => 'parse_error', 'route' => 'image_generic', 'meta' => ['raw' => $content]];
+        }
+
+        $imageType = $parsed['image_type'] ?? 'image_generic';
+        $confidence = (float)($parsed['confidence'] ?? 0.5);
+        $details = $parsed['details'] ?? [];
+        $description = $parsed['description'] ?? '';
+
+        // Map to route
+        $route = 'image_generic';
+        if ($imageType === 'payment_proof' && $confidence >= 0.6) {
+            $route = 'payment_proof';
+        } elseif ($imageType === 'product_image' && $confidence >= 0.5) {
+            $route = 'product_image';
+        }
+
+        Logger::info("Gemini Vision analysis result", [
+            'image_type' => $imageType,
+            'route' => $route,
+            'confidence' => $confidence
+        ]);
+
+        return [
+            'route' => $route,
+            'image_type' => $imageType,
+            'confidence' => $confidence,
+            'details' => $details,
+            'description' => $description,
+            'meta' => [
+                'provider' => 'gemini',
+                'text' => $description,
+                'labels' => [$imageType],
+                'top_descriptions' => [$description],
+                'parsed' => $parsed
+            ]
+        ];
     }
 
     protected function analyzeImageWithGoogleVision(array $integration, string $imageUrl): array
@@ -3680,12 +4039,39 @@ class RouterV1Handler implements BotHandlerInterface
     protected function extractJsonObject(string $content): ?array
     {
         $trimmed = trim($content);
+        
+        // ✅ Strip markdown code block (```json ... ```) - use DOTALL modifier
+        // Handle both real newlines and escaped \n
+        $trimmed = str_replace('\\n', "\n", $trimmed); // Convert escaped \n to real newlines
+        if (preg_match('/```(?:json)?\s*(.+?)\s*```/is', $trimmed, $matches)) {
+            $trimmed = trim($matches[1]);
+            Logger::info("extractJsonObject - stripped markdown", [
+                'after_strip_length' => strlen($trimmed),
+                'first_100_chars' => substr($trimmed, 0, 100)
+            ]);
+        }
+        
         $jsonStart = strpos($trimmed, '{');
         $jsonEnd   = strrpos($trimmed, '}');
-        if ($jsonStart === false || $jsonEnd === false || $jsonEnd <= $jsonStart) return null;
+        if ($jsonStart === false || $jsonEnd === false || $jsonEnd <= $jsonStart) {
+            Logger::warning("extractJsonObject - no valid JSON braces found", [
+                'jsonStart' => $jsonStart,
+                'jsonEnd' => $jsonEnd
+            ]);
+            return null;
+        }
 
         $jsonString = substr($trimmed, $jsonStart, $jsonEnd - $jsonStart + 1);
         $parsed = json_decode($jsonString, true);
+        
+        if (!is_array($parsed)) {
+            Logger::warning("extractJsonObject - json_decode failed", [
+                'json_error' => json_last_error_msg(),
+                'json_length' => strlen($jsonString),
+                'first_100_chars' => substr($jsonString, 0, 100)
+            ]);
+        }
+        
         return is_array($parsed) ? $parsed : null;
     }
 

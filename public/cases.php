@@ -776,6 +776,26 @@ async function viewCase(id) {
         
         document.getElementById('viewCaseBody').innerHTML = `
             <div class="case-detail">
+                <!-- Customer Profile Section -->
+                <div class="case-detail-customer" style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; padding: 1rem; background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); border-radius: 12px;">
+                    <div class="customer-avatar" style="width: 60px; height: 60px; border-radius: 50%; overflow: hidden; flex-shrink: 0; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+                        ${c.customer_avatar ? 
+                            `<img src="${escapeHtml(c.customer_avatar)}" alt="Avatar" style="width: 100%; height: 100%; object-fit: cover;">` :
+                            `<div style="width: 100%; height: 100%; background: linear-gradient(135deg, #6c757d, #495057); display: flex; align-items: center; justify-content: center; color: white; font-size: 1.5rem; font-weight: 600;">${(c.customer_name || 'ลูกค้า').charAt(0).toUpperCase()}</div>`
+                        }
+                    </div>
+                    <div class="customer-info" style="flex: 1;">
+                        <div style="font-weight: 600; font-size: 1.1rem; color: var(--color-dark);">
+                            ${escapeHtml(c.customer_name || 'ลูกค้า')}
+                        </div>
+                        <div style="font-size: 0.85rem; color: var(--color-gray); display: flex; align-items: center; gap: 0.5rem; margin-top: 0.25rem;">
+                            <i class="fab fa-${c.platform === 'line' ? 'line' : c.platform === 'facebook' ? 'facebook-messenger' : 'globe'}" style="color: ${c.platform === 'line' ? '#00B900' : c.platform === 'facebook' ? '#0084FF' : '#6c757d'};"></i>
+                            <span>${c.platform === 'line' ? 'LINE' : c.platform === 'facebook' ? 'Facebook' : c.platform || 'Web'}</span>
+                            ${c.external_user_id ? `<span style="color: #adb5bd;">• ID: ${escapeHtml(c.external_user_id.substring(0, 12))}...</span>` : ''}
+                        </div>
+                    </div>
+                </div>
+                
                 <!-- Header Info -->
                 <div class="case-detail-header" style="margin-bottom: 1.5rem;">
                     <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
@@ -793,11 +813,11 @@ async function viewCase(id) {
                     </div>
                 </div>
                 
-                <!-- Description -->
+                <!-- Description / Chat History -->
                 <div class="case-detail-section">
-                    <label class="case-detail-label">รายละเอียด</label>
-                    <div class="case-detail-value" style="background: var(--color-light); padding: 1rem; border-radius: 8px; white-space: pre-wrap;">
-                        ${escapeHtml(c.description || 'ไม่มีรายละเอียด')}
+                    <label class="case-detail-label"><i class="fas fa-comments"></i> ข้อความจากลูกค้า</label>
+                    <div class="case-detail-value" style="background: var(--color-light); padding: 1rem; border-radius: 8px; white-space: pre-wrap; max-height: 300px; overflow-y: auto; font-family: inherit; line-height: 1.6;">
+                        ${escapeHtml(c.description || 'ยังไม่มีข้อความ')}
                     </div>
                 </div>
                 
@@ -807,6 +827,7 @@ async function viewCase(id) {
                     <label class="case-detail-label">สินค้าที่เกี่ยวข้อง</label>
                     <div class="case-detail-value">
                         <i class="fas fa-box"></i> ${escapeHtml(c.product_ref_id)}
+                    </div>
                     </div>
                 </div>
                 ` : ''}

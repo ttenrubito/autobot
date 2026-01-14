@@ -302,13 +302,37 @@ function processMessagingEvent(array $event, string $entryPageId): void
 
     // Per-webhook trace id for correlation (also copied to gateway payload metadata)
     $traceId = bin2hex(random_bytes(8));
+    
+    // ✅ Extract attachments (images, files, etc.)
+    $attachments = [];
+    $messageType = 'text';
+    if (isset($event['message']['attachments']) && is_array($event['message']['attachments'])) {
+        $attachments = $event['message']['attachments'];
+        // Determine message type based on first attachment
+        $firstAttachment = $attachments[0] ?? null;
+        if ($firstAttachment) {
+            $attachmentType = $firstAttachment['type'] ?? 'unknown';
+            if ($attachmentType === 'image') {
+                $messageType = 'image';
+            } elseif (in_array($attachmentType, ['file', 'video', 'audio'])) {
+                $messageType = $attachmentType;
+            }
+        }
+        Logger::info('[FB_WEBHOOK] Attachments detected', [
+            'trace_id' => $traceId,
+            'count' => count($attachments),
+            'types' => array_map(fn($a) => $a['type'] ?? 'unknown', $attachments),
+            'message_type' => $messageType,
+        ]);
+    }
 
     $gatewayPayload = [
         'inbound_api_key'   => $channel['inbound_api_key'],
         'channel_type'      => 'facebook',
         'external_user_id'  => $senderId,
-        'message_type'      => 'text',
+        'message_type'      => $messageType,  // ✅ Dynamic: 'text', 'image', etc.
         'text'              => $text,
+        'attachments'       => $attachments,  // ✅ Pass attachments to gateway
         'is_admin'          => $isAdmin,  // ✅ Use combined detection
         'metadata' => [
             'message_id' => $messageId,

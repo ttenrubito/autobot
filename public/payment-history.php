@@ -15,9 +15,14 @@ include('../includes/customer/sidebar.php');
 <main class="main-content">
     <!-- Page Header -->
     <div class="page-header">
-        <div>
-            <h1 class="page-title">ประวัติการชำระเงิน</h1>
-            <p class="page-subtitle">ดูรายการชำระเงินและสลิปการโอน</p>
+        <div class="page-header-content">
+            <div>
+                <h1 class="page-title">ประวัติการชำระเงิน</h1>
+                <p class="page-subtitle">ดูรายการชำระเงินและสลิปการโอน</p>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="openAddPaymentModal()">
+                <i class="fas fa-plus"></i> <span class="btn-text">เพิ่มรายการ</span>
+            </button>
         </div>
     </div>
 
@@ -128,6 +133,134 @@ include('../includes/customer/sidebar.php');
     </div>
 </div>
 
+<!-- Add Payment Modal -->
+<div id="addPaymentModal" class="payment-detail-modal" style="display: none;">
+    <div class="payment-modal-overlay" onclick="closeAddPaymentModal()"></div>
+    <div class="payment-modal-dialog" style="max-width: 600px;">
+        <div class="payment-modal-header">
+            <h2 class="payment-modal-title">➕ เพิ่มรายการชำระเงิน</h2>
+            <button class="payment-modal-close" onclick="closeAddPaymentModal()" aria-label="Close">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path d="M18 6L6 18M6 6l12 12" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+            </button>
+        </div>
+        <div class="payment-modal-body">
+            <form id="addPaymentForm" enctype="multipart/form-data">
+                <!-- Payment Type -->
+                <div class="form-group">
+                    <label class="form-label">ประเภทการชำระ <span class="required">*</span></label>
+                    <div class="payment-type-grid">
+                        <label class="payment-type-option">
+                            <input type="radio" name="payment_type" value="full" checked>
+                            <div class="payment-type-card">
+                                <i class="fas fa-credit-card"></i>
+                                <span>ชำระเต็ม</span>
+                            </div>
+                        </label>
+                        <label class="payment-type-option">
+                            <input type="radio" name="payment_type" value="installment">
+                            <div class="payment-type-card">
+                                <i class="fas fa-calendar-alt"></i>
+                                <span>ผ่อนชำระ</span>
+                            </div>
+                        </label>
+                        <label class="payment-type-option">
+                            <input type="radio" name="payment_type" value="savings">
+                            <div class="payment-type-card">
+                                <i class="fas fa-piggy-bank"></i>
+                                <span>ออมเงิน</span>
+                            </div>
+                        </label>
+                        <label class="payment-type-option">
+                            <input type="radio" name="payment_type" value="deposit">
+                            <div class="payment-type-card">
+                                <i class="fas fa-hand-holding-usd"></i>
+                                <span>มัดจำ</span>
+                            </div>
+                        </label>
+                    </div>
+                </div>
+                
+                <!-- Customer Search -->
+                <div class="form-group">
+                    <label class="form-label">ลูกค้า <span class="required">*</span></label>
+                    <div class="autocomplete-wrapper">
+                        <input type="text" id="customerSearch" class="form-control" placeholder="พิมพ์ชื่อ/เบอร์โทร/Platform ID..." autocomplete="off">
+                        <input type="hidden" id="customerProfileId" name="customer_profile_id">
+                        <div id="customerSuggestions" class="autocomplete-suggestions"></div>
+                    </div>
+                    <div id="selectedCustomer" class="selected-item" style="display:none;"></div>
+                </div>
+                
+                <!-- Order/Reference Search (conditional) -->
+                <div class="form-group" id="orderSearchGroup">
+                    <label class="form-label">คำสั่งซื้อ/สัญญา</label>
+                    <div class="autocomplete-wrapper">
+                        <input type="text" id="orderSearch" class="form-control" placeholder="พิมพ์เลขที่คำสั่งซื้อ/สัญญา..." autocomplete="off">
+                        <input type="hidden" id="referenceId" name="reference_id">
+                        <input type="hidden" id="referenceType" name="reference_type" value="order">
+                        <div id="orderSuggestions" class="autocomplete-suggestions"></div>
+                    </div>
+                    <div id="selectedOrder" class="selected-item" style="display:none;"></div>
+                </div>
+                
+                <!-- Amount -->
+                <div class="form-row">
+                    <div class="form-group" style="flex:1;">
+                        <label class="form-label">จำนวนเงิน <span class="required">*</span></label>
+                        <div class="input-with-suffix">
+                            <input type="number" id="paymentAmount" name="amount" class="form-control" step="0.01" min="0" placeholder="0.00" required>
+                            <span class="input-suffix">บาท</span>
+                        </div>
+                    </div>
+                    <div class="form-group" style="flex:1;">
+                        <label class="form-label">วิธีชำระ</label>
+                        <select id="paymentMethod" name="payment_method" class="form-control">
+                            <option value="bank_transfer">โอนเงิน</option>
+                            <option value="promptpay">พร้อมเพย์</option>
+                            <option value="cash">เงินสด</option>
+                            <option value="credit_card">บัตรเครดิต</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <!-- Slip Upload -->
+                <div class="form-group">
+                    <label class="form-label">รูปสลิป</label>
+                    <div class="file-upload-area" id="slipUploadArea">
+                        <input type="file" id="slipImage" name="slip_image" accept="image/*" style="display:none;">
+                        <div class="upload-placeholder" onclick="document.getElementById('slipImage').click()">
+                            <i class="fas fa-cloud-upload-alt"></i>
+                            <span>คลิกเพื่อเลือกรูป หรือลากไฟล์มาวาง</span>
+                        </div>
+                        <div class="upload-preview" id="slipPreview" style="display:none;">
+                            <img id="slipPreviewImg" src="" alt="Preview">
+                            <button type="button" class="remove-preview" onclick="removeSlipPreview()">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Note -->
+                <div class="form-group">
+                    <label class="form-label">หมายเหตุ</label>
+                    <textarea id="paymentNote" name="note" class="form-control" rows="2" placeholder="หมายเหตุเพิ่มเติม (ถ้ามี)"></textarea>
+                </div>
+                
+                <!-- Submit -->
+                <div class="form-actions">
+                    <button type="button" class="btn btn-outline" onclick="closeAddPaymentModal()">ยกเลิก</button>
+                    <button type="submit" class="btn btn-primary" id="submitPaymentBtn">
+                        <i class="fas fa-check"></i> บันทึกรายการ
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
 <!-- Toast Notification -->
 <div id="toast" class="toast"></div>
 
@@ -135,6 +268,285 @@ include('../includes/customer/sidebar.php');
 /* =====================================================
    PROFESSIONAL FILTER PANEL - Clean & Minimal Design
    ===================================================== */
+   
+/* Page Header with Button - Fixed width for button */
+.page-header-content {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 1rem;
+}
+
+.page-header-content .btn {
+    flex-shrink: 0;
+    width: auto !important;
+}
+
+.page-header-content .btn-sm {
+    padding: 0.5rem 1rem;
+    font-size: 0.875rem;
+}
+
+@media (max-width: 576px) {
+    .page-header-content {
+        flex-direction: row;
+    }
+    .page-header-content .btn .btn-text {
+        display: none;
+    }
+    .page-header-content .btn {
+        padding: 0.5rem 0.75rem;
+    }
+}
+
+/* Add Payment Modal Styles */
+.payment-type-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.75rem;
+}
+
+.payment-type-option {
+    cursor: pointer;
+}
+
+.payment-type-option input {
+    display: none;
+}
+
+.payment-type-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 1rem 0.5rem;
+    border: 2px solid #e5e7eb;
+    border-radius: 10px;
+    transition: all 0.2s ease;
+    background: #fff;
+}
+
+.payment-type-card i {
+    font-size: 1.5rem;
+    color: #6b7280;
+}
+
+.payment-type-card span {
+    font-size: 0.8rem;
+    color: #374151;
+    text-align: center;
+}
+
+.payment-type-option input:checked + .payment-type-card {
+    border-color: var(--color-primary, #3b82f6);
+    background: #eff6ff;
+}
+
+.payment-type-option input:checked + .payment-type-card i {
+    color: var(--color-primary, #3b82f6);
+}
+
+.autocomplete-wrapper {
+    position: relative;
+}
+
+.autocomplete-suggestions {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    max-height: 200px;
+    overflow-y: auto;
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-top: none;
+    border-radius: 0 0 8px 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    z-index: 1000;
+    display: none;
+}
+
+.autocomplete-suggestions.show {
+    display: block;
+}
+
+.autocomplete-item {
+    padding: 0.75rem 1rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    border-bottom: 1px solid #f3f4f6;
+}
+
+.autocomplete-item:last-child {
+    border-bottom: none;
+}
+
+.autocomplete-item:hover {
+    background: #f9fafb;
+}
+
+.autocomplete-item-avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: #e5e7eb;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.autocomplete-item-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.autocomplete-item-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.autocomplete-item-name {
+    font-weight: 500;
+    color: #1f2937;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.autocomplete-item-meta {
+    font-size: 0.8rem;
+    color: #6b7280;
+}
+
+.selected-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    background: #f0f9ff;
+    border: 1px solid #bae6fd;
+    border-radius: 8px;
+    margin-top: 0.5rem;
+}
+
+.selected-item .remove-btn {
+    margin-left: auto;
+    color: #ef4444;
+    cursor: pointer;
+    padding: 0.25rem;
+}
+
+.form-row {
+    display: flex;
+    gap: 1rem;
+}
+
+.input-with-suffix {
+    position: relative;
+}
+
+.input-with-suffix input {
+    padding-right: 3rem;
+}
+
+.input-suffix {
+    position: absolute;
+    right: 1rem;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #6b7280;
+    font-size: 0.9rem;
+}
+
+.file-upload-area {
+    border: 2px dashed #d1d5db;
+    border-radius: 10px;
+    overflow: hidden;
+    transition: all 0.2s ease;
+}
+
+.file-upload-area.dragover {
+    border-color: var(--color-primary, #3b82f6);
+    background: #eff6ff;
+}
+
+.upload-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    cursor: pointer;
+    color: #6b7280;
+    gap: 0.5rem;
+}
+
+.upload-placeholder i {
+    font-size: 2rem;
+}
+
+.upload-preview {
+    position: relative;
+    padding: 1rem;
+}
+
+.upload-preview img {
+    max-width: 100%;
+    max-height: 200px;
+    border-radius: 8px;
+}
+
+.remove-preview {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #ef4444;
+    color: white;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.form-actions {
+    display: flex;
+    gap: 1rem;
+    justify-content: flex-end;
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid #e5e7eb;
+}
+
+.required {
+    color: #ef4444;
+}
+
+@media (max-width: 576px) {
+    .payment-type-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    .form-row {
+        flex-direction: column;
+        gap: 0;
+    }
+    .payment-modal-dialog {
+        margin: 0;
+        max-height: 100vh;
+        border-radius: 0;
+    }
+}
+
 .filter-panel {
     background: #ffffff;
     border: 1px solid #e5e7eb;

@@ -809,6 +809,22 @@ tbody td {
   margin-bottom: var(--spacing-2xl);
 }
 
+/* Page Header Content - Flex layout with button on right */
+.page-header-content {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.page-header-content .btn {
+  flex-shrink: 0;
+  width: auto !important;
+  max-width: fit-content;
+}
+
 .page-title {
   font-size: 2rem;
   font-weight: 700;

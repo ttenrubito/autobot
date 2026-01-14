@@ -36,46 +36,19 @@ if (!isset($current_page)) {
 
     <nav>
         <ul class="sidebar-nav" id="customerSidebarNav">
+            <!-- ========== กลุ่ม 1: ภาพรวม ========== -->
             <li class="sidebar-nav-item" data-menu="dashboard">
                 <a href="dashboard.php" class="sidebar-nav-link <?php echo ($current_page === 'dashboard') ? 'active' : ''; ?>">
                     <span class="sidebar-nav-icon">📊</span>
                     <span>Dashboard</span>
                 </a>
             </li>
-            <li class="sidebar-nav-item" data-menu="services">
-                <a href="services.php" class="sidebar-nav-link <?php echo ($current_page === 'services') ? 'active' : ''; ?>">
-                    <span class="sidebar-nav-icon">🤖</span>
-                    <span>บริการของฉัน</span>
-                </a>
-            </li>
-            <li class="sidebar-nav-item" data-menu="usage">
-                <a href="usage.php" class="sidebar-nav-link <?php echo ($current_page === 'usage') ? 'active' : ''; ?>">
-                    <span class="sidebar-nav-icon">📈</span>
-                    <span>การใช้งาน</span>
-                </a>
-            </li>
-            <li class="sidebar-nav-item" data-menu="payment">
-                <a href="payment.php" class="sidebar-nav-link <?php echo ($current_page === 'payment') ? 'active' : ''; ?>">
-                    <span class="sidebar-nav-icon">💳</span>
-                    <span>ชำระเงิน</span>
-                </a>
-            </li>
-            <li class="sidebar-nav-item" data-menu="billing">
-                <a href="billing.php" class="sidebar-nav-link <?php echo ($current_page === 'billing') ? 'active' : ''; ?>">
-                    <span class="sidebar-nav-icon">📄</span>
-                    <span>ใบแจ้งหนี้</span>
-                </a>
-            </li>
+            
+            <!-- ========== กลุ่ม 2: การสื่อสารกับลูกค้า ========== -->
             <li class="sidebar-nav-item" data-menu="chat_history">
                 <a href="chat-history.php" class="sidebar-nav-link <?php echo ($current_page === 'chat_history') ? 'active' : ''; ?>">
                     <span class="sidebar-nav-icon">💬</span>
                     <span>ประวัติการสนทนา</span>
-                </a>
-            </li>
-            <li class="sidebar-nav-item" data-menu="conversations">
-                <a href="conversations.php" class="sidebar-nav-link <?php echo ($current_page === 'conversations') ? 'active' : ''; ?>">
-                    <span class="sidebar-nav-icon">💭</span>
-                    <span>แชทกับลูกค้า</span>
                 </a>
             </li>
             <li class="sidebar-nav-item" data-menu="addresses">
@@ -84,28 +57,20 @@ if (!isset($current_page)) {
                     <span>ที่อยู่จัดส่ง</span>
                 </a>
             </li>
+            
+            <!-- ========== กลุ่ม 3: การขายและสั่งซื้อ ========== -->
             <li class="sidebar-nav-item" data-menu="orders">
                 <a href="orders.php" class="sidebar-nav-link <?php echo ($current_page === 'orders') ? 'active' : ''; ?>">
                     <span class="sidebar-nav-icon">📦</span>
                     <span>คำสั่งซื้อ</span>
                 </a>
             </li>
+            
+            <!-- ========== กลุ่ม 4: การเงิน ========== -->
             <li class="sidebar-nav-item" data-menu="payment_history">
                 <a href="payment-history.php" class="sidebar-nav-link <?php echo ($current_page === 'payment_history') ? 'active' : ''; ?>">
                     <span class="sidebar-nav-icon">💰</span>
                     <span>ประวัติการชำระ(ตรวจ)</span>
-                </a>
-            </li>
-            <li class="sidebar-nav-item" data-menu="campaigns">
-                <a href="campaigns.php" class="sidebar-nav-link <?php echo ($current_page === 'campaigns') ? 'active' : ''; ?>">
-                    <span class="sidebar-nav-icon">🎯</span>
-                    <span>จัดการแคมเปญ</span>
-                </a>
-            </li>
-            <li class="sidebar-nav-item" data-menu="line_applications">
-                <a href="line-applications.php" class="sidebar-nav-link <?php echo ($current_page === 'line_applications') ? 'active' : ''; ?>">
-                    <span class="sidebar-nav-icon">📋</span>
-                    <span>ใบสมัคร LINE</span>
                 </a>
             </li>
             <li class="sidebar-nav-item" data-menu="cases">
@@ -114,6 +79,8 @@ if (!isset($current_page)) {
                     <span>Case Inbox</span>
                 </a>
             </li>
+            
+            <!-- ========== กลุ่ม 5: บริการพิเศษ ========== -->
             <li class="sidebar-nav-item" data-menu="savings">
                 <a href="savings.php" class="sidebar-nav-link <?php echo ($current_page === 'savings') ? 'active' : ''; ?>">
                     <span class="sidebar-nav-icon">🐷</span>
@@ -144,10 +111,14 @@ if (!isset($current_page)) {
                     <span>งานซ่อม</span>
                 </a>
             </li>
+            
+            <!-- ========== กลุ่ม 6: ตั้งค่าและโปรไฟล์ ========== -->
             <li class="sidebar-nav-item" data-menu="profile">
                 <a href="profile.php" class="sidebar-nav-link <?php echo ($current_page === 'profile') ? 'active' : ''; ?>">
                     <span class="sidebar-nav-icon">👤</span>
                     <span>โปรไฟล์</span>
+                </a>
+            </li>
                 </a>
             </li>
             <li class="sidebar-nav-item" style="margin-top: auto; padding-top: 2rem;" data-menu="logout">

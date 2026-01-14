@@ -182,11 +182,18 @@
         CUSTOMER_ORDER_DETAIL: (orderId) => PATH.api(`api/customer/orders.php?id=${encodeURIComponent(String(orderId))}`),
 
         CUSTOMER_PAYMENTS: PATH.api('api/customer/payments.php'),
+        CUSTOMER_PAYMENTS_CREATE: PATH.api('api/customer/payments.php?action=create'),
         CUSTOMER_PAYMENT_DETAIL: (paymentId) => PATH.api(`api/customer/payments.php?id=${encodeURIComponent(String(paymentId))}`),
         CUSTOMER_PAYMENT_REFERENCES: (paymentId) => PATH.api(`api/customer/payments.php?id=${encodeURIComponent(String(paymentId))}&references=1`),
         CUSTOMER_PAYMENT_CLASSIFY: PATH.api('api/customer/payments.php?action=classify'),
         CUSTOMER_PAYMENT_APPROVE: PATH.api('api/customer/payments.php?action=approve'),
         CUSTOMER_PAYMENT_REJECT: PATH.api('api/customer/payments.php?action=reject'),
+        
+        // Search endpoints for autocomplete
+        SEARCH_CUSTOMERS: PATH.api('api/customer/search-customers.php'),
+        SEARCH_ORDERS: PATH.api('api/customer/search-orders.php'),
+        SEARCH_INSTALLMENTS: PATH.api('api/customer/search-installments.php'),
+        SEARCH_SAVINGS: PATH.api('api/customer/search-savings.php'),
 
         CUSTOMER_CASES: PATH.api('api/customer/cases.php'),
         CUSTOMER_CASE_DETAIL: (caseId) => PATH.api(`api/customer/cases.php?id=${encodeURIComponent(String(caseId))}`),

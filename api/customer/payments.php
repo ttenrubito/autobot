@@ -224,13 +224,16 @@ try {
     } elseif ($method === 'POST') {
         // POST /api/customer/payments or /notify
         $is_notify = strpos($uri, '/notify') !== false;
+        $action = $_GET['action'] ?? null;
         
         if ($is_notify) {
             // Handle payment notification with slip upload
             submitPaymentNotification($pdo, $user_id);
+        } elseif ($action === 'create') {
+            // Handle manual payment creation (admin feature)
+            createManualPayment($pdo, $user_id);
         } else {
             // Handle other POST actions
-            $action = $_GET['action'] ?? null;
             $input = json_decode(file_get_contents('php://input'), true);
             
             if (!$action) {
@@ -362,6 +365,167 @@ function submitPaymentNotification($pdo, $user_id) {
         echo json_encode([
             'success' => false,
             'message' => 'ไม่สามารถบันทึกข้อมูลได้'
+        ]);
+    }
+}
+
+/**
+ * Create manual payment (admin adds payment manually)
+ */
+function createManualPayment($pdo, $user_id) {
+    // Handle file upload (slip image)
+    $slip_url = null;
+    if (isset($_FILES['slip_image']) && $_FILES['slip_image']['error'] === UPLOAD_ERR_OK) {
+        $upload_dir = __DIR__ . '/../../public/uploads/slips/';
+        if (!is_dir($upload_dir)) {
+            mkdir($upload_dir, 0755, true);
+        }
+        
+        $file_ext = pathinfo($_FILES['slip_image']['name'], PATHINFO_EXTENSION);
+        $filename = 'slip_manual_' . $user_id . '_' . time() . '.' . $file_ext;
+        $filepath = $upload_dir . $filename;
+        
+        if (move_uploaded_file($_FILES['slip_image']['tmp_name'], $filepath)) {
+            $slip_url = '/public/uploads/slips/' . $filename;
+        }
+    }
+    
+    // Get form data
+    $payment_type = $_POST['payment_type'] ?? 'full';
+    $customer_profile_id = intval($_POST['customer_profile_id'] ?? 0);
+    $reference_id = intval($_POST['reference_id'] ?? 0);
+    $reference_type = $_POST['reference_type'] ?? 'order';
+    $amount = floatval($_POST['amount'] ?? 0);
+    $payment_method = $_POST['payment_method'] ?? 'bank_transfer';
+    $note = trim($_POST['note'] ?? '');
+    $source = $_POST['source'] ?? 'manual';
+    
+    if ($amount <= 0) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'กรุณาระบุจำนวนเงิน']);
+        return;
+    }
+    
+    try {
+        // Get tenant_id from user
+        $stmt = $pdo->prepare("SELECT tenant_id FROM users WHERE id = ? LIMIT 1");
+        $stmt->execute([$user_id]);
+        $userRow = $stmt->fetch(PDO::FETCH_ASSOC);
+        $tenant_id = $userRow['tenant_id'] ?? 'default';
+        
+        // Get customer info if customer_profile_id provided
+        $customer_name = null;
+        $customer_phone = null;
+        $customer_platform = null;
+        $customer_avatar = null;
+        $platform_user_id = null;
+        
+        if ($customer_profile_id > 0) {
+            $stmt = $pdo->prepare("SELECT * FROM customer_profiles WHERE id = ?");
+            $stmt->execute([$customer_profile_id]);
+            $customer = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($customer) {
+                $customer_name = $customer['display_name'] ?? $customer['full_name'];
+                $customer_phone = $customer['phone'];
+                $customer_platform = $customer['platform'];
+                $customer_avatar = $customer['avatar_url'];
+                $platform_user_id = $customer['platform_user_id'];
+            }
+        }
+        
+        // Generate payment_no
+        $payment_no = 'PAY-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6));
+        
+        // Determine order_id, installment_id, savings_goal_id based on reference_type
+        $order_id = null;
+        $installment_id = null;
+        $savings_goal_id = null;
+        
+        if ($reference_id > 0) {
+            switch ($reference_type) {
+                case 'order':
+                    $order_id = $reference_id;
+                    break;
+                case 'installment_contract':
+                    $installment_id = $reference_id;
+                    break;
+                case 'savings_account':
+                    $savings_goal_id = $reference_id;
+                    break;
+            }
+        }
+        
+        $stmt = $pdo->prepare("
+            INSERT INTO payments (
+                payment_no,
+                user_id,
+                tenant_id,
+                customer_profile_id,
+                payment_type,
+                reference_type,
+                reference_id,
+                order_id,
+                installment_id,
+                savings_goal_id,
+                amount,
+                payment_method,
+                slip_image_url,
+                status,
+                customer_name,
+                customer_phone,
+                customer_platform,
+                customer_platform_id,
+                customer_avatar,
+                note,
+                source,
+                transfer_time,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW())
+        ");
+        
+        $stmt->execute([
+            $payment_no,
+            $user_id,
+            $tenant_id,
+            $customer_profile_id ?: null,
+            $payment_type,
+            $reference_type,
+            $reference_id ?: null,
+            $order_id,
+            $installment_id,
+            $savings_goal_id,
+            $amount,
+            $payment_method,
+            $slip_url,
+            $customer_name,
+            $customer_phone,
+            $customer_platform,
+            $platform_user_id,
+            $customer_avatar,
+            $note ?: null,
+            $source
+        ]);
+        
+        $payment_id = $pdo->lastInsertId();
+        
+        echo json_encode([
+            'success' => true,
+            'message' => 'บันทึกรายการชำระเงินเรียบร้อย',
+            'data' => [
+                'id' => $payment_id,
+                'payment_no' => $payment_no,
+                'slip_url' => $slip_url
+            ]
+        ]);
+        
+    } catch (Exception $e) {
+        error_log("Create manual payment error: " . $e->getMessage());
+        http_response_code(500);
+        echo json_encode([
+            'success' => false,
+            'message' => 'ไม่สามารถบันทึกข้อมูลได้: ' . $e->getMessage()
         ]);
     }
 }
