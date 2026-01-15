@@ -499,6 +499,8 @@ function renderPaymentDetails(payment) {
         (payment.status === 'pending' || payment.status === 'verifying') ? 'pending' : 'rejected';
     const statusText = payment.status === 'verified' ? '✅ อนุมัติแล้ว' :
         (payment.status === 'pending' || payment.status === 'verifying') ? '⏳ รอตรวจสอบ' : '❌ ปฏิเสธ';
+    const statusEmoji = payment.status === 'verified' ? '✅' :
+        (payment.status === 'pending' || payment.status === 'verifying') ? '⏳' : '❌';
 
     const reviewHint = payment.status === 'pending' || payment.status === 'verifying'
         ? 'ระบบกำลังตรวจสอบสลิปของคุณ (OCR/ตรวจความถูกต้อง) โดยปกติใช้เวลาไม่กี่นาที'
@@ -523,27 +525,54 @@ function renderPaymentDetails(payment) {
         customerPlatform === 'facebook' ? 'Facebook' :
             customerPlatform === 'instagram' ? 'Instagram' : 'Web';
 
+    // Payment type label
+    const typeLabel = payment.payment_type === 'full' ? 'จ่ายเต็ม' :
+        payment.payment_type === 'installment' ? `ผ่อน งวด ${payment.current_period || 1}/${payment.installment_period || 1}` :
+            payment.payment_type === 'savings' ? 'ออมเงิน' : 'ทั่วไป';
+
     let html = `
         <div class="slip-chat-layout">
-            <!-- Customer Profile Card -->
-            <div class="detail-section customer-profile-card">
-                <div class="profile-header">
-                    <div class="profile-avatar">
-                        ${customerAvatar
-            ? `<img src="${customerAvatar}" alt="${customerName}" onerror="this.outerHTML='<div class=\\'profile-avatar-placeholder\\'>${initials}</div>'">`
-            : `<div class="profile-avatar-placeholder">${initials}</div>`
-        }
-                    </div>
-                    <div class="profile-info">
-                        <h3 class="profile-name">${customerName}</h3>
-                        ${customerPhone ? `<div class="profile-phone"><i class="fas fa-phone"></i> ${customerPhone}</div>` : ''}
-                        <div class="profile-platform">
-                            <span class="platform-badge platform-${customerPlatform}">
-                                ${platformIcon} ${platformLabel}
-                            </span>
-                        </div>
-                    </div>
+            <!-- ✅ NEW: Summary Card (Key Info at Top) -->
+            <div class="payment-summary-card">
+                <div class="summary-main">
+                    <div class="summary-amount">฿${formatNumber(payment.amount || 0)}</div>
+                    <div class="summary-status status-${statusClass}">${statusEmoji} ${statusText.replace(/^[✅⏳❌]\s*/, '')}</div>
                 </div>
+                <div class="summary-meta">
+                    <span class="summary-meta-item">
+                        <i class="fas fa-receipt"></i> ${payment.payment_no || '-'}
+                    </span>
+                    <span class="summary-meta-item">
+                        <i class="fas fa-calendar"></i> ${formatDate(payment.payment_date)}
+                    </span>
+                    <span class="summary-meta-item">
+                        <i class="fas fa-tag"></i> ${typeLabel}
+                    </span>
+                </div>
+            </div>
+            
+            <!-- ✅ Compact Customer Info Row -->
+            <div class="customer-info-row">
+                <div class="customer-mini-avatar">
+                    ${customerAvatar
+            ? `<img src="${customerAvatar}" alt="${customerName}" onerror="this.outerHTML='<div class=\\'avatar-placeholder-mini\\'>${initials}</div>'">`
+            : `<div class="avatar-placeholder-mini">${initials}</div>`
+        }
+                </div>
+                <div class="customer-mini-info">
+                    <span class="customer-mini-name">${customerName}</span>
+                    <span class="customer-mini-meta">${platformIcon} ${platformLabel}${customerPhone ? ' • ' + customerPhone : ''}</span>
+                </div>
+                ${payment.order_no ? `
+                    <a class="order-link-badge" href="#" onclick="event.preventDefault(); goToOrderFromPayment('${String(payment.order_no).replace(/'/g, "\\'")}');">
+                        <i class="fas fa-shopping-cart"></i> ${payment.order_no}
+                    </a>
+                ` : ''}
+                ${payment.repair_no ? `
+                    <a class="repair-link-badge" href="${pageUrlSafe('repairs.php')}?id=${payment.repair_id}">
+                        <i class="fas fa-tools"></i> ${payment.repair_no}
+                    </a>
+                ` : ''}
             </div>
             
             <!-- SLIP IMAGE (Most Important) -->

@@ -28,24 +28,25 @@ if (strlen($query) < 1) {
 
 try {
     $pdo = getDB();
-    
+
     // Get tenant_id from user (same pattern as cases.php)
     $stmt = $pdo->prepare("SELECT tenant_id FROM users WHERE id = ? LIMIT 1");
     $stmt->execute([$user_id]);
     $user = $stmt->fetch(PDO::FETCH_ASSOC);
     $tenant_id = $user['tenant_id'] ?? 'default';
-    
+
     // Search orders by tenant_id (same pattern as cases.php)
     // Fallback to user_id if tenant_id column doesn't exist
     $searchTerm = '%' . $query . '%';
-    
+
     // Check if orders table has tenant_id column
     $colCheck = $pdo->query("SHOW COLUMNS FROM orders LIKE 'tenant_id'");
     $hasTenantId = $colCheck->rowCount() > 0;
-    
+
     if ($hasTenantId) {
         // Use tenant_id (preferred - same as cases.php)
         // Note: orders table uses customer_id to link to customer_profiles
+        // ✅ Filter out fully paid orders (status = 'paid' or remaining_amount <= 0)
         $stmt = $pdo->prepare("
             SELECT 
                 o.id,
@@ -53,9 +54,10 @@ try {
                 COALESCE(o.order_number, o.order_no) as order_no,
                 o.product_name as customer_name,
                 o.total_amount,
-                COALESCE(o.total_amount - o.remaining_amount, 0) as paid_amount,
+                COALESCE(o.paid_amount, 0) as paid_amount,
+                COALESCE(o.remaining_amount, o.total_amount - COALESCE(o.paid_amount, 0)) as remaining_amount,
                 o.status,
-                o.status as payment_status,
+                COALESCE(o.payment_status, o.status) as payment_status,
                 o.created_at
             FROM orders o
             WHERE o.tenant_id = ?
@@ -65,12 +67,15 @@ try {
                 OR o.product_name LIKE ?
                 OR CAST(o.id AS CHAR) LIKE ?
             )
+            AND o.status NOT IN ('paid', 'completed', 'cancelled', 'refunded')
+            AND (o.remaining_amount IS NULL OR o.remaining_amount > 0 OR o.paid_amount IS NULL OR o.paid_amount < o.total_amount)
             ORDER BY o.created_at DESC
             LIMIT 10
         ");
         $stmt->execute([$tenant_id, $searchTerm, $searchTerm, $searchTerm, $searchTerm]);
     } else {
         // Fallback to customer_id if tenant_id column doesn't exist yet
+        // ✅ Also filter out fully paid orders
         $stmt = $pdo->prepare("
             SELECT 
                 o.id,
@@ -78,9 +83,10 @@ try {
                 COALESCE(o.order_number, o.order_no) as order_no,
                 o.product_name as customer_name,
                 o.total_amount,
-                COALESCE(o.total_amount - o.remaining_amount, 0) as paid_amount,
+                COALESCE(o.paid_amount, 0) as paid_amount,
+                COALESCE(o.remaining_amount, o.total_amount - COALESCE(o.paid_amount, 0)) as remaining_amount,
                 o.status,
-                o.status as payment_status,
+                COALESCE(o.payment_status, o.status) as payment_status,
                 o.created_at
             FROM orders o
             WHERE (
@@ -89,25 +95,27 @@ try {
                 OR o.product_name LIKE ?
                 OR CAST(o.id AS CHAR) LIKE ?
             )
+            AND o.status NOT IN ('paid', 'completed', 'cancelled', 'refunded')
+            AND (o.remaining_amount IS NULL OR o.remaining_amount > 0 OR o.paid_amount IS NULL OR o.paid_amount < o.total_amount)
             ORDER BY o.created_at DESC
             LIMIT 10
         ");
         $stmt->execute([$searchTerm, $searchTerm, $searchTerm, $searchTerm]);
     }
-    
+
     $orders = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
+
     // Calculate remaining amount
     foreach ($orders as &$order) {
         $order['remaining_amount'] = $order['total_amount'] - ($order['paid_amount'] ?? 0);
     }
     unset($order);
-    
+
     echo json_encode([
         'success' => true,
         'data' => $orders
     ]);
-    
+
 } catch (Exception $e) {
     error_log("Search orders error: " . $e->getMessage());
     http_response_code(500);

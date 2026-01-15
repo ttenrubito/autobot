@@ -736,6 +736,50 @@ function createManualPayment($pdo, $user_id)
 
         $payment_id = $pdo->lastInsertId();
 
+        // ✅ Update order status if linked to an order (manual payment is auto-verified)
+        if ($order_id) {
+            // Get current order info
+            $stmt = $pdo->prepare("SELECT total_amount, paid_amount, remaining_amount FROM orders WHERE id = ?");
+            $stmt->execute([$order_id]);
+            $order = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if ($order) {
+                $currentPaid = (float) ($order['paid_amount'] ?? 0);
+                $newPaidAmount = $currentPaid + $amount;
+                $totalAmount = (float) ($order['total_amount'] ?? 0);
+                $newRemainingAmount = max(0, $totalAmount - $newPaidAmount);
+                $isPaidInFull = $newPaidAmount >= $totalAmount;
+
+                $stmt = $pdo->prepare("
+                    UPDATE orders 
+                    SET paid_amount = ?,
+                        remaining_amount = ?,
+                        payment_status = CASE 
+                            WHEN ? >= total_amount THEN 'paid'
+                            WHEN ? > 0 THEN 'partial'
+                            ELSE 'pending'
+                        END,
+                        status = CASE 
+                            WHEN ? >= total_amount THEN 'paid'
+                            WHEN status IN ('pending', 'draft', 'pending_payment') THEN 'processing'
+                            ELSE status
+                        END,
+                        updated_at = NOW()
+                    WHERE id = ?
+                ");
+                $stmt->execute([
+                    $newPaidAmount,
+                    $newRemainingAmount,
+                    $newPaidAmount,
+                    $newPaidAmount,
+                    $newPaidAmount,
+                    $order_id
+                ]);
+
+                error_log("[Payment] Order #$order_id updated: paid=$newPaidAmount, remaining=$newRemainingAmount, full=" . ($isPaidInFull ? 'yes' : 'no'));
+            }
+        }
+
         echo json_encode([
             'success' => true,
             'message' => 'บันทึกรายการชำระเงินเรียบร้อย',
@@ -869,13 +913,25 @@ function linkOrderToPayment($pdo, $payment, $input, $admin_id, $tenant_id)
 
     try {
         // Verify order exists and belongs to same tenant
-        $stmt = $pdo->prepare("SELECT id, order_number FROM orders WHERE id = ? AND tenant_id = ?");
+        $stmt = $pdo->prepare("SELECT id, order_number, total_amount, paid_amount, remaining_amount, status FROM orders WHERE id = ? AND tenant_id = ?");
         $stmt->execute([$order_id, $tenant_id]);
         $order = $stmt->fetch(PDO::FETCH_ASSOC);
 
         if (!$order) {
             http_response_code(404);
             echo json_encode(['success' => false, 'message' => 'ไม่พบคำสั่งซื้อ']);
+            return;
+        }
+
+        // ✅ Check if order is already fully paid
+        $totalAmount = (float) ($order['total_amount'] ?? 0);
+        $currentPaid = (float) ($order['paid_amount'] ?? 0);
+        if ($totalAmount > 0 && $currentPaid >= $totalAmount) {
+            http_response_code(400);
+            echo json_encode([
+                'success' => false,
+                'message' => 'คำสั่งซื้อนี้ชำระครบแล้ว ไม่สามารถเชื่อมโยงการชำระเงินเพิ่มได้'
+            ]);
             return;
         }
 
@@ -887,6 +943,41 @@ function linkOrderToPayment($pdo, $payment, $input, $admin_id, $tenant_id)
             WHERE id = ?
         ");
         $stmt->execute([$order_id, $payment['id']]);
+
+        // ✅ If payment is verified, update order paid_amount and status
+        if ($payment['status'] === 'verified') {
+            $paymentAmount = (float) ($payment['amount'] ?? 0);
+            $newPaidAmount = $currentPaid + $paymentAmount;
+            $newRemainingAmount = max(0, $totalAmount - $newPaidAmount);
+
+            $stmt = $pdo->prepare("
+                UPDATE orders 
+                SET paid_amount = ?,
+                    remaining_amount = ?,
+                    payment_status = CASE 
+                        WHEN ? >= total_amount THEN 'paid'
+                        WHEN ? > 0 THEN 'partial'
+                        ELSE 'pending'
+                    END,
+                    status = CASE 
+                        WHEN ? >= total_amount THEN 'paid'
+                        WHEN status IN ('pending', 'draft', 'pending_payment') THEN 'processing'
+                        ELSE status
+                    END,
+                    updated_at = NOW()
+                WHERE id = ?
+            ");
+            $stmt->execute([
+                $newPaidAmount,
+                $newRemainingAmount,
+                $newPaidAmount,
+                $newPaidAmount,
+                $newPaidAmount,
+                $order_id
+            ]);
+
+            error_log("[Payment] Linked order #$order_id: paid=$newPaidAmount, remaining=$newRemainingAmount");
+        }
 
         echo json_encode([
             'success' => true,
