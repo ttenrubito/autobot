@@ -364,7 +364,7 @@ include('../includes/customer/sidebar.php');
     border-top: none;
     border-radius: 0 0 8px 8px;
     box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-    z-index: 1000;
+    z-index: 100000;
     display: none;
 }
 
@@ -1102,6 +1102,7 @@ include('../includes/customer/sidebar.php');
 .payment-modal-body {
     padding: 1rem;
     overflow-y: auto;
+    overflow-x: visible;
     flex: 1;
     background: #f9fafb; /* Subtle light gray background */
     -webkit-overflow-scrolling: touch; /* Smooth scrolling on iOS */
@@ -2200,6 +2201,18 @@ include('../includes/customer/sidebar.php');
     display: flex;
     gap: 0.75rem;
     align-items: flex-start;
+    position: relative;
+}
+
+/* Allow autocomplete to overflow the modal body */
+.order-reference-container {
+    position: relative;
+    overflow: visible !important;
+}
+
+.autocomplete-wrapper {
+    position: relative;
+    overflow: visible !important;
 }
 
 .order-search-inline .form-control {
@@ -2226,7 +2239,7 @@ include('../includes/customer/sidebar.php');
     border-top: none;
     border-radius: 0 0 8px 8px;
     box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-    z-index: 100;
+    z-index: 100000;
     max-height: 200px;
     overflow-y: auto;
 }

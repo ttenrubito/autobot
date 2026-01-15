@@ -160,7 +160,8 @@ function getAllPawns($pdo, $user_id) {
     
     $status = isset($_GET['status']) ? $_GET['status'] : null;
     
-    $where = ['p.customer_id = ?'];
+    // Use user_id to filter by shop owner
+    $where = ['p.user_id = ?'];
     $params = [$user_id];
     
     if ($status) {
@@ -265,7 +266,7 @@ function getSummary($pdo, $user_id) {
             SUM(CASE WHEN status IN ('active', 'overdue', 'extended') THEN loan_amount ELSE 0 END) as total_principal,
             SUM(CASE WHEN status = 'redeemed' THEN loan_amount ELSE 0 END) as total_redeemed
         FROM pawns
-        WHERE customer_id = ?
+        WHERE user_id = ?
     ");
     $stmt->execute([$user_id]);
     $summary = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -293,7 +294,7 @@ function getPawnDetail($pdo, $pawn_id, $user_id) {
             (p.loan_amount * p.interest_rate / 100) as monthly_interest,
             DATEDIFF(p.due_date, CURDATE()) as days_until_due
         FROM pawns p
-        WHERE p.id = ? AND p.customer_id = ?
+        WHERE p.id = ? AND p.user_id = ?
     ");
     $stmt->execute([$pawn_id, $user_id]);
     $pawn = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -399,7 +400,7 @@ function submitInterestPayment($pdo, $user_id) {
     }
     
     // Get pawn
-    $stmt = $pdo->prepare("SELECT * FROM pawns WHERE id = ? AND customer_id = ?");
+    $stmt = $pdo->prepare("SELECT * FROM pawns WHERE id = ? AND user_id = ?");
     $stmt->execute([$pawn_id, $user_id]);
     $pawn = $stmt->fetch(PDO::FETCH_ASSOC);
     

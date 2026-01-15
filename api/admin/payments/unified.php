@@ -127,7 +127,7 @@ function listPayments($pdo) {
     $countSql = "
         SELECT COUNT(*) as total
         FROM payments p
-        LEFT JOIN users u ON p.customer_id = u.id
+        LEFT JOIN customer_profiles cp ON p.platform_user_id = cp.platform_user_id
         WHERE $whereClause
     ";
     $stmt = $pdo->prepare($countSql);
@@ -138,9 +138,11 @@ function listPayments($pdo) {
     $sql = "
         SELECT 
             p.*,
-            u.full_name as customer_name,
-            u.email as customer_email,
-            u.phone as customer_phone,
+            COALESCE(cp.display_name, cp.full_name) as customer_name,
+            cp.email as customer_email,
+            cp.phone as customer_phone,
+            COALESCE(cp.avatar_url, cp.profile_pic_url) as customer_avatar,
+            cp.platform as customer_platform,
             o.order_no,
             o.product_name as order_product_name,
             ic.contract_no,
@@ -148,7 +150,7 @@ function listPayments($pdo) {
             sa.account_no as savings_account_no,
             sa.product_name as savings_product_name
         FROM payments p
-        LEFT JOIN users u ON p.customer_id = u.id
+        LEFT JOIN customer_profiles cp ON p.platform_user_id = cp.platform_user_id
         LEFT JOIN orders o ON p.order_id = o.id
         LEFT JOIN installment_contracts ic ON p.reference_type = 'installment_contract' AND p.reference_id = ic.id
         LEFT JOIN savings_accounts sa ON p.reference_type = 'savings_account' AND p.reference_id = sa.id
@@ -195,11 +197,13 @@ function getPaymentDetail($pdo, $payment_id) {
     $stmt = $pdo->prepare("
         SELECT 
             p.*,
-            u.full_name as customer_name,
-            u.email as customer_email,
-            u.phone as customer_phone
+            COALESCE(cp.display_name, cp.full_name) as customer_name,
+            cp.email as customer_email,
+            cp.phone as customer_phone,
+            COALESCE(cp.avatar_url, cp.profile_pic_url) as customer_avatar,
+            cp.platform as customer_platform
         FROM payments p
-        LEFT JOIN users u ON p.customer_id = u.id
+        LEFT JOIN customer_profiles cp ON p.platform_user_id = cp.platform_user_id
         WHERE p.id = ?
     ");
     $stmt->execute([$payment_id]);
@@ -211,47 +215,53 @@ function getPaymentDetail($pdo, $payment_id) {
         return;
     }
     
-    $customer_id = $payment['customer_id'];
+    $platform_user_id = $payment['platform_user_id'];
     
-    // Get customer's active orders
-    $stmt = $pdo->prepare("
-        SELECT id, order_no, product_name, total_amount, 
-               COALESCE(paid_amount, 0) as paid_amount,
-               status, payment_type
-        FROM orders 
-        WHERE customer_id = ? AND status NOT IN ('cancelled', 'delivered')
-        ORDER BY created_at DESC
-        LIMIT 10
-    ");
-    $stmt->execute([$customer_id]);
-    $orders = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    // Get customer's active orders (by platform_user_id)
+    $orders = [];
+    $installments = [];
+    $savings = [];
     
-    // Get customer's active installment contracts
-    $stmt = $pdo->prepare("
-        SELECT id, contract_no, product_name, financed_amount, 
-               COALESCE(paid_amount, 0) as paid_amount,
-               amount_per_period, paid_periods, total_periods, status,
-               next_due_date
-        FROM installment_contracts 
-        WHERE customer_id = ? AND status IN ('active', 'overdue')
-        ORDER BY next_due_date ASC
-        LIMIT 10
-    ");
-    $stmt->execute([$customer_id]);
-    $installments = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    // Get customer's active savings accounts
-    $stmt = $pdo->prepare("
-        SELECT id, account_no, product_name, target_amount, 
-               COALESCE(current_amount, 0) as current_amount,
-               status
-        FROM savings_accounts 
-        WHERE customer_id = ? AND status = 'active'
-        ORDER BY created_at DESC
-        LIMIT 10
-    ");
-    $stmt->execute([$customer_id]);
-    $savings = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    if ($platform_user_id) {
+        $stmt = $pdo->prepare("
+            SELECT id, order_no, product_name, total_amount, 
+                   COALESCE(paid_amount, 0) as paid_amount,
+                   status, payment_type
+            FROM orders 
+            WHERE platform_user_id = ? AND status NOT IN ('cancelled', 'delivered')
+            ORDER BY created_at DESC
+            LIMIT 10
+        ");
+        $stmt->execute([$platform_user_id]);
+        $orders = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        // Get customer's active installment contracts
+        $stmt = $pdo->prepare("
+            SELECT id, contract_no, product_name, financed_amount, 
+                   COALESCE(paid_amount, 0) as paid_amount,
+                   amount_per_period, paid_periods, total_periods, status,
+                   next_due_date
+            FROM installment_contracts 
+            WHERE platform_user_id = ? AND status IN ('active', 'overdue')
+            ORDER BY next_due_date ASC
+            LIMIT 10
+        ");
+        $stmt->execute([$platform_user_id]);
+        $installments = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        // Get customer's active savings accounts
+        $stmt = $pdo->prepare("
+            SELECT id, account_no, product_name, target_amount, 
+                   COALESCE(current_amount, 0) as current_amount,
+                   status
+            FROM savings_accounts 
+            WHERE platform_user_id = ? AND status = 'active'
+            ORDER BY created_at DESC
+            LIMIT 10
+        ");
+        $stmt->execute([$platform_user_id]);
+        $savings = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
     
     echo json_encode([
         'success' => true,

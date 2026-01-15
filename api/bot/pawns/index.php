@@ -150,7 +150,7 @@ function createPawn($db) {
     $pawnNo = generatePawnNo();
     
     $sql = "INSERT INTO pawns (
-        pawn_no, tenant_id, customer_id, customer_profile_id,
+        pawn_no, tenant_id, user_id, platform_user_id, customer_id, customer_profile_id,
         channel_id, external_user_id, platform,
         customer_name, customer_phone, customer_line_name, customer_id_card,
         product_ref_id, product_name, product_description, product_images,
@@ -160,7 +160,7 @@ function createPawn($db) {
         case_id, admin_notes,
         created_at, updated_at
     ) VALUES (
-        ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?,
         ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?, ?,
@@ -174,6 +174,8 @@ function createPawn($db) {
     $params = [
         $pawnNo,
         $input['tenant_id'] ?? 'default',
+        $input['user_id'] ?? null,
+        (string)$input['external_user_id'], // platform_user_id for JOIN
         $input['customer_id'] ?? null,
         $input['customer_profile_id'] ?? null,
         (int)$input['channel_id'],

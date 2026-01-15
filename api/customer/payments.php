@@ -95,7 +95,8 @@ try {
                     COALESCE(cp.avatar_url, cp.profile_pic_url) as customer_avatar,
                     cp.phone as customer_phone
                 FROM payments p
-                LEFT JOIN customer_profiles cp ON p.platform_user_id = cp.platform_user_id 
+                LEFT JOIN customer_profiles cp ON 
+                    cp.platform_user_id = COALESCE(p.platform_user_id, JSON_UNQUOTE(JSON_EXTRACT(p.payment_details, '$.external_user_id')))
                     AND cp.platform = COALESCE(p.platform, JSON_UNQUOTE(JSON_EXTRACT(p.payment_details, '$.platform')), 'line')
                 WHERE p.id = ? AND p.tenant_id = ?
             ");
@@ -289,8 +290,8 @@ try {
                     p.installment_period,
                     p.current_period,
                     p.status,
-                    p.slip_image,
-                    p.slip_image as slip_image_url,
+                    COALESCE(p.slip_image, JSON_UNQUOTE(JSON_EXTRACT(p.payment_details, '$.slip_image_url'))) as slip_image,
+                    COALESCE(p.slip_image, JSON_UNQUOTE(JSON_EXTRACT(p.payment_details, '$.slip_image_url'))) as slip_image_url,
                     p.payment_date,
                     p.payment_date as transfer_time,
                     p.payment_details,
@@ -310,10 +311,11 @@ try {
                     cp.phone as customer_phone,
                     NULL as product_name
                 FROM payments p
-                LEFT JOIN customer_profiles cp ON p.platform_user_id = cp.platform_user_id 
+                LEFT JOIN customer_profiles cp ON 
+                    cp.platform_user_id = COALESCE(p.platform_user_id, JSON_UNQUOTE(JSON_EXTRACT(p.payment_details, '$.external_user_id')))
                     AND cp.platform = COALESCE(p.platform, JSON_UNQUOTE(JSON_EXTRACT(p.payment_details, '$.platform')), 'line')
                 WHERE $where_clause
-                ORDER BY p.created_at DESC
+                ORDER BY p.id DESC
                 LIMIT ? OFFSET ?
             ");
             $params[] = $limit;
@@ -457,15 +459,28 @@ try {
                 case 'reject':
                     rejectPayment($pdo, $payment, $input, $user_id);
                     break;
+                case 'classify':
+                    classifyPayment($pdo, $payment, $input, $user_id);
+                    break;
                 case 'link_order':
                     linkOrderToPayment($pdo, $payment, $input, $user_id, $tenant_id);
                     break;
                 case 'unlink_order':
                     unlinkOrderFromPayment($pdo, $payment, $user_id);
                     break;
+                case 'link_repair':
+                    linkRepairToPayment($pdo, $payment, $input, $user_id, $tenant_id);
+                    break;
+                case 'unlink_repair':
+                    unlinkRepairFromPayment($pdo, $payment, $user_id);
+                    break;
                 default:
                     http_response_code(400);
-                    echo json_encode(['success' => false, 'message' => 'Invalid action']);
+                    echo json_encode([
+                        'success' => false,
+                        'message' => 'ไม่รองรับการดำเนินการนี้',
+                        'hint' => 'รองรับเฉพาะ: approve, reject, classify, link_order, unlink_order, link_repair, unlink_repair'
+                    ]);
             }
         }
 
@@ -571,20 +586,47 @@ function submitPaymentNotification($pdo, $user_id)
  */
 function createManualPayment($pdo, $user_id)
 {
-    // Handle file upload (slip image)
+    // Handle file upload (slip image) - upload to Google Cloud Storage
     $slip_url = null;
     if (isset($_FILES['slip_image']) && $_FILES['slip_image']['error'] === UPLOAD_ERR_OK) {
-        $upload_dir = __DIR__ . '/../../public/uploads/slips/';
-        if (!is_dir($upload_dir)) {
-            mkdir($upload_dir, 0755, true);
-        }
+        try {
+            require_once __DIR__ . '/../../includes/GoogleCloudStorage.php';
 
-        $file_ext = pathinfo($_FILES['slip_image']['name'], PATHINFO_EXTENSION);
-        $filename = 'slip_manual_' . $user_id . '_' . time() . '.' . $file_ext;
-        $filepath = $upload_dir . $filename;
+            $gcs = GoogleCloudStorage::getInstance();
+            $fileContent = file_get_contents($_FILES['slip_image']['tmp_name']);
+            $fileName = $_FILES['slip_image']['name'];
+            $mimeType = $_FILES['slip_image']['type'] ?: 'image/jpeg';
 
-        if (move_uploaded_file($_FILES['slip_image']['tmp_name'], $filepath)) {
-            $slip_url = '/public/uploads/slips/' . $filename;
+            $result = $gcs->uploadFile(
+                $fileContent,
+                $fileName,
+                $mimeType,
+                'slips/manual',  // folder in GCS bucket
+                [
+                    'user_id' => $user_id,
+                    'source' => 'manual_payment',
+                    'uploaded_at' => date('c')
+                ]
+            );
+
+            if ($result['success']) {
+                $slip_url = $result['url'];  // Public GCS URL
+            } else {
+                error_log("GCS upload failed: " . ($result['error'] ?? 'Unknown error'));
+            }
+        } catch (Exception $e) {
+            error_log("GCS upload exception: " . $e->getMessage());
+            // Fallback to local storage if GCS fails
+            $upload_dir = __DIR__ . '/../../public/uploads/slips/';
+            if (!is_dir($upload_dir)) {
+                mkdir($upload_dir, 0755, true);
+            }
+            $file_ext = pathinfo($_FILES['slip_image']['name'], PATHINFO_EXTENSION);
+            $filename = 'slip_manual_' . $user_id . '_' . time() . '.' . $file_ext;
+            $filepath = $upload_dir . $filename;
+            if (move_uploaded_file($_FILES['slip_image']['tmp_name'], $filepath)) {
+                $slip_url = '/public/uploads/slips/' . $filename;
+            }
         }
     }
 
@@ -635,74 +677,60 @@ function createManualPayment($pdo, $user_id)
         // Generate payment_no
         $payment_no = 'PAY-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6));
 
-        // Determine order_id, installment_id, savings_goal_id based on reference_type
+        // Determine order_id based on reference_type
         $order_id = null;
-        $installment_id = null;
-        $savings_goal_id = null;
-
-        if ($reference_id > 0) {
-            switch ($reference_type) {
-                case 'order':
-                    $order_id = $reference_id;
-                    break;
-                case 'installment_contract':
-                    $installment_id = $reference_id;
-                    break;
-                case 'savings_account':
-                    $savings_goal_id = $reference_id;
-                    break;
-            }
+        if ($reference_id > 0 && $reference_type === 'order') {
+            $order_id = $reference_id;
         }
+
+        // Build payment_details JSON with customer info and other metadata
+        $payment_details = json_encode([
+            'customer_profile_id' => $customer_profile_id ?: null,
+            'customer_name' => $customer_name,
+            'customer_phone' => $customer_phone,
+            'customer_platform' => $customer_platform,
+            'customer_avatar' => $customer_avatar,
+            'external_user_id' => $platform_user_id,
+            'platform' => $customer_platform,
+            'reference_type' => $reference_type,
+            'reference_id' => $reference_id ?: null,
+            'note' => $note,
+            'source' => $source,
+            'submitted_at' => date('c')
+        ]);
 
         $stmt = $pdo->prepare("
             INSERT INTO payments (
                 payment_no,
-                user_id,
-                tenant_id,
-                customer_profile_id,
-                payment_type,
-                reference_type,
-                reference_id,
                 order_id,
-                installment_id,
-                savings_goal_id,
+                customer_id,
+                tenant_id,
+                payment_type,
                 amount,
                 payment_method,
-                slip_image_url,
+                slip_image,
+                payment_details,
+                payment_date,
                 status,
-                customer_name,
-                customer_phone,
-                customer_platform,
-                customer_platform_id,
-                customer_avatar,
-                note,
+                verified_by,
+                verified_at,
                 source,
-                transfer_time,
                 created_at,
                 updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW())
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 'verified', ?, NOW(), ?, NOW(), NOW())
         ");
 
         $stmt->execute([
             $payment_no,
-            $user_id,
-            $tenant_id,
-            $customer_profile_id ?: null,
-            $payment_type,
-            $reference_type,
-            $reference_id ?: null,
             $order_id,
-            $installment_id,
-            $savings_goal_id,
+            $customer_profile_id ?: null,  // customer_id references customer_profiles.id
+            $tenant_id,
+            $payment_type,
             $amount,
             $payment_method,
             $slip_url,
-            $customer_name,
-            $customer_phone,
-            $customer_platform,
-            $platform_user_id,
-            $customer_avatar,
-            $note ?: null,
+            $payment_details,
+            $user_id,  // verified_by = current user (auto-approve)
             $source
         ]);
 
@@ -744,19 +772,34 @@ function approvePayment($pdo, $payment, $admin_id)
         ");
         $stmt->execute([$admin_id, $payment['id']]);
 
-        // Update order paid_amount if linked
+        // Update order paid_amount and status if linked
         if ($payment['order_id']) {
-            $stmt = $pdo->prepare("
-                UPDATE orders 
-                SET paid_amount = paid_amount + ?,
-                    payment_status = CASE 
-                        WHEN paid_amount + ? >= total_amount THEN 'paid'
-                        ELSE 'partial'
-                    END,
-                    updated_at = NOW()
-                WHERE id = ?
-            ");
-            $stmt->execute([$payment['amount'], $payment['amount'], $payment['order_id']]);
+            // First get current order info
+            $stmt = $pdo->prepare("SELECT total_amount, paid_amount FROM orders WHERE id = ?");
+            $stmt->execute([$payment['order_id']]);
+            $order = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if ($order) {
+                $newPaidAmount = ($order['paid_amount'] ?? 0) + $payment['amount'];
+                $isPaidInFull = $newPaidAmount >= $order['total_amount'];
+
+                $stmt = $pdo->prepare("
+                    UPDATE orders 
+                    SET paid_amount = ?,
+                        payment_status = CASE 
+                            WHEN ? >= total_amount THEN 'paid'
+                            ELSE 'partial'
+                        END,
+                        status = CASE 
+                            WHEN ? >= total_amount THEN 'paid'
+                            WHEN status = 'pending' OR status = 'draft' OR status = 'pending_payment' THEN 'processing'
+                            ELSE status
+                        END,
+                        updated_at = NOW()
+                    WHERE id = ?
+                ");
+                $stmt->execute([$newPaidAmount, $newPaidAmount, $newPaidAmount, $payment['order_id']]);
+            }
         }
 
         $pdo->commit();
@@ -881,6 +924,239 @@ function unlinkOrderFromPayment($pdo, $payment, $admin_id)
 
     } catch (Exception $e) {
         error_log("Unlink order error: " . $e->getMessage());
+        http_response_code(500);
+        echo json_encode([
+            'success' => false,
+            'message' => 'ไม่สามารถยกเลิกได้: ' . $e->getMessage()
+        ]);
+    }
+}
+
+/**
+ * Classify and approve payment with type selection
+ */
+function classifyPayment($pdo, $payment, $input, $admin_id)
+{
+    try {
+        // Validate required fields
+        $payment_type = $input['payment_type'] ?? null;
+
+        if (!$payment_type) {
+            http_response_code(400);
+            echo json_encode([
+                'success' => false,
+                'message' => 'กรุณาเลือกประเภทการชำระเงิน',
+                'field' => 'payment_type'
+            ]);
+            return;
+        }
+
+        // Validate payment_type value
+        $valid_types = ['full', 'installment', 'savings', 'savings_deposit', 'deposit', 'unknown'];
+        if (!in_array($payment_type, $valid_types)) {
+            http_response_code(400);
+            echo json_encode([
+                'success' => false,
+                'message' => 'ประเภทการชำระเงินไม่ถูกต้อง',
+                'field' => 'payment_type',
+                'hint' => 'ประเภทที่รองรับ: ' . implode(', ', $valid_types)
+            ]);
+            return;
+        }
+
+        // Normalize savings_deposit to savings
+        if ($payment_type === 'savings_deposit') {
+            $payment_type = 'savings';
+        }
+
+        // Get optional fields
+        $classification_notes = trim($input['classification_notes'] ?? '');
+        $current_period = isset($input['current_period']) ? (int) $input['current_period'] : null;
+        $installment_period = isset($input['installment_period']) ? (int) $input['installment_period'] : null;
+
+        // Validate installment fields if payment_type is installment
+        if ($payment_type === 'installment') {
+            if (!$current_period || $current_period < 1) {
+                $current_period = 1;
+            }
+            if (!$installment_period || $installment_period < 1) {
+                $installment_period = 3; // default 3 installments
+            }
+            if ($current_period > $installment_period) {
+                http_response_code(400);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'งวดปัจจุบันต้องไม่เกินจำนวนงวดทั้งหมด',
+                    'field' => 'current_period'
+                ]);
+                return;
+            }
+        }
+
+        // Build update query
+        $update_fields = [
+            'payment_type' => $payment_type,
+            'status' => 'verified',
+            'verified_by' => $admin_id,
+            'verified_at' => date('Y-m-d H:i:s'),
+            'updated_at' => date('Y-m-d H:i:s')
+        ];
+
+        // Add installment info if applicable
+        if ($payment_type === 'installment') {
+            $update_fields['current_period'] = $current_period;
+            $update_fields['installment_period'] = $installment_period;
+        }
+
+        // Add classification notes to admin_note if provided
+        if ($classification_notes) {
+            $existing_note = $payment['admin_note'] ?? '';
+            $update_fields['admin_note'] = trim($existing_note . "\n[Classification] " . $classification_notes);
+        }
+
+        // Build SQL
+        $set_parts = [];
+        $values = [];
+        foreach ($update_fields as $field => $value) {
+            $set_parts[] = "`$field` = ?";
+            $values[] = $value;
+        }
+        $values[] = $payment['id'];
+
+        $sql = "UPDATE payments SET " . implode(', ', $set_parts) . " WHERE id = ?";
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($values);
+
+        // Build success message
+        $type_labels = [
+            'full' => 'จ่ายเต็ม',
+            'installment' => 'ผ่อนชำระ',
+            'savings' => 'ออมเงิน',
+            'deposit' => 'มัดจำ'
+        ];
+        $type_label = $type_labels[$payment_type] ?? $payment_type;
+
+        $success_msg = "อนุมัติและจัดประเภทเป็น \"$type_label\" เรียบร้อย";
+        if ($payment_type === 'installment') {
+            $success_msg .= " (งวดที่ $current_period/$installment_period)";
+        }
+
+        echo json_encode([
+            'success' => true,
+            'message' => $success_msg,
+            'data' => [
+                'payment_id' => $payment['id'],
+                'payment_type' => $payment_type,
+                'status' => 'verified',
+                'current_period' => $current_period,
+                'installment_period' => $installment_period
+            ]
+        ]);
+
+    } catch (Exception $e) {
+        error_log("Classify payment error: " . $e->getMessage());
+        http_response_code(500);
+        echo json_encode([
+            'success' => false,
+            'message' => 'ไม่สามารถบันทึกได้: ' . $e->getMessage()
+        ]);
+    }
+}
+
+/**
+ * Link repair to payment
+ */
+function linkRepairToPayment($pdo, $payment, $input, $admin_id, $tenant_id)
+{
+    try {
+        $repair_id = $input['repair_id'] ?? null;
+
+        if (!$repair_id) {
+            http_response_code(400);
+            echo json_encode([
+                'success' => false,
+                'message' => 'กรุณาเลือกงานซ่อมที่ต้องการเชื่อมโยง',
+                'field' => 'repair_id'
+            ]);
+            return;
+        }
+
+        // Verify repair exists
+        $stmt = $pdo->prepare("
+            SELECT id, repair_no, item_name, customer_name, final_cost, status
+            FROM repairs 
+            WHERE id = ? AND tenant_id = ?
+        ");
+        $stmt->execute([$repair_id, $tenant_id]);
+        $repair = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$repair) {
+            http_response_code(404);
+            echo json_encode([
+                'success' => false,
+                'message' => 'ไม่พบงานซ่อมที่ระบุ'
+            ]);
+            return;
+        }
+
+        // Update payment with repair reference
+        $stmt = $pdo->prepare("
+            UPDATE payments 
+            SET repair_id = ?,
+                reference_type = 'repair',
+                reference_id = ?,
+                updated_at = NOW()
+            WHERE id = ?
+        ");
+        $stmt->execute([$repair_id, $repair_id, $payment['id']]);
+
+        echo json_encode([
+            'success' => true,
+            'message' => 'เชื่อมโยงงานซ่อม ' . $repair['repair_no'] . ' เรียบร้อย',
+            'data' => [
+                'payment_id' => $payment['id'],
+                'repair_id' => $repair_id,
+                'repair_no' => $repair['repair_no'],
+                'item_name' => $repair['item_name']
+            ]
+        ]);
+
+    } catch (Exception $e) {
+        error_log("Link repair error: " . $e->getMessage());
+        http_response_code(500);
+        echo json_encode([
+            'success' => false,
+            'message' => 'ไม่สามารถเชื่อมโยงได้: ' . $e->getMessage()
+        ]);
+    }
+}
+
+/**
+ * Unlink repair from payment
+ */
+function unlinkRepairFromPayment($pdo, $payment, $admin_id)
+{
+    try {
+        $stmt = $pdo->prepare("
+            UPDATE payments 
+            SET repair_id = NULL,
+                reference_type = CASE 
+                    WHEN order_id IS NOT NULL THEN 'order'
+                    ELSE 'unknown'
+                END,
+                reference_id = order_id,
+                updated_at = NOW()
+            WHERE id = ?
+        ");
+        $stmt->execute([$payment['id']]);
+
+        echo json_encode([
+            'success' => true,
+            'message' => 'ยกเลิกการเชื่อมโยงงานซ่อมเรียบร้อย'
+        ]);
+
+    } catch (Exception $e) {
+        error_log("Unlink repair error: " . $e->getMessage());
         http_response_code(500);
         echo json_encode([
             'success' => false,

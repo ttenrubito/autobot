@@ -427,7 +427,7 @@ function convertDepositToOrder($db, int $depositId) {
         
         // Create order
         $sql = "INSERT INTO orders (
-            order_number, user_id, customer_profile_id,
+            order_number, user_id, platform_user_id, customer_profile_id,
             order_type, deposit_id,
             subtotal, total_amount, paid_amount,
             status, payment_status,
@@ -435,7 +435,7 @@ function convertDepositToOrder($db, int $depositId) {
             note, admin_note,
             created_at, updated_at
         ) VALUES (
-            ?, ?, ?,
+            ?, ?, ?, ?,
             ?, ?,
             ?, ?, ?,
             'pending_payment', 'partial',
@@ -448,7 +448,8 @@ function convertDepositToOrder($db, int $depositId) {
         
         $db->execute($sql, [
             $orderNo,
-            $deposit['customer_id'],
+            $deposit['user_id'] ?? null, // Shop owner's user_id
+            $deposit['external_user_id'], // platform_user_id for JOIN
             $deposit['customer_profile_id'],
             $orderType,
             $depositId,

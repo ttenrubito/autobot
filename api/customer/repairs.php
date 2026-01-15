@@ -41,7 +41,7 @@ $repair_id = $_GET['id'] ?? null;
 
 try {
     $pdo = getDB();
-    
+
     // Check if repairs table exists
     $tableCheck = $pdo->query("SHOW TABLES LIKE 'repairs'");
     if ($tableCheck->rowCount() === 0) {
@@ -63,9 +63,11 @@ try {
         ]);
         exit;
     }
-    
+
     if ($method === 'GET') {
-        if ($repair_id) {
+        if ($action === 'search') {
+            searchRepairs($pdo, $user_id);
+        } elseif ($repair_id) {
             getRepairDetail($pdo, $repair_id, $user_id);
         } else {
             getAllRepairs($pdo, $user_id);
@@ -83,7 +85,7 @@ try {
         http_response_code(405);
         echo json_encode(['success' => false, 'message' => 'Method not allowed']);
     }
-    
+
 } catch (Exception $e) {
     error_log("Customer Repairs API Error: " . $e->getMessage());
     http_response_code(500);
@@ -97,14 +99,16 @@ try {
 /**
  * Detect schema type for repairs table
  */
-function getRepairsSchema($pdo) {
+function getRepairsSchema($pdo)
+{
     static $schema = null;
-    if ($schema !== null) return $schema;
-    
+    if ($schema !== null)
+        return $schema;
+
     try {
         $stmt = $pdo->query("SHOW COLUMNS FROM repairs LIKE 'item_type'");
         $hasItemType = $stmt->rowCount() > 0;
-        
+
         if ($hasItemType) {
             // Production schema
             $schema = [
@@ -137,38 +141,100 @@ function getRepairsSchema($pdo) {
     } catch (Exception $e) {
         $schema = ['type' => 'production'];
     }
-    
+
     return $schema;
+}
+
+/**
+ * Search repairs for autocomplete
+ */
+function searchRepairs($pdo, $user_id)
+{
+    $query = trim($_GET['q'] ?? '');
+    $limit = min(20, max(1, (int) ($_GET['limit'] ?? 10)));
+
+    // Get tenant_id for user
+    $userStmt = $pdo->prepare("SELECT tenant_id FROM users WHERE id = ?");
+    $userStmt->execute([$user_id]);
+    $userRow = $userStmt->fetch(PDO::FETCH_ASSOC);
+    $tenant_id = $userRow['tenant_id'] ?? 'default';
+
+    $s = getRepairsSchema($pdo);
+
+    // Build search query
+    $where = ["r.tenant_id = ?"];
+    $params = [$tenant_id];
+
+    if ($query !== '') {
+        $where[] = "(r.repair_no LIKE ? OR r.customer_name LIKE ? OR r.{$s['name']} LIKE ?)";
+        $params[] = "%$query%";
+        $params[] = "%$query%";
+        $params[] = "%$query%";
+    }
+
+    $whereClause = implode(' AND ', $where);
+
+    $sql = "
+        SELECT 
+            r.id,
+            r.repair_no,
+            r.{$s['name']} as item_name,
+            r.customer_name,
+            r.{$s['final']} as final_cost,
+            r.status,
+            r.created_at
+        FROM repairs r
+        WHERE $whereClause
+        ORDER BY r.created_at DESC
+        LIMIT ?
+    ";
+
+    $params[] = $limit;
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+    $repairs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Add display label
+    foreach ($repairs as &$r) {
+        $r['display_label'] = $r['repair_no'] . ' - ' . ($r['item_name'] ?: 'งานซ่อม');
+        $r['final_cost'] = $r['final_cost'] ? (float) $r['final_cost'] : null;
+    }
+
+    echo json_encode([
+        'success' => true,
+        'data' => $repairs
+    ]);
 }
 
 /**
  * Get all repairs for customer
  */
-function getAllRepairs($pdo, $user_id) {
-    $page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
-    $limit = isset($_GET['limit']) ? min(100, max(1, (int)$_GET['limit'])) : 20;
+function getAllRepairs($pdo, $user_id)
+{
+    $page = isset($_GET['page']) ? max(1, (int) $_GET['page']) : 1;
+    $limit = isset($_GET['limit']) ? min(100, max(1, (int) $_GET['limit'])) : 20;
     $offset = ($page - 1) * $limit;
-    
+
     $status = isset($_GET['status']) ? $_GET['status'] : null;
-    
-    $where = ['r.customer_id = ?'];
+
+    $where = ['r.user_id = ?'];
     $params = [$user_id];
-    
+
     if ($status) {
         $where[] = 'r.status = ?';
         $params[] = $status;
     }
-    
+
     $where_clause = implode(' AND ', $where);
-    
+
     // Get total count
     $countStmt = $pdo->prepare("SELECT COUNT(*) FROM repairs r WHERE $where_clause");
     $countStmt->execute($params);
-    $total = (int)$countStmt->fetchColumn();
-    
+    $total = (int) $countStmt->fetchColumn();
+
     // Get schema
     $s = getRepairsSchema($pdo);
-    
+
     // Build dynamic SQL
     $sql = "
         SELECT 
@@ -204,13 +270,13 @@ function getAllRepairs($pdo, $user_id) {
         ORDER BY r.created_at DESC
         LIMIT ? OFFSET ?
     ";
-    
+
     $stmt = $pdo->prepare($sql);
     $params[] = $limit;
     $params[] = $offset;
     $stmt->execute($params);
     $repairs = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
+
     // Add status display (support both schemas)
     $statusLabels = [
         'received' => 'รับของแล้ว',
@@ -228,14 +294,14 @@ function getAllRepairs($pdo, $user_id) {
         'cancelled' => 'ยกเลิก',
         'unclaimed' => 'ไม่มารับ'
     ];
-    
+
     foreach ($repairs as &$r) {
         $r['status_display'] = $statusLabels[$r['status']] ?? $r['status'];
-        $r['quoted_amount'] = $r['quoted_amount'] ? (float)$r['quoted_amount'] : null;
-        $r['final_cost'] = isset($r['final_cost']) ? (float)$r['final_cost'] : null;
-        $r['progress_percent'] = (int)$r['progress_percent'];
+        $r['quoted_amount'] = $r['quoted_amount'] ? (float) $r['quoted_amount'] : null;
+        $r['final_cost'] = isset($r['final_cost']) ? (float) $r['final_cost'] : null;
+        $r['progress_percent'] = (int) $r['progress_percent'];
     }
-    
+
     echo json_encode([
         'success' => true,
         'data' => $repairs,
@@ -252,7 +318,8 @@ function getAllRepairs($pdo, $user_id) {
 /**
  * Get summary statistics
  */
-function getSummary($pdo, $user_id) {
+function getSummary($pdo, $user_id)
+{
     $stmt = $pdo->prepare("
         SELECT 
             COUNT(CASE WHEN status NOT IN ('picked_up', 'cancelled', 'unclaimed') THEN 1 END) as active_count,
@@ -260,33 +327,34 @@ function getSummary($pdo, $user_id) {
             COUNT(CASE WHEN status = 'picked_up' THEN 1 END) as completed_count,
             SUM(CASE WHEN status = 'picked_up' THEN final_cost ELSE 0 END) as total_paid
         FROM repairs
-        WHERE customer_id = ?
+        WHERE user_id = ?
     ");
     $stmt->execute([$user_id]);
     $summary = $stmt->fetch(PDO::FETCH_ASSOC);
-    
+
     return [
-        'active_count' => (int)($summary['active_count'] ?? 0),
-        'awaiting_approval_count' => (int)($summary['awaiting_approval_count'] ?? 0),
-        'completed_count' => (int)($summary['completed_count'] ?? 0),
-        'total_paid' => (float)($summary['total_paid'] ?? 0)
+        'active_count' => (int) ($summary['active_count'] ?? 0),
+        'awaiting_approval_count' => (int) ($summary['awaiting_approval_count'] ?? 0),
+        'completed_count' => (int) ($summary['completed_count'] ?? 0),
+        'total_paid' => (float) ($summary['total_paid'] ?? 0)
     ];
 }
 
 /**
  * Get specific repair detail
  */
-function getRepairDetail($pdo, $repair_id, $user_id) {
-    $stmt = $pdo->prepare("SELECT * FROM repairs WHERE id = ? AND customer_id = ?");
+function getRepairDetail($pdo, $repair_id, $user_id)
+{
+    $stmt = $pdo->prepare("SELECT * FROM repairs WHERE id = ? AND user_id = ?");
     $stmt->execute([$repair_id, $user_id]);
     $repair = $stmt->fetch(PDO::FETCH_ASSOC);
-    
+
     if (!$repair) {
         http_response_code(404);
         echo json_encode(['success' => false, 'message' => 'ไม่พบรายการซ่อม']);
         return;
     }
-    
+
     $statusLabels = [
         'pending' => 'รอรับของ',
         'received' => 'รับของแล้ว',
@@ -297,11 +365,11 @@ function getRepairDetail($pdo, $repair_id, $user_id) {
         'completed' => 'ซ่อมเสร็จ',
         'cancelled' => 'ยกเลิก'
     ];
-    
+
     $repair['status_display'] = $statusLabels[$repair['status']] ?? $repair['status'];
-    $repair['quoted_amount'] = $repair['quoted_amount'] ? (float)$repair['quoted_amount'] : null;
-    $repair['paid_amount'] = $repair['paid_amount'] ? (float)$repair['paid_amount'] : null;
-    
+    $repair['quoted_amount'] = $repair['quoted_amount'] ? (float) $repair['quoted_amount'] : null;
+    $repair['paid_amount'] = $repair['paid_amount'] ? (float) $repair['paid_amount'] : null;
+
     // Progress calculation
     $progressMap = [
         'pending' => 10,
@@ -314,17 +382,17 @@ function getRepairDetail($pdo, $repair_id, $user_id) {
         'cancelled' => 0
     ];
     $repair['progress_percent'] = $progressMap[$repair['status']] ?? 0;
-    
+
     // Action flags
-    $repair['can_approve'] = $repair['status'] === 'quoted' && 
-                             $repair['quote_valid_until'] && 
-                             strtotime($repair['quote_valid_until']) >= strtotime('today');
+    $repair['can_approve'] = $repair['status'] === 'quoted' &&
+        $repair['quote_valid_until'] &&
+        strtotime($repair['quote_valid_until']) >= strtotime('today');
     $repair['needs_payment'] = $repair['status'] === 'completed' && !$repair['paid_at'];
-    
+
     // Timeline
     $timeline = [];
     $timeline[] = ['event' => 'สร้างรายการ', 'date' => $repair['created_at'], 'completed' => true];
-    
+
     if ($repair['status'] !== 'pending') {
         $timeline[] = ['event' => 'รับของแล้ว', 'date' => null, 'completed' => true];
     }
@@ -343,12 +411,12 @@ function getRepairDetail($pdo, $repair_id, $user_id) {
     if ($repair['paid_at']) {
         $timeline[] = ['event' => 'ชำระเงินแล้ว', 'date' => $repair['paid_at'], 'completed' => true];
     }
-    
+
     // Get bank accounts
     $bankStmt = $pdo->prepare("SELECT * FROM bank_accounts WHERE is_active = 1 ORDER BY is_default DESC");
     $bankStmt->execute();
     $bankAccounts = $bankStmt->fetchAll(PDO::FETCH_ASSOC);
-    
+
     echo json_encode([
         'success' => true,
         'data' => $repair,
@@ -360,41 +428,42 @@ function getRepairDetail($pdo, $repair_id, $user_id) {
 /**
  * Approve quote
  */
-function approveQuote($pdo, $user_id) {
+function approveQuote($pdo, $user_id)
+{
     $input = json_decode(file_get_contents('php://input'), true);
-    
+
     $repair_id = $input['repair_id'] ?? null;
-    
+
     if (!$repair_id) {
         http_response_code(400);
         echo json_encode(['success' => false, 'message' => 'กรุณาระบุรายการซ่อม']);
         return;
     }
-    
+
     // Get repair
     $stmt = $pdo->prepare("SELECT * FROM repairs WHERE id = ? AND user_id = ?");
     $stmt->execute([$repair_id, $user_id]);
     $repair = $stmt->fetch(PDO::FETCH_ASSOC);
-    
+
     if (!$repair) {
         http_response_code(404);
         echo json_encode(['success' => false, 'message' => 'ไม่พบรายการซ่อม']);
         return;
     }
-    
+
     if ($repair['status'] !== 'quoted') {
         http_response_code(400);
         echo json_encode(['success' => false, 'message' => 'สถานะไม่ถูกต้อง']);
         return;
     }
-    
+
     // Check quote validity
     if ($repair['quote_valid_until'] && strtotime($repair['quote_valid_until']) < strtotime('today')) {
         http_response_code(400);
         echo json_encode(['success' => false, 'message' => 'ใบเสนอราคาหมดอายุแล้ว กรุณาติดต่อเจ้าหน้าที่']);
         return;
     }
-    
+
     // Update status
     $updateStmt = $pdo->prepare("
         UPDATE repairs 
@@ -402,7 +471,7 @@ function approveQuote($pdo, $user_id) {
         WHERE id = ?
     ");
     $updateStmt->execute([$repair_id]);
-    
+
     // Create notification case
     $caseStmt = $pdo->prepare("
         INSERT INTO cases (
@@ -421,14 +490,14 @@ function approveQuote($pdo, $user_id) {
         "ลูกค้าอนุมัติงานซ่อม: {$repair['repair_no']}",
         "ลูกค้าอนุมัติใบเสนอราคาแล้ว สามารถเริ่มดำเนินการซ่อมได้"
     ]);
-    
+
     echo json_encode([
         'success' => true,
         'message' => 'อนุมัติใบเสนอราคาเรียบร้อยแล้ว',
         'data' => [
             'repair_id' => $repair_id,
             'repair_no' => $repair['repair_no'],
-            'quoted_amount' => (float)$repair['quoted_amount']
+            'quoted_amount' => (float) $repair['quoted_amount']
         ]
     ]);
 }
@@ -436,48 +505,49 @@ function approveQuote($pdo, $user_id) {
 /**
  * Submit payment
  */
-function submitPayment($pdo, $user_id) {
+function submitPayment($pdo, $user_id)
+{
     $input = json_decode(file_get_contents('php://input'), true);
-    
+
     $repair_id = $input['repair_id'] ?? null;
     $slip_image_url = $input['slip_image_url'] ?? null;
-    $amount = isset($input['amount']) ? (float)$input['amount'] : null;
-    
+    $amount = isset($input['amount']) ? (float) $input['amount'] : null;
+
     if (!$repair_id) {
         http_response_code(400);
         echo json_encode(['success' => false, 'message' => 'กรุณาระบุรายการซ่อม']);
         return;
     }
-    
+
     if (!$slip_image_url) {
         http_response_code(400);
         echo json_encode(['success' => false, 'message' => 'กรุณาแนบสลิปการโอน']);
         return;
     }
-    
+
     // Get repair
-    $stmt = $pdo->prepare("SELECT * FROM repairs WHERE id = ? AND customer_id = ?");
+    $stmt = $pdo->prepare("SELECT * FROM repairs WHERE id = ? AND user_id = ?");
     $stmt->execute([$repair_id, $user_id]);
     $repair = $stmt->fetch(PDO::FETCH_ASSOC);
-    
+
     if (!$repair) {
         http_response_code(404);
         echo json_encode(['success' => false, 'message' => 'ไม่พบรายการซ่อม']);
         return;
     }
-    
+
     if ($repair['status'] !== 'completed') {
         http_response_code(400);
         echo json_encode(['success' => false, 'message' => 'งานซ่อมยังไม่เสร็จสมบูรณ์']);
         return;
     }
-    
+
     if ($repair['paid_at']) {
         http_response_code(400);
         echo json_encode(['success' => false, 'message' => 'ชำระเงินไปแล้ว']);
         return;
     }
-    
+
     $pdo->beginTransaction();
     try {
         // Update repair with payment info
@@ -489,7 +559,7 @@ function submitPayment($pdo, $user_id) {
             WHERE id = ?
         ");
         $updateStmt->execute([$slip_image_url, $repair_id]);
-        
+
         // Create case for admin verification
         $caseStmt = $pdo->prepare("
             INSERT INTO cases (
@@ -508,19 +578,19 @@ function submitPayment($pdo, $user_id) {
             "ตรวจสอบสลิปค่าซ่อม: {$repair['repair_no']}",
             "ลูกค้าส่งสลิปชำระค่าซ่อม\nรหัส: {$repair['repair_no']}\nยอด: {$repair['quoted_amount']} บาท"
         ]);
-        
+
         $pdo->commit();
-        
+
         echo json_encode([
             'success' => true,
             'message' => 'ส่งสลิปเรียบร้อยแล้ว รอเจ้าหน้าที่ตรวจสอบ',
             'data' => [
                 'repair_id' => $repair_id,
                 'repair_no' => $repair['repair_no'],
-                'amount' => (float)$repair['quoted_amount']
+                'amount' => (float) $repair['quoted_amount']
             ]
         ]);
-        
+
     } catch (Exception $e) {
         $pdo->rollBack();
         throw $e;

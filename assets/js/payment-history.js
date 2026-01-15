@@ -44,7 +44,7 @@ document.addEventListener('DOMContentLoaded', () => {
 async function loadPayments() {
     const tableBody = document.getElementById('paymentsTableBody');
     const mobileContainer = document.getElementById('paymentsMobileContainer');
-    
+
     // Show loading state
     const loadingHtml = `
         <div class="loading-state" style="text-align:center;padding:2rem;">
@@ -52,14 +52,14 @@ async function loadPayments() {
             <p>กำลังโหลดประวัติการชำระเงิน...</p>
         </div>
     `;
-    
+
     if (tableBody) {
         tableBody.innerHTML = `<tr><td colspan="7">${loadingHtml}</td></tr>`;
     }
     if (mobileContainer) {
         mobileContainer.innerHTML = loadingHtml;
     }
-    
+
     try {
         const result = await apiCall(API_ENDPOINTS.CUSTOMER_PAYMENTS);
 
@@ -68,12 +68,8 @@ async function loadPayments() {
                 ? result.data.payments
                 : (Array.isArray(result.data) ? result.data : []);
 
-            // Sort by payment date (newest first)
-            allPayments.sort((a, b) => {
-                const dateA = new Date(a.payment_date || a.created_at);
-                const dateB = new Date(b.payment_date || b.created_at);
-                return dateB - dateA;
-            });
+            // Data is already sorted by id DESC from API (newest first)
+            // No need to re-sort here
 
             filteredPayments = allPayments;
             currentPage = 1;
@@ -94,12 +90,12 @@ function renderPayments() {
 
     // Empty state
     if (!filteredPayments || filteredPayments.length === 0) {
-        const emptyMessage = searchQuery 
+        const emptyMessage = searchQuery
             ? `ไม่พบรายการที่ตรงกับ "${searchQuery}"`
-            : currentFilter 
+            : currentFilter
                 ? 'ไม่พบรายการในหมวดนี้'
                 : 'ไม่พบรายการชำระเงิน';
-        
+
         const emptyHtml = `
             <div class="payments-empty-state">
                 <div class="empty-icon">💰</div>
@@ -111,18 +107,18 @@ function renderPayments() {
                 ` : ''}
             </div>
         `;
-        
+
         if (tableBody) {
             tableBody.innerHTML = `<tr><td colspan="7">${emptyHtml}</td></tr>`;
         }
         if (mobileContainer) {
             mobileContainer.innerHTML = emptyHtml;
         }
-        
+
         // Hide pagination
         const paginationEl = document.getElementById('paymentPagination');
         if (paginationEl) paginationEl.style.display = 'none';
-        
+
         return;
     }
 
@@ -141,13 +137,13 @@ function renderPayments() {
             const statusText = payment.status === 'verified' ? 'อนุมัติแล้ว' :
                 payment.status === 'pending' ? 'รอตรวจสอบ' : 'ปฏิเสธ';
 
-            const typeClass = payment.payment_type === 'full' ? 'full' : 
+            const typeClass = payment.payment_type === 'full' ? 'full' :
                 payment.payment_type === 'savings' ? 'savings' : 'installment';
-            const typeIcon = payment.payment_type === 'full' ? '💳' : 
+            const typeIcon = payment.payment_type === 'full' ? '💳' :
                 payment.payment_type === 'savings' ? '🐷' : '📅';
             const typeText = payment.payment_type === 'full' ? 'จ่ายเต็ม' :
                 payment.payment_type === 'savings' ? 'ออมเงิน' :
-                `งวด ${payment.current_period || 1}/${payment.installment_period || 1}`;
+                    `งวด ${payment.current_period || 1}/${payment.installment_period || 1}`;
 
             const orderNo = payment.order_no || '';
             const isHighlighted = targetOrderNoFromQuery && String(orderNo) === String(targetOrderNoFromQuery);
@@ -158,8 +154,8 @@ function renderPayments() {
             const customerPlatform = payment.customer_platform || 'web';
             const customerAvatar = validatePaymentAvatarUrl(payment.customer_avatar);
             const platformIcon = getPaymentPlatformIcon(customerPlatform);
-            
-            const avatarHtml = customerAvatar 
+
+            const avatarHtml = customerAvatar
                 ? `<img src="${customerAvatar}" alt="${customerName}" class="customer-avatar-sm" onerror="this.outerHTML='<div class=\\'customer-avatar-placeholder-sm\\'>${customerName.charAt(0).toUpperCase()}</div>'">`
                 : `<div class="customer-avatar-placeholder-sm">${customerName.charAt(0).toUpperCase()}</div>`;
 
@@ -195,21 +191,21 @@ function renderPayments() {
             const statusText = payment.status === 'verified' ? 'อนุมัติแล้ว' :
                 payment.status === 'pending' ? 'รอตรวจสอบ' : 'ปฏิเสธ';
 
-            const typeClass = payment.payment_type === 'full' ? 'full' : 
+            const typeClass = payment.payment_type === 'full' ? 'full' :
                 payment.payment_type === 'savings' ? 'savings' : 'installment';
-            const typeIcon = payment.payment_type === 'full' ? '💳' : 
+            const typeIcon = payment.payment_type === 'full' ? '💳' :
                 payment.payment_type === 'savings' ? '🐷' : '📅';
             const typeText = payment.payment_type === 'full' ? 'จ่ายเต็ม' :
                 payment.payment_type === 'savings' ? 'ออมเงิน' :
-                `งวด ${payment.current_period || 1}/${payment.installment_period || 1}`;
+                    `งวด ${payment.current_period || 1}/${payment.installment_period || 1}`;
 
             // Customer profile
             const customerName = payment.customer_name || 'ลูกค้า';
             const customerPlatform = payment.customer_platform || 'web';
             const customerAvatar = validatePaymentAvatarUrl(payment.customer_avatar);
             const platformIcon = getPaymentPlatformIcon(customerPlatform);
-            
-            const avatarHtml = customerAvatar 
+
+            const avatarHtml = customerAvatar
                 ? `<img src="${customerAvatar}" alt="${customerName}" class="customer-avatar-sm" onerror="this.outerHTML='<div class=\\'customer-avatar-placeholder-sm\\'>${customerName.charAt(0).toUpperCase()}</div>'">`
                 : `<div class="customer-avatar-placeholder-sm">${customerName.charAt(0).toUpperCase()}</div>`;
 
@@ -232,7 +228,7 @@ function renderPayments() {
             `;
         }).join('');
     }
-    
+
     // Render pagination
     renderPaginationPayment(totalItems, totalPages, startIndex, endIndex);
 }
@@ -248,19 +244,19 @@ function validatePaymentAvatarUrl(url) {
 // Helper: Get platform SVG icon for payments
 function getPaymentPlatformIcon(platform) {
     const p = String(platform || '').toLowerCase();
-    
+
     if (p === 'line') {
         return `<svg class="platform-icon" viewBox="0 0 24 24" fill="#06C755" width="14" height="14">
             <path d="M12 2C6.48 2 2 5.88 2 10.54c0 3.77 3.02 6.96 7.12 7.93.28.06.66.19.75.44.09.23.06.59.03.83l-.12.74c-.04.23-.18.91.79.5.97-.42 5.22-3.07 7.12-5.26C19.42 13.69 22 12.26 22 10.54 22 5.88 17.52 2 12 2zm-4.5 11.5h-2a.5.5 0 01-.5-.5v-4a.5.5 0 011 0v3.5h1.5a.5.5 0 010 1zm2-4.5a.5.5 0 011 0v4a.5.5 0 01-1 0v-4zm5.5 4a.5.5 0 01-.5.5h-2a.5.5 0 01-.5-.5v-4a.5.5 0 011 0v3.5h1.5a.5.5 0 01.5.5zm3.35.35a.5.5 0 01-.7 0L16 11.71V13a.5.5 0 01-1 0V9a.5.5 0 011 0v1.29l1.65-1.64a.5.5 0 01.7.7L16.71 11l1.64 1.65a.5.5 0 010 .7z"/>
         </svg>`;
     }
-    
+
     if (p === 'facebook' || p === 'messenger') {
         return `<svg class="platform-icon" viewBox="0 0 24 24" fill="#1877F2" width="14" height="14">
             <path d="M12 2C6.477 2 2 6.145 2 11.259c0 2.913 1.454 5.512 3.726 7.21V22l3.405-1.869c.909.252 1.871.388 2.869.388 5.523 0 10-4.145 10-9.259S17.523 2 12 2zm1.008 12.476l-2.548-2.72-4.973 2.72 5.47-5.806 2.612 2.72 4.909-2.72-5.47 5.806z"/>
         </svg>`;
     }
-    
+
     if (p === 'instagram') {
         return `<svg class="platform-icon" viewBox="0 0 24 24" width="14" height="14">
             <defs>
@@ -275,7 +271,7 @@ function getPaymentPlatformIcon(platform) {
             <path fill="url(#ig-grad)" d="M12 2c2.717 0 3.056.01 4.122.06 1.065.05 1.79.217 2.428.465.66.254 1.216.598 1.772 1.153.509.5.902 1.105 1.153 1.772.247.637.415 1.363.465 2.428.047 1.066.06 1.405.06 4.122s-.013 3.056-.06 4.122c-.05 1.065-.218 1.79-.465 2.428a4.883 4.883 0 01-1.153 1.772c-.5.508-1.105.902-1.772 1.153-.637.247-1.363.415-2.428.465-1.066.047-1.405.06-4.122.06s-3.056-.013-4.122-.06c-1.065-.05-1.79-.218-2.428-.465a4.89 4.89 0 01-1.772-1.153 4.904 4.904 0 01-1.153-1.772c-.248-.637-.415-1.363-.465-2.428C2.013 15.056 2 14.717 2 12s.01-3.056.06-4.122c.05-1.066.217-1.79.465-2.428a4.88 4.88 0 011.153-1.772A4.897 4.897 0 015.45 2.525c.638-.248 1.362-.415 2.428-.465C8.944 2.013 9.283 2 12 2zm0 5a5 5 0 100 10 5 5 0 000-10zm0 8.25a3.25 3.25 0 110-6.5 3.25 3.25 0 010 6.5zm5.25-8.5a1 1 0 11-2 0 1 1 0 012 0z"/>
         </svg>`;
     }
-    
+
     // Default web/other
     return `<svg class="platform-icon" viewBox="0 0 24 24" fill="#6B7280" width="14" height="14">
         <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
@@ -290,7 +286,7 @@ function filterPayments(type, evt) {
     document.querySelectorAll('.filter-tab, .filter-chip').forEach(tab => tab.classList.remove('active'));
 
     const target = (evt && (evt.currentTarget || evt.target)) ? (evt.currentTarget || evt.target) : null;
-    const btn = target ? target.closest('.filter-tab, .filter-chip') : 
+    const btn = target ? target.closest('.filter-tab, .filter-chip') :
         (document.querySelector(`.filter-chip[data-filter="${type}"]`) || document.querySelector(`.filter-tab[data-filter="${type}"]`));
     if (btn) btn.classList.add('active');
 
@@ -313,10 +309,10 @@ function renderPaginationPayment(totalItems, totalPages, startIndex, endIndex) {
     }
 
     paginationEl.style.display = 'flex';
-    
+
     const prevDisabled = currentPage === 1 ? 'disabled' : '';
     const nextDisabled = currentPage === totalPages ? 'disabled' : '';
-    
+
     paginationEl.innerHTML = `
         <div class="pagination-info">
             แสดง ${startIndex + 1}-${endIndex} จาก ${totalItems} รายการ
@@ -343,10 +339,10 @@ function renderPaginationPayment(totalItems, totalPages, startIndex, endIndex) {
 function goToPagePayment(page) {
     const totalPages = Math.ceil(filteredPayments.length / ITEMS_PER_PAGE);
     if (page < 1 || page > totalPages) return;
-    
+
     currentPage = page;
     renderPayments();
-    
+
     // Scroll to top
     document.getElementById('paymentsContainer').scrollIntoView({ behavior: 'smooth' });
 }
@@ -354,7 +350,7 @@ function goToPagePayment(page) {
 // Setup search and filters
 function setupSearchAndFilters() {
     const searchInput = document.getElementById('paymentSearch');
-    
+
     if (searchInput) {
         searchInput.addEventListener('input', (e) => {
             searchQuery = e.target.value.trim().toLowerCase();
@@ -369,15 +365,15 @@ function clearFilters() {
     if (searchInput) searchInput.value = '';
     searchQuery = '';
     currentFilter = '';
-    
+
     // Clear date range
     clearDateFilter();
-    
+
     // Reset active tab to "all"
     document.querySelectorAll('.filter-tab').forEach(tab => tab.classList.remove('active'));
     const allTab = document.querySelector('.filter-tab[data-filter=""]');
     if (allTab) allTab.classList.add('active');
-    
+
     applyAllFilters(); // Use unified filter function
 }
 
@@ -391,14 +387,14 @@ function setupKeyboardShortcuts() {
                 closePaymentModal();
             }
         }
-        
+
         // Ctrl/Cmd + K - Focus search
         if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
             e.preventDefault();
             const searchInput = document.getElementById('paymentSearch');
             if (searchInput) searchInput.focus();
         }
-        
+
         // Arrow keys for pagination (when not in input)
         if (!['INPUT', 'TEXTAREA'].includes(e.target.tagName)) {
             if (e.key === 'ArrowLeft') {
@@ -464,7 +460,7 @@ async function viewPaymentDetail(paymentId) {
 
 function normalizeSlipUrl(url) {
     if (!url) return '';
-    
+
     // If already absolute URL (http/https), return as-is
     if (/^https?:\/\//i.test(url)) return url;
 
@@ -477,7 +473,7 @@ function normalizeSlipUrl(url) {
     // Handle mock slip images (slip-kbank.svg, slip-scb.svg, slip-promptpay.svg)
     const mockSlipPattern = /^(slip-.*\.svg|receipt-mock\.svg)$/i;
     const filenameOnly = u.split('/').pop();
-    
+
     if (mockSlipPattern.test(filenameOnly)) {
         return (typeof PATH !== 'undefined' && PATH.image)
             ? PATH.image(filenameOnly)
@@ -517,26 +513,26 @@ function renderPaymentDetails(payment) {
     let customerAvatar = validatePaymentAvatarUrl(payment.customer_avatar);
     let customerPlatform = payment.customer_platform || 'web';
     let customerPhone = payment.customer_phone || '';
-    
+
     // Generate initials for placeholder
     const initials = customerName.split(' ').map(n => n.charAt(0)).join('').substr(0, 2).toUpperCase() || 'U';
-    
+
     // Build platform icon
     const platformIcon = getPaymentPlatformIcon(customerPlatform);
-    const platformLabel = customerPlatform === 'line' ? 'LINE' : 
-                          customerPlatform === 'facebook' ? 'Facebook' : 
-                          customerPlatform === 'instagram' ? 'Instagram' : 'Web';
-    
+    const platformLabel = customerPlatform === 'line' ? 'LINE' :
+        customerPlatform === 'facebook' ? 'Facebook' :
+            customerPlatform === 'instagram' ? 'Instagram' : 'Web';
+
     let html = `
         <div class="slip-chat-layout">
             <!-- Customer Profile Card -->
             <div class="detail-section customer-profile-card">
                 <div class="profile-header">
                     <div class="profile-avatar">
-                        ${customerAvatar 
-                            ? `<img src="${customerAvatar}" alt="${customerName}" onerror="this.outerHTML='<div class=\\'profile-avatar-placeholder\\'>${initials}</div>'">`
-                            : `<div class="profile-avatar-placeholder">${initials}</div>`
-                        }
+                        ${customerAvatar
+            ? `<img src="${customerAvatar}" alt="${customerName}" onerror="this.outerHTML='<div class=\\'profile-avatar-placeholder\\'>${initials}</div>'">`
+            : `<div class="profile-avatar-placeholder">${initials}</div>`
+        }
                     </div>
                     <div class="profile-info">
                         <h3 class="profile-name">${customerName}</h3>
@@ -552,8 +548,8 @@ function renderPaymentDetails(payment) {
             
             <!-- SLIP IMAGE (Most Important) -->
             ${payment.slip_image ? (() => {
-                const slipSrc = normalizeSlipUrl(payment.slip_image);
-                return `
+            const slipSrc = normalizeSlipUrl(payment.slip_image);
+            return `
                     <div class="detail-section">
                         <h3>🖼️ ใบเสร็จ/สลิปที่แนบมา</h3>
                         <div class="slip-image-container">
@@ -569,7 +565,7 @@ function renderPaymentDetails(payment) {
                         </div>
                     </div>
                 `;
-            })() : `
+        })() : `
                 <div class="detail-section">
                     <h3>🖼️ ใบเสร็จ/สลิป</h3>
                     <div class="slip-image-container" style="text-align: center; padding: 3rem 1.5rem;">
@@ -617,6 +613,40 @@ function renderPaymentDetails(payment) {
                 </div>
             </div>
 
+            <!-- Link to Repair with Autocomplete -->
+            <div class="detail-section">
+                <h3>🔧 อ้างอิงงานซ่อม</h3>
+                <div class="order-reference-container">
+                    ${payment.repair_id && payment.repair_no ? `
+                        <div class="current-order-link">
+                            <span class="order-badge" style="background: linear-gradient(135deg, #f97316 0%, #ea580c 100%);">
+                                <i class="fas fa-tools"></i> ${payment.repair_no}
+                            </span>
+                            <a class="btn btn-outline btn-sm" href="${pageUrlSafe('repairs.php')}?id=${payment.repair_id}">
+                                <i class="fas fa-external-link-alt"></i> ดูงานซ่อม
+                            </a>
+                            <button class="btn btn-outline btn-sm" onclick="unlinkRepairFromPayment(${payment.id})" title="ยกเลิกการเชื่อมโยง">
+                                <i class="fas fa-unlink"></i>
+                            </button>
+                        </div>
+                    ` : `
+                        <div class="order-search-inline">
+                            <div class="autocomplete-wrapper" style="flex:1;">
+                                <input type="text" id="repairSearchModal-${payment.id}" class="form-control" 
+                                       placeholder="ค้นหาเลขงานซ่อมเพื่อเชื่อมโยง..." 
+                                       autocomplete="off"
+                                       oninput="searchRepairsForPayment(${payment.id}, this.value)">
+                                <div id="repairSuggestionsModal-${payment.id}" class="autocomplete-suggestions"></div>
+                            </div>
+                            <button class="btn btn-primary btn-sm" onclick="linkRepairToPayment(${payment.id})" id="linkRepairBtn-${payment.id}" disabled>
+                                <i class="fas fa-link"></i> เชื่อมโยง
+                            </button>
+                        </div>
+                        <input type="hidden" id="selectedRepairId-${payment.id}" value="">
+                    `}
+                </div>
+            </div>
+
             <div class="detail-section">
                 <h3>📄 ข้อมูลการชำระเงิน</h3>
                 <div class="detail-grid">
@@ -649,12 +679,21 @@ function renderPaymentDetails(payment) {
                 </div>
             </div>
 
+            ${payment.source !== 'manual' ? `
             <div class="detail-section slip-chat-box">
                 <h3>💬 ประวัติการสนทนา</h3>
                 <div class="slip-chat-bubbles">
                     ${renderChatMessages(payment.chat_messages, customerName, payment, reviewHint)}
                 </div>
             </div>
+            ` : `
+            <div class="detail-section">
+                <h3>📝 แหล่งที่มา</h3>
+                <div style="padding: 1rem; background: #f0f9ff; border-radius: 8px; color: #0369a1;">
+                    <i class="fas fa-user-edit"></i> รายการนี้สร้างจากหน้าเว็บโดยผู้ใช้งาน
+                </div>
+            </div>
+            `}
 
             ${canModerate ? `
             <div class="detail-section slip-approve-panel">
@@ -712,9 +751,9 @@ function renderPaymentDetails(payment) {
 // Approve / Reject via admin API (used by all roles for demo)
 async function approvePayment(paymentId) {
     if (!confirm('ยืนยันการอนุมัติสลิปนี้หรือไม่?')) return;
-    
+
     showToast('กำลังดำเนินการ...', 'info');
-    
+
     try {
         const url = (typeof API_ENDPOINTS !== 'undefined' && API_ENDPOINTS.ADMIN_PAYMENT_APPROVE)
             ? API_ENDPOINTS.ADMIN_PAYMENT_APPROVE(paymentId)
@@ -742,7 +781,7 @@ async function approvePayment(paymentId) {
 function onPaymentTypeChange(paymentId) {
     const typeSelect = document.getElementById(`paymentType-${paymentId}`);
     const periodSection = document.getElementById(`periodSection-${paymentId}`);
-    
+
     if (typeSelect && periodSection) {
         periodSection.style.display = typeSelect.value === 'installment' ? 'block' : 'none';
     }
@@ -756,31 +795,31 @@ async function classifyAndApprovePayment(paymentId) {
     const noteInput = document.getElementById(`classifyNote-${paymentId}`);
     const currentPeriodInput = document.getElementById(`currentPeriod-${paymentId}`);
     const totalPeriodInput = document.getElementById(`totalPeriod-${paymentId}`);
-    
+
     const paymentType = typeSelect ? typeSelect.value : '';
     const note = noteInput ? noteInput.value.trim() : '';
     const currentPeriod = currentPeriodInput ? parseInt(currentPeriodInput.value) || 1 : 1;
     const totalPeriod = totalPeriodInput ? parseInt(totalPeriodInput.value) || 3 : 3;
-    
+
     // Validate
     if (!paymentType) {
         showToast('⚠️ กรุณาเลือกประเภทการชำระก่อน', 'error');
         if (typeSelect) typeSelect.focus();
         return;
     }
-    
+
     // Confirm
     const typeLabels = {
         'full': 'จ่ายเต็ม',
         'installment': `ผ่อนชำระ งวดที่ ${currentPeriod}/${totalPeriod}`,
         'savings_deposit': 'ฝากออม'
     };
-    
+
     const confirmMsg = `ยืนยันอนุมัติการชำระเงินนี้เป็น "${typeLabels[paymentType] || paymentType}"?`;
     if (!confirm(confirmMsg)) return;
-    
+
     showToast('กำลังบันทึก...', 'info');
-    
+
     try {
         // Build request body
         const body = {
@@ -788,23 +827,23 @@ async function classifyAndApprovePayment(paymentId) {
             payment_type: paymentType,
             classification_notes: note
         };
-        
+
         // Add installment info if applicable
         if (paymentType === 'installment') {
             body.current_period = currentPeriod;
             body.installment_period = totalPeriod;
         }
-        
+
         // Call classify API
         const url = (typeof API_ENDPOINTS !== 'undefined' && API_ENDPOINTS.CUSTOMER_PAYMENTS)
             ? `${API_ENDPOINTS.CUSTOMER_PAYMENTS}?action=classify`
             : `/api/customer/payments.php?action=classify`;
-        
-        const result = await apiCall(url, { 
-            method: 'POST', 
-            body: body 
+
+        const result = await apiCall(url, {
+            method: 'POST',
+            body: body
         });
-        
+
         if (result && result.success) {
             showToast('✅ บันทึกและอนุมัติเรียบร้อย', 'success');
             await loadPayments();
@@ -824,9 +863,9 @@ async function classifyAndApprovePayment(paymentId) {
 async function rejectPayment(paymentId) {
     const reason = prompt('กรุณาระบุเหตุผลการปฏิเสธสลิป');
     if (reason === null || reason.trim() === '') return;
-    
+
     showToast('กำลังดำเนินการ...', 'info');
-    
+
     try {
         const url = (typeof API_ENDPOINTS !== 'undefined' && API_ENDPOINTS.ADMIN_PAYMENT_REJECT)
             ? API_ENDPOINTS.ADMIN_PAYMENT_REJECT(paymentId)
@@ -902,26 +941,11 @@ function toggleSlipZoom(imgElement) {
     }
 }
 
-// Handle slip image loading error
+// Handle slip image loading error - show empty placeholder (no mock images)
 function handleSlipImageError(imgElement) {
     if (!imgElement) return;
-    
-    // Try fallback to a default slip image
-    const fallbackImages = [
-        PATH.image ? PATH.image('slip-kbank.svg') : '/public/images/slip-kbank.svg',
-        PATH.image ? PATH.image('receipt-mock.svg') : '/public/images/receipt-mock.svg'
-    ];
-    
-    const currentSrc = imgElement.src;
-    
-    // If not already trying a fallback, try the first one
-    if (!fallbackImages.some(fb => currentSrc.includes(fb))) {
-        imgElement.src = fallbackImages[0];
-        imgElement.title = 'ภาพสลิปตัวอย่าง (ไม่สามารถโหลดภาพจริงได้)';
-        return;
-    }
-    
-    // If first fallback failed, replace with placeholder
+
+    // Replace with empty placeholder directly (no mock fallback)
     const container = imgElement.parentElement;
     if (container) {
         container.innerHTML = `
@@ -988,14 +1012,19 @@ function renderChatMessages(chatMessages, customerName, payment, reviewHint) {
     // If we have real chat messages from database, render them
     if (chatMessages && Array.isArray(chatMessages) && chatMessages.length > 0) {
         let html = '';
-        
+
+        // Keep track if we've shown slip image already
+        let slipImageShown = false;
+        const slipImageUrl = payment.slip_image ? normalizeSlipUrl(payment.slip_image) : '';
+
         chatMessages.forEach(msg => {
-            const isBot = msg.sender_type === 'bot' || msg.direction === 'outgoing';
+            const isBot = msg.sender_type === 'bot' || msg.direction === 'outgoing' || msg.role === 'assistant' || msg.role === 'system';
             const bubbleClass = isBot ? 'bubble-bot' : 'bubble-user';
             const label = isBot ? 'Bot' : customerName;
-            
+
             let content = '';
-            
+            const msgText = msg.message_text || msg.text || '';
+
             // Handle different message types
             if (msg.message_type === 'image') {
                 // Check for image URL in message_data
@@ -1003,18 +1032,26 @@ function renderChatMessages(chatMessages, customerName, payment, reviewHint) {
                 if (msg.message_data && msg.message_data.attachments && msg.message_data.attachments[0]) {
                     imageUrl = msg.message_data.attachments[0].url;
                 }
-                
+
                 if (imageUrl) {
                     content = `<img src="${imageUrl}" alt="รูปภาพ" style="max-width: 200px; border-radius: 8px; cursor: pointer;" onclick="window.open('${imageUrl}', '_blank')">`;
                 } else {
                     content = '<em>[รูปภาพ]</em>';
                 }
+            } else if (msgText === '[image]' || msgText.trim().toLowerCase() === '[image]') {
+                // Handle [image] text placeholder - show slip image if available
+                if (slipImageUrl && !slipImageShown) {
+                    content = `<img src="${slipImageUrl}" alt="สลิปโอนเงิน" style="max-width: 200px; border-radius: 8px; cursor: pointer;" onclick="window.open('${slipImageUrl}', '_blank')"><br><small style="color:#999;">📷 สลิปโอนเงิน</small>`;
+                    slipImageShown = true;
+                } else {
+                    content = '<em>📷 [รูปภาพ]</em>';
+                }
             } else {
-                content = escapeHtml(msg.message_text || '');
+                content = escapeHtml(msgText);
             }
-            
+
             const timestamp = msg.sent_at ? formatDateTime(msg.sent_at) : '';
-            
+
             html += `
                 <div class="bubble ${bubbleClass}">
                     <div class="bubble-label">${label} ${timestamp ? `<small style="color:#999;font-weight:normal;">${timestamp}</small>` : ''}</div>
@@ -1022,7 +1059,7 @@ function renderChatMessages(chatMessages, customerName, payment, reviewHint) {
                 </div>
             `;
         });
-        
+
         // Add system status message at the end
         html += `
             <div class="bubble bubble-bot">
@@ -1030,10 +1067,10 @@ function renderChatMessages(chatMessages, customerName, payment, reviewHint) {
                 <div class="bubble-text">${reviewHint}</div>
             </div>
         `;
-        
+
         return html;
     }
-    
+
     // Fallback: Show mock data if no real messages
     return `
         <div class="bubble bubble-bot">
@@ -1072,12 +1109,12 @@ let orderSearchModalTimeout = null;
 async function searchOrdersForPayment(paymentId, query) {
     const suggestions = document.getElementById(`orderSuggestionsModal-${paymentId}`);
     const linkBtn = document.getElementById(`linkOrderBtn-${paymentId}`);
-    
+
     if (!suggestions) return;
-    
+
     // Clear previous timeout
     clearTimeout(orderSearchModalTimeout);
-    
+
     // Hide if query is too short
     if (!query || query.length < 2) {
         suggestions.classList.remove('show');
@@ -1085,12 +1122,12 @@ async function searchOrdersForPayment(paymentId, query) {
         if (linkBtn) linkBtn.disabled = true;
         return;
     }
-    
+
     // Debounce
     orderSearchModalTimeout = setTimeout(async () => {
         try {
             const result = await apiCall(`${API_ENDPOINTS.SEARCH_ORDERS}?q=${encodeURIComponent(query)}`);
-            
+
             if (result.success && result.data && result.data.length > 0) {
                 suggestions.innerHTML = result.data.map(order => `
                     <div class="autocomplete-item" onclick="selectOrderForPayment(${paymentId}, ${JSON.stringify(order).replace(/"/g, '&quot;')})">
@@ -1127,7 +1164,7 @@ function selectOrderForPayment(paymentId, order) {
     const suggestions = document.getElementById(`orderSuggestionsModal-${paymentId}`);
     const hiddenInput = document.getElementById(`selectedOrderId-${paymentId}`);
     const linkBtn = document.getElementById(`linkOrderBtn-${paymentId}`);
-    
+
     if (input) input.value = order.order_no || order.order_number || '#' + order.id;
     if (suggestions) suggestions.classList.remove('show');
     if (hiddenInput) hiddenInput.value = order.id;
@@ -1139,15 +1176,15 @@ function selectOrderForPayment(paymentId, order) {
  */
 async function linkOrderToPayment(paymentId) {
     const orderId = document.getElementById(`selectedOrderId-${paymentId}`)?.value;
-    
+
     if (!orderId) {
         showToast('กรุณาเลือกคำสั่งซื้อก่อน', 'error');
         return;
     }
-    
+
     try {
         showToast('กำลังเชื่อมโยง...', 'info');
-        
+
         const result = await apiCall(API_ENDPOINTS.CUSTOMER_PAYMENTS + '?action=link_order', {
             method: 'POST',
             body: JSON.stringify({
@@ -1155,7 +1192,7 @@ async function linkOrderToPayment(paymentId) {
                 order_id: orderId
             })
         });
-        
+
         if (result.success) {
             showToast('✅ เชื่อมโยงคำสั่งซื้อเรียบร้อย', 'success');
             // Reload payment detail
@@ -1176,17 +1213,17 @@ async function linkOrderToPayment(paymentId) {
  */
 async function clearOrderMapping(paymentId) {
     if (!confirm('ยกเลิกการเชื่อมโยงคำสั่งซื้อนี้หรือไม่?')) return;
-    
+
     try {
         showToast('กำลังยกเลิก...', 'info');
-        
+
         const result = await apiCall(API_ENDPOINTS.CUSTOMER_PAYMENTS + '?action=unlink_order', {
             method: 'POST',
             body: JSON.stringify({
                 payment_id: paymentId
             })
         });
-        
+
         if (result.success) {
             showToast('✅ ยกเลิกการเชื่อมโยงเรียบร้อย', 'success');
             await viewPaymentDetail(paymentId);
@@ -1203,7 +1240,7 @@ async function clearOrderMapping(paymentId) {
 function showError(message, details, canRetry = false) {
     const tableBody = document.getElementById('paymentsTableBody');
     const mobileContainer = document.getElementById('paymentsMobileContainer');
-    
+
     const errorHtml = `
         <div class="error-state" style="text-align:center;padding:2rem;">
             <div class="error-icon" style="font-size:2.5rem;margin-bottom:1rem;">⚠️</div>
@@ -1216,14 +1253,14 @@ function showError(message, details, canRetry = false) {
             ` : ''}
         </div>
     `;
-    
+
     if (tableBody) {
         tableBody.innerHTML = `<tr><td colspan="7">${errorHtml}</td></tr>`;
     }
     if (mobileContainer) {
         mobileContainer.innerHTML = errorHtml;
     }
-    
+
     // Hide pagination
     const paginationEl = document.getElementById('paymentPagination');
     if (paginationEl) paginationEl.style.display = 'none';
@@ -1234,13 +1271,13 @@ document.addEventListener('click', (e) => {
     const modal = document.getElementById('paymentModal');
     const overlay = document.querySelector('.payment-modal-overlay');
     const zoomedImg = document.querySelector('.slip-image.zoomed');
-    
+
     // Close zoomed image first if clicked
     if (zoomedImg && e.target === zoomedImg) {
         toggleSlipZoom(zoomedImg);
         return;
     }
-    
+
     // Close modal if overlay is clicked
     if (e.target === modal || e.target === overlay) {
         closePaymentModal();
@@ -1292,11 +1329,11 @@ function getMockPayments() {
     const slipKBank = (typeof PATH !== 'undefined' && PATH.image)
         ? PATH.image('slip-kbank.svg')
         : '/images/slip-kbank.svg';
-    
+
     const slipSCB = (typeof PATH !== 'undefined' && PATH.image)
         ? PATH.image('slip-scb.svg')
         : '/images/slip-scb.svg';
-    
+
     const slipPromptPay = (typeof PATH !== 'undefined' && PATH.image)
         ? PATH.image('slip-promptpay.svg')
         : '/images/slip-promptpay.svg';
@@ -1351,13 +1388,13 @@ function getMockPayments() {
 function setupDateFilter() {
     const startDate = document.getElementById('startDate');
     const endDate = document.getElementById('endDate');
-    
+
     if (startDate && endDate) {
         // Set default max date to today
         const today = new Date().toISOString().split('T')[0];
         startDate.setAttribute('max', today);
         endDate.setAttribute('max', today);
-        
+
         // Handle Enter key on date inputs
         startDate.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') applyDateFilter();
@@ -1371,33 +1408,33 @@ function setupDateFilter() {
 function applyDateFilter() {
     const startDateInput = document.getElementById('startDate');
     const endDateInput = document.getElementById('endDate');
-    
+
     const startDateValue = startDateInput?.value;
     const endDateValue = endDateInput?.value;
-    
+
     // Validate date range
     if (startDateValue && endDateValue) {
         const start = new Date(startDateValue);
         const end = new Date(endDateValue);
-        
+
         if (start > end) {
             showToast('❌ วันเริ่มต้นต้องไม่เกินวันสิ้นสุด', 'error');
             return;
         }
     }
-    
+
     // Set date range filter
     dateRangeFilter.start = startDateValue || null;
     dateRangeFilter.end = endDateValue || null;
-    
+
     // Apply filter
     applyAllFilters();
-    
+
     // Show toast
     if (startDateValue || endDateValue) {
-        const rangeText = startDateValue && endDateValue 
+        const rangeText = startDateValue && endDateValue
             ? `${formatDate(startDateValue)} - ${formatDate(endDateValue)}`
-            : startDateValue 
+            : startDateValue
                 ? `ตั้งแต่ ${formatDate(startDateValue)}`
                 : `ถึง ${formatDate(endDateValue)}`;
         showToast(`🗓️ กรองตามวันที่: ${rangeText}`, 'success');
@@ -1407,13 +1444,13 @@ function applyDateFilter() {
 function clearDateFilter() {
     const startDateInput = document.getElementById('startDate');
     const endDateInput = document.getElementById('endDate');
-    
+
     if (startDateInput) startDateInput.value = '';
     if (endDateInput) endDateInput.value = '';
-    
+
     dateRangeFilter.start = null;
     dateRangeFilter.end = null;
-    
+
     applyAllFilters();
     showToast('🗓️ ล้างการกรองตามวันที่', 'info');
 }
@@ -1431,7 +1468,7 @@ function formatDate(dateString) {
 function applyAllFilters() {
     // Start with all payments
     let result = [...allPayments];
-    
+
     // Apply search filter
     if (searchQuery) {
         const query = searchQuery.toLowerCase();
@@ -1443,13 +1480,13 @@ function applyAllFilters() {
                 payment.payment_method,
                 payment.status
             ].filter(Boolean);
-            
+
             return searchFields.some(field =>
                 String(field).toLowerCase().includes(query)
             );
         });
     }
-    
+
     // Apply payment type filter
     if (currentFilter) {
         if (currentFilter === 'full') {
@@ -1460,29 +1497,29 @@ function applyAllFilters() {
             result = result.filter(p => p.status === 'pending');
         }
     }
-    
+
     // Apply date range filter
     if (dateRangeFilter.start || dateRangeFilter.end) {
         result = result.filter(payment => {
             const paymentDate = new Date(payment.payment_date || payment.created_at);
             paymentDate.setHours(0, 0, 0, 0); // Reset time for date comparison
-            
+
             if (dateRangeFilter.start) {
                 const startDate = new Date(dateRangeFilter.start);
                 startDate.setHours(0, 0, 0, 0);
                 if (paymentDate < startDate) return false;
             }
-            
+
             if (dateRangeFilter.end) {
                 const endDate = new Date(dateRangeFilter.end);
                 endDate.setHours(23, 59, 59, 999);
                 if (paymentDate > endDate) return false;
             }
-            
+
             return true;
         });
     }
-    
+
     filteredPayments = result;
     currentPage = 1;
     renderPayments();
@@ -1506,11 +1543,11 @@ function openAddPaymentModal() {
     if (modal) {
         modal.style.display = 'flex';
         document.body.style.overflow = 'hidden';
-        
+
         // Reset form
         const form = document.getElementById('addPaymentForm');
         if (form) form.reset();
-        
+
         // Reset selections
         document.getElementById('selectedCustomer').style.display = 'none';
         document.getElementById('selectedOrder').style.display = 'none';
@@ -1519,7 +1556,7 @@ function openAddPaymentModal() {
         document.getElementById('customerProfileId').value = '';
         document.getElementById('referenceId').value = '';
         removeSlipPreview();
-        
+
         // Setup event listeners
         setupAddPaymentEvents();
     }
@@ -1537,45 +1574,45 @@ function setupAddPaymentEvents() {
     // Customer search autocomplete
     const customerSearch = document.getElementById('customerSearch');
     const customerSuggestions = document.getElementById('customerSuggestions');
-    
+
     customerSearch.addEventListener('input', (e) => {
         clearTimeout(customerSearchTimeout);
         const query = e.target.value.trim();
-        
+
         if (query.length < 2) {
             customerSuggestions.classList.remove('show');
             return;
         }
-        
+
         customerSearchTimeout = setTimeout(() => {
             searchCustomers(query);
         }, 300);
     });
-    
+
     customerSearch.addEventListener('focus', () => {
         if (customerSearch.value.length >= 2) {
             searchCustomers(customerSearch.value.trim());
         }
     });
-    
+
     // Order search autocomplete  
     const orderSearch = document.getElementById('orderSearch');
     const orderSuggestions = document.getElementById('orderSuggestions');
-    
+
     orderSearch.addEventListener('input', (e) => {
         clearTimeout(orderSearchTimeout);
         const query = e.target.value.trim();
-        
+
         if (query.length < 2) {
             orderSuggestions.classList.remove('show');
             return;
         }
-        
+
         orderSearchTimeout = setTimeout(() => {
             searchOrders(query);
         }, 300);
     });
-    
+
     // Payment type change - update reference label
     const paymentTypeInputs = document.querySelectorAll('input[name="payment_type"]');
     paymentTypeInputs.forEach(input => {
@@ -1583,14 +1620,14 @@ function setupAddPaymentEvents() {
             updateReferenceFieldLabel(e.target.value);
         });
     });
-    
+
     // Slip image upload
     setupSlipUpload();
-    
+
     // Form submit
     const form = document.getElementById('addPaymentForm');
     form.addEventListener('submit', handleAddPaymentSubmit);
-    
+
     // Close suggestions when clicking outside
     document.addEventListener('click', (e) => {
         if (!e.target.closest('.autocomplete-wrapper')) {
@@ -1602,18 +1639,18 @@ function setupAddPaymentEvents() {
 
 async function searchCustomers(query) {
     const suggestions = document.getElementById('customerSuggestions');
-    
+
     try {
         // Search customer profiles
         const result = await apiCall(`${API_ENDPOINTS.SEARCH_CUSTOMERS}?q=${encodeURIComponent(query)}`);
-        
+
         if (result.success && result.data && result.data.length > 0) {
             suggestions.innerHTML = result.data.map(customer => `
                 <div class="autocomplete-item" onclick="selectCustomer(${JSON.stringify(customer).replace(/"/g, '&quot;')})">
                     <div class="autocomplete-item-avatar">
-                        ${customer.avatar_url 
-                            ? `<img src="${escapeHtml(customer.avatar_url)}" alt="">` 
-                            : `<i class="fas fa-user"></i>`}
+                        ${customer.avatar_url
+                    ? `<img src="${escapeHtml(customer.avatar_url)}" alt="">`
+                    : `<i class="fas fa-user"></i>`}
                     </div>
                     <div class="autocomplete-item-info">
                         <div class="autocomplete-item-name">${escapeHtml(customer.display_name || customer.full_name || 'ไม่ระบุชื่อ')}</div>
@@ -1640,16 +1677,16 @@ function selectCustomer(customer) {
     const customerProfileId = document.getElementById('customerProfileId');
     const selectedCustomer = document.getElementById('selectedCustomer');
     const suggestions = document.getElementById('customerSuggestions');
-    
+
     customerProfileId.value = customer.id;
     customerSearch.value = '';
     suggestions.classList.remove('show');
-    
+
     selectedCustomer.innerHTML = `
         <div class="autocomplete-item-avatar">
-            ${customer.avatar_url 
-                ? `<img src="${escapeHtml(customer.avatar_url)}" alt="">` 
-                : `<i class="fas fa-user"></i>`}
+            ${customer.avatar_url
+            ? `<img src="${escapeHtml(customer.avatar_url)}" alt="">`
+            : `<i class="fas fa-user"></i>`}
         </div>
         <div class="autocomplete-item-info">
             <div class="autocomplete-item-name">${escapeHtml(customer.display_name || customer.full_name || 'ไม่ระบุชื่อ')}</div>
@@ -1672,11 +1709,11 @@ function removeSelectedCustomer() {
 async function searchOrders(query) {
     const suggestions = document.getElementById('orderSuggestions');
     const paymentType = document.querySelector('input[name="payment_type"]:checked')?.value || 'full';
-    
+
     try {
         let endpoint = API_ENDPOINTS.SEARCH_ORDERS;
         let referenceType = 'order';
-        
+
         // Determine reference type based on payment type
         if (paymentType === 'installment') {
             endpoint = API_ENDPOINTS.SEARCH_INSTALLMENTS || endpoint;
@@ -1685,12 +1722,12 @@ async function searchOrders(query) {
             endpoint = API_ENDPOINTS.SEARCH_SAVINGS || endpoint;
             referenceType = 'savings_account';
         }
-        
+
         const result = await apiCall(`${endpoint}?q=${encodeURIComponent(query)}`);
-        
+
         if (result.success && result.data && result.data.length > 0) {
             suggestions.innerHTML = result.data.map(item => `
-                <div class="autocomplete-item" onclick="selectOrder(${JSON.stringify({...item, reference_type: referenceType}).replace(/"/g, '&quot;')})">
+                <div class="autocomplete-item" onclick="selectOrder(${JSON.stringify({ ...item, reference_type: referenceType }).replace(/"/g, '&quot;')})">
                     <div class="autocomplete-item-info">
                         <div class="autocomplete-item-name">${escapeHtml(item.order_no || item.contract_no || item.account_no || '#' + item.id)}</div>
                         <div class="autocomplete-item-meta">
@@ -1717,12 +1754,12 @@ function selectOrder(item) {
     const referenceType = document.getElementById('referenceType');
     const selectedOrder = document.getElementById('selectedOrder');
     const suggestions = document.getElementById('orderSuggestions');
-    
+
     referenceId.value = item.id;
     referenceType.value = item.reference_type || 'order';
     orderSearch.value = '';
     suggestions.classList.remove('show');
-    
+
     selectedOrder.innerHTML = `
         <div class="autocomplete-item-info">
             <div class="autocomplete-item-name">${escapeHtml(item.order_no || item.contract_no || item.account_no || '#' + item.id)}</div>
@@ -1734,7 +1771,7 @@ function selectOrder(item) {
         <span class="remove-btn" onclick="removeSelectedOrder()"><i class="fas fa-times"></i></span>
     `;
     selectedOrder.style.display = 'flex';
-    
+
     // Auto-fill amount if available
     if (item.total_amount) {
         document.getElementById('paymentAmount').value = item.total_amount;
@@ -1750,7 +1787,7 @@ function removeSelectedOrder() {
 function updateReferenceFieldLabel(paymentType) {
     const label = document.querySelector('#orderSearchGroup .form-label');
     const input = document.getElementById('orderSearch');
-    
+
     switch (paymentType) {
         case 'installment':
             label.textContent = 'สัญญาผ่อนชำระ';
@@ -1768,7 +1805,7 @@ function updateReferenceFieldLabel(paymentType) {
             label.textContent = 'คำสั่งซื้อ/สัญญา';
             input.placeholder = 'พิมพ์เลขที่คำสั่งซื้อ/สัญญา...';
     }
-    
+
     // Clear selection when type changes
     removeSelectedOrder();
 }
@@ -1776,28 +1813,28 @@ function updateReferenceFieldLabel(paymentType) {
 function setupSlipUpload() {
     const uploadArea = document.getElementById('slipUploadArea');
     const fileInput = document.getElementById('slipImage');
-    
+
     // Drag and drop
     uploadArea.addEventListener('dragover', (e) => {
         e.preventDefault();
         uploadArea.classList.add('dragover');
     });
-    
+
     uploadArea.addEventListener('dragleave', () => {
         uploadArea.classList.remove('dragover');
     });
-    
+
     uploadArea.addEventListener('drop', (e) => {
         e.preventDefault();
         uploadArea.classList.remove('dragover');
-        
+
         const files = e.dataTransfer.files;
         if (files.length > 0 && files[0].type.startsWith('image/')) {
             fileInput.files = files;
             previewSlipImage(files[0]);
         }
     });
-    
+
     // File input change
     fileInput.addEventListener('change', (e) => {
         if (e.target.files.length > 0) {
@@ -1810,7 +1847,7 @@ function previewSlipImage(file) {
     const preview = document.getElementById('slipPreview');
     const previewImg = document.getElementById('slipPreviewImg');
     const placeholder = document.querySelector('.upload-placeholder');
-    
+
     const reader = new FileReader();
     reader.onload = (e) => {
         previewImg.src = e.target.result;
@@ -1824,7 +1861,7 @@ function removeSlipPreview() {
     const preview = document.getElementById('slipPreview');
     const placeholder = document.querySelector('.upload-placeholder');
     const fileInput = document.getElementById('slipImage');
-    
+
     preview.style.display = 'none';
     placeholder.style.display = 'flex';
     fileInput.value = '';
@@ -1832,15 +1869,15 @@ function removeSlipPreview() {
 
 async function handleAddPaymentSubmit(e) {
     e.preventDefault();
-    
+
     const submitBtn = document.getElementById('submitPaymentBtn');
     const originalText = submitBtn.innerHTML;
     submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> กำลังบันทึก...';
     submitBtn.disabled = true;
-    
+
     try {
         const formData = new FormData(document.getElementById('addPaymentForm'));
-        
+
         // Validate required fields
         const amount = parseFloat(formData.get('amount'));
         if (!amount || amount <= 0) {
@@ -1849,13 +1886,13 @@ async function handleAddPaymentSubmit(e) {
             submitBtn.disabled = false;
             return;
         }
-        
+
         // Add source as manual
         formData.append('source', 'manual');
-        
+
         // Call API
         const result = await apiCallFormData(API_ENDPOINTS.CUSTOMER_PAYMENTS_CREATE, formData);
-        
+
         if (result.success) {
             showToast('บันทึกรายการชำระเงินเรียบร้อย', 'success');
             closeAddPaymentModal();
@@ -1875,7 +1912,7 @@ async function handleAddPaymentSubmit(e) {
 // API call with FormData (for file uploads)
 async function apiCallFormData(url, formData) {
     const token = localStorage.getItem('auth_token');
-    
+
     const response = await fetch(url, {
         method: 'POST',
         headers: {
@@ -1883,7 +1920,7 @@ async function apiCallFormData(url, formData) {
         },
         body: formData
     });
-    
+
     return response.json();
 }
 
@@ -1901,3 +1938,135 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+// ============================================
+// REPAIR LINK FUNCTIONS
+// ============================================
+
+let repairSearchTimeout = null;
+
+async function searchRepairsForPayment(paymentId, query) {
+    const suggestionsEl = document.getElementById(`repairSuggestionsModal-${paymentId}`);
+    if (!suggestionsEl) return;
+
+    // Clear previous timeout
+    if (repairSearchTimeout) clearTimeout(repairSearchTimeout);
+
+    if (!query || query.length < 1) {
+        suggestionsEl.classList.remove('show');
+        suggestionsEl.innerHTML = '';
+        return;
+    }
+
+    // Debounce
+    repairSearchTimeout = setTimeout(async () => {
+        try {
+            const url = (typeof API_ENDPOINTS !== 'undefined' && API_ENDPOINTS.CUSTOMER_REPAIRS)
+                ? `${API_ENDPOINTS.CUSTOMER_REPAIRS}?action=search&q=${encodeURIComponent(query)}&limit=10`
+                : `/api/customer/repairs.php?action=search&q=${encodeURIComponent(query)}&limit=10`;
+
+            const result = await apiCall(url);
+
+            if (result && result.success && result.data && result.data.length > 0) {
+                suggestionsEl.innerHTML = result.data.map(repair => `
+                    <div class="autocomplete-item" onclick="selectRepairForPayment(${paymentId}, ${repair.id}, '${escapeHtml(repair.repair_no)}', '${escapeHtml(repair.item_name || '')}')">
+                        <div class="autocomplete-item-avatar" style="background:#f97316;color:white;">
+                            <i class="fas fa-tools"></i>
+                        </div>
+                        <div class="autocomplete-item-info">
+                            <div class="autocomplete-item-name">${repair.repair_no}</div>
+                            <div class="autocomplete-item-meta">${repair.item_name || 'งานซ่อม'} - ${repair.customer_name || ''}</div>
+                        </div>
+                    </div>
+                `).join('');
+                suggestionsEl.classList.add('show');
+            } else {
+                suggestionsEl.innerHTML = '<div class="autocomplete-item"><span style="color:#9ca3af;">ไม่พบงานซ่อม</span></div>';
+                suggestionsEl.classList.add('show');
+            }
+        } catch (e) {
+            console.error('Error searching repairs:', e);
+        }
+    }, 300);
+}
+
+function selectRepairForPayment(paymentId, repairId, repairNo, itemName) {
+    const inputEl = document.getElementById(`repairSearchModal-${paymentId}`);
+    const hiddenEl = document.getElementById(`selectedRepairId-${paymentId}`);
+    const btnEl = document.getElementById(`linkRepairBtn-${paymentId}`);
+    const suggestionsEl = document.getElementById(`repairSuggestionsModal-${paymentId}`);
+
+    if (inputEl) inputEl.value = `${repairNo} - ${itemName || 'งานซ่อม'}`;
+    if (hiddenEl) hiddenEl.value = repairId;
+    if (btnEl) btnEl.disabled = false;
+    if (suggestionsEl) {
+        suggestionsEl.classList.remove('show');
+        suggestionsEl.innerHTML = '';
+    }
+}
+
+async function linkRepairToPayment(paymentId) {
+    const hiddenEl = document.getElementById(`selectedRepairId-${paymentId}`);
+    const repairId = hiddenEl ? hiddenEl.value : null;
+
+    if (!repairId) {
+        showToast('⚠️ กรุณาเลือกงานซ่อมก่อน', 'error');
+        return;
+    }
+
+    showToast('กำลังเชื่อมโยง...', 'info');
+
+    try {
+        const url = (typeof API_ENDPOINTS !== 'undefined' && API_ENDPOINTS.CUSTOMER_PAYMENTS)
+            ? `${API_ENDPOINTS.CUSTOMER_PAYMENTS}?action=link_repair`
+            : `/api/customer/payments.php?action=link_repair`;
+
+        const result = await apiCall(url, {
+            method: 'POST',
+            body: JSON.stringify({
+                payment_id: paymentId,
+                repair_id: parseInt(repairId)
+            })
+        });
+
+        if (result && result.success) {
+            showToast('✅ ' + (result.message || 'เชื่อมโยงงานซ่อมเรียบร้อย'), 'success');
+            await loadPayments();
+            // Reload the modal
+            viewPaymentDetail(paymentId);
+        } else {
+            showToast('❌ ' + (result.message || 'ไม่สามารถเชื่อมโยงได้'), 'error');
+        }
+    } catch (e) {
+        console.error('Error linking repair:', e);
+        showToast('❌ เกิดข้อผิดพลาด', 'error');
+    }
+}
+
+async function unlinkRepairFromPayment(paymentId) {
+    if (!confirm('ต้องการยกเลิกการเชื่อมโยงกับงานซ่อมนี้ใช่หรือไม่?')) return;
+
+    showToast('กำลังยกเลิก...', 'info');
+
+    try {
+        const url = (typeof API_ENDPOINTS !== 'undefined' && API_ENDPOINTS.CUSTOMER_PAYMENTS)
+            ? `${API_ENDPOINTS.CUSTOMER_PAYMENTS}?action=unlink_repair`
+            : `/api/customer/payments.php?action=unlink_repair`;
+
+        const result = await apiCall(url, {
+            method: 'POST',
+            body: JSON.stringify({ payment_id: paymentId })
+        });
+
+        if (result && result.success) {
+            showToast('✅ ' + (result.message || 'ยกเลิกการเชื่อมโยงเรียบร้อย'), 'success');
+            await loadPayments();
+            // Reload the modal
+            viewPaymentDetail(paymentId);
+        } else {
+            showToast('❌ ' + (result.message || 'ไม่สามารถยกเลิกได้'), 'error');
+        }
+    } catch (e) {
+        console.error('Error unlinking repair:', e);
+        showToast('❌ เกิดข้อผิดพลาด', 'error');
+    }
+}

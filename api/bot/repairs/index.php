@@ -130,7 +130,7 @@ function createRepair($db) {
     $repairNo = generateRepairNo();
     
     $sql = "INSERT INTO repairs (
-        repair_no, tenant_id, customer_id, customer_profile_id,
+        repair_no, tenant_id, user_id, platform_user_id, customer_id, customer_profile_id,
         channel_id, external_user_id, platform,
         customer_name, customer_phone, customer_line_name,
         product_ref_id, product_name, product_brand, product_model, 
@@ -140,7 +140,7 @@ function createRepair($db) {
         case_id, admin_notes,
         created_at, updated_at
     ) VALUES (
-        ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?,
         ?, ?, ?,
         ?, ?, ?,
         ?, ?, ?, ?,
@@ -154,6 +154,8 @@ function createRepair($db) {
     $params = [
         $repairNo,
         $input['tenant_id'] ?? 'default',
+        $input['user_id'] ?? null,
+        (string)$input['external_user_id'], // platform_user_id for JOIN
         $input['customer_id'] ?? null,
         $input['customer_profile_id'] ?? null,
         (int)$input['channel_id'],

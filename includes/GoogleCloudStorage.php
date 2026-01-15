@@ -143,9 +143,10 @@ class GoogleCloudStorage
                 }
             }
             
-            // Upload to GCS
+            // Upload to GCS with public read access
             $object = $this->bucket->upload($fileContent, [
                 'name' => $objectPath,
+                'predefinedAcl' => 'publicRead', // Make object publicly accessible
                 'metadata' => [
                     // Object-level contentType
                     'contentType' => $mimeType,

@@ -75,10 +75,10 @@ function renderPagination(total, pages) {
         if (container) container.innerHTML = '';
         return;
     }
-    
+
     const prevDisabled = currentPage === 1 ? 'disabled' : '';
     const nextDisabled = currentPage === pages ? 'disabled' : '';
-    
+
     container.innerHTML = `
         <button class="btn-pagination" onclick="goToPage(${currentPage - 1})" ${prevDisabled}>
             <i class="fas fa-chevron-left"></i>
@@ -140,7 +140,7 @@ function renderOrders(orders) {
             name: order.customer_name || 'ไม่ระบุลูกค้า',
             avatar: order.customer_avatar || null
         };
-        const customerBadgeHtml = typeof renderCustomerProfileBadge === 'function' 
+        const customerBadgeHtml = typeof renderCustomerProfileBadge === 'function'
             ? renderCustomerProfileBadge(customerProfile)
             : `<span>${customerProfile.name}</span>`;
 
@@ -215,10 +215,10 @@ function renderOrderDetails(order) {
 
     // Build customer profile section
     const customerHtml = buildCustomerSection(order);
-    
+
     // Build address section
     const addressHtml = buildAddressSection(order);
-    
+
     // Build installment section
     const installmentHtml = buildInstallmentSection(order);
 
@@ -232,7 +232,7 @@ function renderOrderDetails(order) {
             <div class="detail-grid">
                 <div class="detail-item">
                     <div class="detail-label">เลขที่คำสั่งซื้อ</div>
-                    <div class="detail-value">${order.order_no || '-'}</div>
+                    <div class="detail-value">${order.order_no || order.order_number || '-'}</div>
                 </div>
                 <div class="detail-item">
                     <div class="detail-label">สถานะ</div>
@@ -246,7 +246,7 @@ function renderOrderDetails(order) {
                 </div>
                 <div class="detail-item">
                     <div class="detail-label">แหล่งที่มา</div>
-                    <div class="detail-value">${order.source || 'LINE'}</div>
+                    <div class="detail-value">${order.source || '-'}</div>
                 </div>
             </div>
         </div>
@@ -282,20 +282,23 @@ function renderOrderDetails(order) {
                     <div class="detail-label">ประเภทการชำระ</div>
                     <div class="detail-value">
                         <span class="payment-type-tag">
-                            ${order.payment_type === 'full' ? '💳 ชำระเต็มจำนวน' : '📅 ผ่อนชำระ ' + (order.installment_months || 0) + ' งวด'}
+                            ${(order.payment_type === 'full' || order.order_type === 'full_payment' || !order.payment_type) ? '💳 ชำระเต็มจำนวน' : '📅 ผ่อนชำระ ' + (order.installment_months || 0) + ' งวด'}
                         </span>
                     </div>
                 </div>
                 ${order.payments && order.payments.length > 0 ? `
                 <div class="detail-item">
                     <div class="detail-label">การชำระล่าสุด</div>
-                    <div class="detail-value">${order.payments[0].payment_no} - ฿${formatNumber(order.payments[0].amount)}</div>
+                    <div class="detail-value">${order.payments[0].payment_no || order.payments[0].id || '-'} - ฿${formatNumber(order.payments[0].amount)}</div>
                 </div>
                 ` : ''}
             </div>
             
             <div class="action-buttons">
-                <a class="btn-action" href="${buildPaymentHistoryLinkForOrderNo(order.order_no)}">
+                <button class="btn-action btn-edit" onclick="openEditOrderModal(${order.id})">
+                    <i class="fas fa-edit"></i> แก้ไขคำสั่งซื้อ
+                </button>
+                <a class="btn-action" href="${buildPaymentHistoryLinkForOrderNo(order.order_no || order.order_number)}">
                     <i class="fas fa-receipt"></i> ดูประวัติการชำระเงิน
                 </a>
                 <a class="btn-action" href="${buildAddressesLinkForOrder(order)}">
@@ -317,16 +320,16 @@ function buildCustomerSection(order) {
     const platform = order.customer_platform || 'web';
     const avatar = validateAvatarUrl(order.customer_avatar);
     const phone = order.phone || order.recipient_phone || null;
-    
+
     const initials = name.split(' ').map(n => n.charAt(0)).join('').substring(0, 2).toUpperCase();
-    
-    const avatarHtml = avatar 
+
+    const avatarHtml = avatar
         ? `<img src="${avatar}" alt="${name}" onerror="this.style.display='none';this.parentElement.innerHTML='${initials}';">`
         : initials;
-    
+
     const platformIcon = getPlatformIconSvg(platform);
     const platformName = { 'line': 'LINE', 'facebook': 'Facebook', 'instagram': 'Instagram', 'web': 'Web' }[platform] || platform;
-    
+
     return `
         <div class="detail-section">
             <div class="detail-section-title">ข้อมูลลูกค้า</div>
@@ -376,7 +379,7 @@ function buildAddressSection(order) {
     if (!order.recipient_name && !order.address_line1) {
         return '';
     }
-    
+
     const addressParts = [
         order.address_line1,
         order.address_line2,
@@ -385,7 +388,7 @@ function buildAddressSection(order) {
         order.province,
         order.postal_code
     ].filter(Boolean);
-    
+
     return `
         <div class="detail-section">
             <div class="detail-section-title">ที่อยู่จัดส่ง</div>
@@ -402,7 +405,7 @@ function buildInstallmentSection(order) {
     if (!order.installments || order.installments.length === 0) {
         return '';
     }
-    
+
     return `
         <div class="detail-section">
             <div class="detail-section-title">ตารางผ่อนชำระ (${order.installment_months || order.installments.length} งวด)</div>
@@ -513,31 +516,31 @@ function resetCreateOrderForm() {
  */
 async function searchProducts(query) {
     const resultsContainer = document.getElementById('productSearchResults');
-    
+
     // Clear timeout if exists
     if (productSearchTimeout) {
         clearTimeout(productSearchTimeout);
     }
-    
+
     // Require minimum 2 characters
     if (!query || query.trim().length < 2) {
         resultsContainer.style.display = 'none';
         return;
     }
-    
+
     // Debounce search (300ms)
     productSearchTimeout = setTimeout(async () => {
         try {
             resultsContainer.innerHTML = '<div class="autocomplete-loading"><i class="fas fa-spinner fa-spin"></i> กำลังค้นหา...</div>';
             resultsContainer.style.display = 'block';
-            
+
             // Call Product Search API
             const apiUrl = (typeof API_ENDPOINTS !== 'undefined' && API_ENDPOINTS.PRODUCTS_SEARCH)
                 ? API_ENDPOINTS.PRODUCTS_SEARCH
                 : '/api/products/search';
-            
+
             const result = await apiCall(`${apiUrl}?q=${encodeURIComponent(query.trim())}&limit=10`);
-            
+
             if (result && result.success && result.data && result.data.length > 0) {
                 renderProductSearchResults(result.data);
             } else if (result && result.ok && result.data && result.data.products) {
@@ -569,12 +572,12 @@ async function searchProducts(query) {
  */
 function renderProductSearchResults(products) {
     const resultsContainer = document.getElementById('productSearchResults');
-    
+
     if (!products || products.length === 0) {
         resultsContainer.innerHTML = '<div class="autocomplete-empty">ไม่พบสินค้า</div>';
         return;
     }
-    
+
     resultsContainer.innerHTML = products.map(product => {
         const name = product.name || product.title || product.product_name || 'สินค้า';
         const code = product.sku || product.code || product.product_code || '';
@@ -582,7 +585,7 @@ function renderProductSearchResults(products) {
         const placeholderImg = typeof PATH !== 'undefined' ? PATH.asset('images/placeholder-product.svg') : '/images/placeholder-product.svg';
         const image = product.image_url || product.thumbnail || product.images?.[0] || placeholderImg;
         const brand = product.brand || '';
-        
+
         return `
             <div class="autocomplete-item" onclick="selectProduct(${JSON.stringify(product).replace(/"/g, '&quot;')})">
                 <img src="${escapeHtml(image)}" alt="${escapeHtml(name)}" class="autocomplete-item-img" 
@@ -598,7 +601,7 @@ function renderProductSearchResults(products) {
             </div>
         `;
     }).join('');
-    
+
     resultsContainer.style.display = 'block';
 }
 
@@ -608,29 +611,29 @@ function renderProductSearchResults(products) {
  */
 function selectProduct(product) {
     selectedProduct = product;
-    
+
     const name = product.name || product.title || product.product_name || 'สินค้า';
     const code = product.sku || product.code || product.product_code || '';
     const price = product.price || product.selling_price || 0;
     const placeholderImg = typeof PATH !== 'undefined' ? PATH.asset('images/placeholder-product.svg') : '/images/placeholder-product.svg';
     const image = product.image_url || product.thumbnail || product.images?.[0] || placeholderImg;
-    
+
     // Show selected product card
     document.getElementById('selectedProductCard').style.display = 'flex';
     document.getElementById('selectedProductImg').src = image;
     document.getElementById('selectedProductName').textContent = name;
     document.getElementById('selectedProductCode').textContent = `รหัส: ${code || '-'}`;
     document.getElementById('selectedProductPrice').textContent = `฿${formatNumber(price)}`;
-    
+
     // Fill form fields
     document.getElementById('productName').value = name;
     document.getElementById('productCode').value = code;
     document.getElementById('totalAmount').value = price;
-    
+
     // Set hidden fields
     document.getElementById('selectedProductId').value = product.id || product.product_id || '';
     document.getElementById('selectedProductSku').value = code;
-    
+
     // Hide search results and clear search input
     document.getElementById('productSearchResults').style.display = 'none';
     document.getElementById('productSearch').value = '';
@@ -652,7 +655,7 @@ function clearSelectedProduct() {
 function toggleInstallmentFields() {
     const paymentType = document.querySelector('input[name="payment_type"]:checked')?.value || 'full';
     const installmentFields = document.getElementById('installmentFields');
-    
+
     if (installmentFields) {
         installmentFields.style.display = paymentType === 'installment' ? 'block' : 'none';
     }
@@ -664,35 +667,35 @@ function toggleInstallmentFields() {
  */
 async function submitCreateOrder(event) {
     event.preventDefault();
-    
+
     const form = document.getElementById('createOrderForm');
     const submitBtn = document.getElementById('submitOrderBtn');
-    
+
     // Validate required fields
     const productName = document.getElementById('productName').value.trim();
     const totalAmount = document.getElementById('totalAmount').value;
     const quantity = document.getElementById('quantity').value;
-    
+
     if (!productName) {
         showToast('กรุณาระบุชื่อสินค้า', 'error');
         document.getElementById('productName').focus();
         return false;
     }
-    
+
     if (!totalAmount || parseFloat(totalAmount) <= 0) {
         showToast('กรุณาระบุยอดเงิน', 'error');
         document.getElementById('totalAmount').focus();
         return false;
     }
-    
+
     // Disable submit button
     submitBtn.disabled = true;
     submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> กำลังบันทึก...';
-    
+
     try {
         // Build order data
         const paymentType = document.querySelector('input[name="payment_type"]:checked')?.value || 'full';
-        
+
         const orderData = {
             product_name: productName,
             product_code: document.getElementById('productCode').value.trim(),
@@ -706,30 +709,30 @@ async function submitCreateOrder(event) {
             customer_id: document.getElementById('selectedCustomerId').value || null,
             notes: document.getElementById('orderNotes').value.trim() || null
         };
-        
+
         // Add installment fields if applicable
         if (paymentType === 'installment') {
             orderData.installment_months = parseInt(document.getElementById('installmentMonths').value) || 3;
             orderData.down_payment = parseFloat(document.getElementById('downPayment').value) || 0;
         }
-        
+
         // Call API to create order
         const apiUrl = (typeof API_ENDPOINTS !== 'undefined' && API_ENDPOINTS.CUSTOMER_ORDERS)
             ? API_ENDPOINTS.CUSTOMER_ORDERS
             : '/api/customer/orders';
-        
+
         const result = await apiCall(apiUrl, {
             method: 'POST',
             body: orderData
         });
-        
+
         if (result && result.success) {
             showToast('✅ สร้างคำสั่งซื้อเรียบร้อย', 'success');
             closeCreateOrderModal();
-            
+
             // Reload orders list
             await loadOrders();
-            
+
             // Open the new order detail if we have the ID
             if (result.data && result.data.id) {
                 setTimeout(() => {
@@ -747,7 +750,7 @@ async function submitCreateOrder(event) {
         submitBtn.disabled = false;
         submitBtn.innerHTML = '<i class="fas fa-save"></i> บันทึกคำสั่งซื้อ';
     }
-    
+
     return false;
 }
 
@@ -757,10 +760,10 @@ async function submitCreateOrder(event) {
 function showToast(message, type = 'info') {
     const toast = document.getElementById('toast');
     if (!toast) return;
-    
+
     toast.textContent = message;
     toast.className = `toast ${type} show`;
-    
+
     setTimeout(() => {
         toast.classList.remove('show');
     }, 3000);
@@ -785,29 +788,29 @@ function escapeHtml(text) {
  */
 async function searchCustomers(query) {
     const resultsContainer = document.getElementById('customerSearchResults');
-    
+
     // Clear timeout if exists
     if (customerSearchTimeout) {
         clearTimeout(customerSearchTimeout);
     }
-    
+
     // Require minimum 2 characters
     if (!query || query.trim().length < 2) {
         resultsContainer.style.display = 'none';
         return;
     }
-    
+
     // Debounce search (300ms)
     customerSearchTimeout = setTimeout(async () => {
         try {
             resultsContainer.innerHTML = '<div class="autocomplete-loading"><i class="fas fa-spinner fa-spin"></i> กำลังค้นหา...</div>';
             resultsContainer.style.display = 'block';
-            
+
             // Call Customer Search API (conversations-based for now)
             const apiUrl = '/api/customer/search.php';
-            
+
             const result = await apiCall(`${apiUrl}?q=${encodeURIComponent(query.trim())}&limit=10`);
-            
+
             if (result && result.success && result.data && result.data.length > 0) {
                 renderCustomerSearchResults(result.data);
             } else {
@@ -836,30 +839,30 @@ async function searchCustomers(query) {
  */
 function renderCustomerSearchResults(customers) {
     const resultsContainer = document.getElementById('customerSearchResults');
-    
+
     if (!customers || customers.length === 0) {
         resultsContainer.innerHTML = '<div class="autocomplete-empty">ไม่พบลูกค้า</div>';
         return;
     }
-    
+
     resultsContainer.innerHTML = customers.map(customer => {
         const name = customer.display_name || customer.platform_user_name || customer.full_name || 'ลูกค้า';
         const phone = customer.phone || '';
         const platform = customer.platform || customer.source || 'web';
         const avatar = customer.avatar_url || customer.line_picture_url || customer.facebook_picture_url || null;
         const initials = name.split(' ').map(n => n.charAt(0)).join('').substring(0, 2).toUpperCase();
-        
-        const avatarHtml = avatar 
+
+        const avatarHtml = avatar
             ? `<img src="${escapeHtml(avatar)}" alt="${escapeHtml(name)}" onerror="this.style.display='none';this.parentElement.innerHTML='${initials}';">`
             : initials;
-        
+
         const platformLabel = {
             'line': 'LINE',
             'facebook': 'Facebook',
             'instagram': 'Instagram',
             'web': 'Web'
         }[platform] || platform;
-        
+
         return `
             <div class="autocomplete-item" onclick='selectCustomer(${JSON.stringify(customer).replace(/'/g, "\\'")})'>
                 <div class="autocomplete-item-avatar">${avatarHtml}</div>
@@ -874,7 +877,7 @@ function renderCustomerSearchResults(customers) {
             </div>
         `;
     }).join('');
-    
+
     resultsContainer.style.display = 'block';
 }
 
@@ -884,25 +887,25 @@ function renderCustomerSearchResults(customers) {
  */
 function selectCustomer(customer) {
     selectedCustomer = customer;
-    
+
     const name = customer.display_name || customer.platform_user_name || customer.full_name || 'ลูกค้า';
     const phone = customer.phone || '';
     const platform = customer.platform || customer.source || 'web';
     const avatar = customer.avatar_url || customer.line_picture_url || customer.facebook_picture_url || null;
     const initials = name.split(' ').map(n => n.charAt(0)).join('').substring(0, 2).toUpperCase();
-    
+
     // Show selected customer card
     document.getElementById('selectedCustomerCard').style.display = 'flex';
-    
+
     const avatarContainer = document.getElementById('selectedCustomerAvatar');
     if (avatar) {
         avatarContainer.innerHTML = `<img src="${escapeHtml(avatar)}" alt="${escapeHtml(name)}" onerror="this.style.display='none';this.parentElement.innerHTML='${initials}';">`;
     } else {
         avatarContainer.innerHTML = initials;
     }
-    
+
     document.getElementById('selectedCustomerName').textContent = name;
-    
+
     const platformLabel = {
         'line': 'LINE',
         'facebook': 'Facebook',
@@ -910,11 +913,11 @@ function selectCustomer(customer) {
         'web': 'Web'
     }[platform] || platform;
     document.getElementById('selectedCustomerMeta').textContent = `${platformLabel}${phone ? ' • ' + phone : ''}`;
-    
+
     // Fill form fields
     document.getElementById('customerName').value = name;
     if (phone) document.getElementById('customerPhone').value = phone;
-    
+
     // Set source dropdown
     const sourceSelect = document.getElementById('customerSource');
     if (sourceSelect) {
@@ -923,10 +926,10 @@ function selectCustomer(customer) {
             sourceSelect.value = platform;
         }
     }
-    
+
     // Set hidden field
     document.getElementById('selectedCustomerId').value = customer.id || customer.customer_id || customer.external_user_id || '';
-    
+
     // Hide search results and clear search input
     document.getElementById('customerSearchResults').style.display = 'none';
     document.getElementById('customerSearch').value = '';
@@ -959,7 +962,7 @@ document.addEventListener('click', (e) => {
     if (productSearchWrapper && productResultsContainer && !productSearchWrapper.contains(e.target)) {
         productResultsContainer.style.display = 'none';
     }
-    
+
     // Customer search dropdown
     const customerSearchWrapper = document.querySelector('#customerSearch')?.closest('.autocomplete-wrapper');
     const customerResultsContainer = document.getElementById('customerSearchResults');
@@ -967,3 +970,211 @@ document.addEventListener('click', (e) => {
         customerResultsContainer.style.display = 'none';
     }
 });
+
+// =========================================================
+// EDIT ORDER FUNCTIONS
+// =========================================================
+
+let currentEditOrderId = null;
+let currentEditOrderData = null;
+
+/**
+ * Open Edit Order Modal
+ */
+async function openEditOrderModal(orderId) {
+    currentEditOrderId = orderId;
+
+    // Close view modal first
+    closeOrderModal();
+
+    // Fetch order data
+    try {
+        const result = await apiCall(API_ENDPOINTS.CUSTOMER_ORDER_DETAIL(orderId));
+
+        if (result && result.success && result.data) {
+            currentEditOrderData = result.data;
+            showEditOrderForm(result.data);
+        } else {
+            showToast('ไม่สามารถโหลดข้อมูลคำสั่งซื้อได้', 'error');
+        }
+    } catch (error) {
+        console.error('Error loading order:', error);
+        showToast('เกิดข้อผิดพลาดในการโหลดข้อมูล', 'error');
+    }
+}
+
+/**
+ * Show Edit Order Form in Modal
+ */
+function showEditOrderForm(order) {
+    const modal = document.getElementById('orderModal');
+    const content = document.getElementById('orderDetailsContent');
+
+    modal.style.display = 'flex';
+
+    const statusOptions = [
+        { value: 'draft', label: 'ร่าง' },
+        { value: 'pending', label: 'รอดำเนินการ' },
+        { value: 'pending_payment', label: 'รอชำระเงิน' },
+        { value: 'paid', label: 'ชำระแล้ว' },
+        { value: 'processing', label: 'กำลังเตรียม' },
+        { value: 'shipped', label: 'จัดส่งแล้ว' },
+        { value: 'delivered', label: 'ส่งถึงแล้ว' },
+        { value: 'cancelled', label: 'ยกเลิก' },
+        { value: 'refunded', label: 'คืนเงิน' }
+    ];
+
+    const currentStatus = order.status || 'pending';
+
+    content.innerHTML = `
+        <div class="edit-order-form">
+            <h3 style="margin-bottom: 1.5rem; color: var(--color-primary);">
+                <i class="fas fa-edit"></i> แก้ไขคำสั่งซื้อ #${order.order_no || order.order_number || order.id}
+            </h3>
+            
+            <form id="editOrderForm" onsubmit="submitEditOrder(event)">
+                <input type="hidden" id="editOrderId" value="${order.id}">
+                
+                <div class="form-section">
+                    <h4>ข้อมูลสินค้า</h4>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="editProductName">ชื่อสินค้า</label>
+                            <input type="text" id="editProductName" name="product_name" 
+                                   value="${escapeHtml(order.product_name || '')}" class="form-input">
+                        </div>
+                        <div class="form-group">
+                            <label for="editProductCode">รหัสสินค้า</label>
+                            <input type="text" id="editProductCode" name="product_code" 
+                                   value="${escapeHtml(order.product_code || '')}" class="form-input">
+                        </div>
+                        <div class="form-group">
+                            <label for="editQuantity">จำนวน</label>
+                            <input type="number" id="editQuantity" name="quantity" min="1"
+                                   value="${order.quantity || 1}" class="form-input">
+                        </div>
+                        <div class="form-group">
+                            <label for="editTotalAmount">ยอดรวม (บาท)</label>
+                            <input type="number" id="editTotalAmount" name="total_amount" step="0.01" min="0"
+                                   value="${order.total_amount || 0}" class="form-input">
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="form-section">
+                    <h4>สถานะ</h4>
+                    <div class="form-group">
+                        <label for="editStatus">สถานะคำสั่งซื้อ</label>
+                        <select id="editStatus" name="status" class="form-input form-select">
+                            ${statusOptions.map(opt =>
+        `<option value="${opt.value}" ${currentStatus === opt.value ? 'selected' : ''}>${opt.label}</option>`
+    ).join('')}
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="form-section">
+                    <h4>ข้อมูลลูกค้า</h4>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="editCustomerName">ชื่อลูกค้า</label>
+                            <input type="text" id="editCustomerName" name="customer_name" 
+                                   value="${escapeHtml(order.customer_name || '')}" class="form-input">
+                        </div>
+                        <div class="form-group">
+                            <label for="editCustomerPhone">เบอร์โทร</label>
+                            <input type="text" id="editCustomerPhone" name="customer_phone" 
+                                   value="${escapeHtml(order.customer_phone || '')}" class="form-input">
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="form-section">
+                    <h4>การจัดส่ง</h4>
+                    <div class="form-group">
+                        <label for="editTrackingNumber">เลขพัสดุ (Tracking Number)</label>
+                        <input type="text" id="editTrackingNumber" name="tracking_number" 
+                               value="${escapeHtml(order.tracking_number || '')}" class="form-input"
+                               placeholder="กรอกเลขพัสดุ">
+                    </div>
+                </div>
+                
+                <div class="form-section">
+                    <h4>หมายเหตุ</h4>
+                    <div class="form-group">
+                        <textarea id="editNotes" name="notes" class="form-input form-textarea" rows="3"
+                                  placeholder="หมายเหตุเพิ่มเติม">${escapeHtml(order.notes || order.note || '')}</textarea>
+                    </div>
+                </div>
+                
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" onclick="closeOrderModal()">
+                        <i class="fas fa-times"></i> ยกเลิก
+                    </button>
+                    <button type="submit" class="btn btn-primary" id="submitEditBtn">
+                        <i class="fas fa-save"></i> บันทึกการแก้ไข
+                    </button>
+                </div>
+            </form>
+        </div>
+    `;
+}
+
+/**
+ * Submit Edit Order Form
+ */
+async function submitEditOrder(event) {
+    event.preventDefault();
+
+    const submitBtn = document.getElementById('submitEditBtn');
+    const orderId = document.getElementById('editOrderId').value;
+
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> กำลังบันทึก...';
+
+    try {
+        // Build form data
+        const formData = new FormData();
+        formData.append('id', orderId);
+        formData.append('action', 'update');
+        formData.append('product_name', document.getElementById('editProductName').value.trim());
+        formData.append('product_code', document.getElementById('editProductCode').value.trim());
+        formData.append('quantity', document.getElementById('editQuantity').value);
+        formData.append('total_amount', document.getElementById('editTotalAmount').value);
+        formData.append('status', document.getElementById('editStatus').value);
+        formData.append('customer_name', document.getElementById('editCustomerName').value.trim());
+        formData.append('customer_phone', document.getElementById('editCustomerPhone').value.trim());
+        formData.append('tracking_number', document.getElementById('editTrackingNumber').value.trim());
+        formData.append('notes', document.getElementById('editNotes').value.trim());
+
+        const apiUrl = (typeof API_ENDPOINTS !== 'undefined' && API_ENDPOINTS.CUSTOMER_ORDERS)
+            ? API_ENDPOINTS.CUSTOMER_ORDERS + '?action=update'
+            : '/api/customer/orders?action=update';
+
+        const response = await fetch(apiUrl, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+            },
+            body: formData
+        });
+
+        const result = await response.json();
+
+        if (result && result.success) {
+            showToast('✅ บันทึกการแก้ไขเรียบร้อย', 'success');
+            closeOrderModal();
+            await loadOrders(currentPage);
+        } else {
+            showToast('❌ ' + (result?.message || 'ไม่สามารถบันทึกได้'), 'error');
+        }
+    } catch (error) {
+        console.error('Update order error:', error);
+        showToast('❌ เกิดข้อผิดพลาดในการบันทึก', 'error');
+    } finally {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="fas fa-save"></i> บันทึกการแก้ไข';
+    }
+
+    return false;
+}

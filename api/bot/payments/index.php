@@ -206,17 +206,15 @@ function submitPayment($db)
     }
 
     $sql = "INSERT INTO payments (
-        payment_no, order_id, user_id, tenant_id,
-        customer_profile_id, platform_user_id, platform,
+        payment_no, order_id, customer_id, tenant_id,
+        platform_user_id, platform,
         amount, payment_type, payment_method,
-        savings_transaction_id,
-        status, slip_image_url, ocr_data,
-        transfer_time, source, created_at, updated_at
+        status, slip_image, payment_details,
+        payment_date, source, created_at, updated_at
     ) VALUES (
         ?, ?, ?, ?,
+        ?, ?,
         ?, ?, ?,
-        ?, ?, ?,
-        ?,
         'pending', ?, ?,
         ?, 'chatbot', NOW(), NOW()
     )";
@@ -224,18 +222,16 @@ function submitPayment($db)
     $params = [
         $paymentNo,
         $orderIdForInsert,
-        $input['user_id'] ?? null,           // user_id (usually null for chatbot)
+        $customerProfileId,                   // customer_id (FK to customer_profiles)
         $input['tenant_id'] ?? 'default',
-        $customerProfileId,                   // customer_profile_id
         $input['external_user_id'] ?? null,   // platform_user_id
         $input['platform'] ?? null,           // platform
         $amount,
         $paymentType,
         $input['payment_method'] ?? 'bank_transfer',
-        $input['savings_transaction_id'] ?? null,
-        $input['slip_image_url'] ?? null,
+        $input['slip_image_url'] ?? null,     // slip_image column
         $paymentDetails,
-        $input['payment_time'] ?? null
+        $input['payment_time'] ?? null        // payment_date
     ];
 
     $db->execute($sql, $params);

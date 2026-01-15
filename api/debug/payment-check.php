@@ -23,7 +23,7 @@ try {
             cp.avatar_url as cp_avatar_url,
             cp.profile_pic_url as cp_profile_pic_url
         FROM payments p
-        LEFT JOIN customer_profiles cp ON p.customer_id = cp.id
+        LEFT JOIN customer_profiles cp ON p.platform_user_id = cp.platform_user_id
         ORDER BY p.id DESC
         LIMIT 3
     ");

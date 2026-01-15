@@ -49,8 +49,9 @@ try {
                     cp.platform as customer_platform
                 FROM payments p
                 LEFT JOIN orders o ON p.order_id = o.id
-                LEFT JOIN customer_profiles cp ON p.platform_user_id = cp.platform_user_id 
-                    AND cp.platform = COALESCE(p.platform, 'line')
+                LEFT JOIN customer_profiles cp ON 
+                    cp.platform_user_id = COALESCE(p.platform_user_id, JSON_UNQUOTE(JSON_EXTRACT(p.payment_details, '$.external_user_id')))
+                    AND cp.platform = COALESCE(p.platform, JSON_UNQUOTE(JSON_EXTRACT(p.payment_details, '$.platform')), 'line')
                 WHERE p.id = ?
             ");
             $stmt->execute([$payment_id]);
@@ -117,8 +118,9 @@ try {
                     COUNT(CASE WHEN status = 'rejected' THEN 1 END) as rejected,
                     COALESCE(SUM(CASE WHEN status = 'pending' THEN amount END), 0) as pending_amount
                 FROM payments p
-                LEFT JOIN customer_profiles cp ON p.platform_user_id = cp.platform_user_id 
-                    AND cp.platform = COALESCE(p.platform, 'line')
+                LEFT JOIN customer_profiles cp ON 
+                    cp.platform_user_id = COALESCE(p.platform_user_id, JSON_UNQUOTE(JSON_EXTRACT(p.payment_details, '$.external_user_id')))
+                    AND cp.platform = COALESCE(p.platform, JSON_UNQUOTE(JSON_EXTRACT(p.payment_details, '$.platform')), 'line')
                 WHERE $where_clause
             ");
             $stmt->execute($params);
@@ -128,8 +130,9 @@ try {
             $stmt = $pdo->prepare("
                 SELECT COUNT(*) as total
                 FROM payments p
-                LEFT JOIN customer_profiles cp ON p.platform_user_id = cp.platform_user_id 
-                    AND cp.platform = COALESCE(p.platform, 'line')
+                LEFT JOIN customer_profiles cp ON 
+                    cp.platform_user_id = COALESCE(p.platform_user_id, JSON_UNQUOTE(JSON_EXTRACT(p.payment_details, '$.external_user_id')))
+                    AND cp.platform = COALESCE(p.platform, JSON_UNQUOTE(JSON_EXTRACT(p.payment_details, '$.platform')), 'line')
                 WHERE $where_clause
             ");
             $stmt->execute($params);
@@ -159,12 +162,13 @@ try {
                     cp.platform as customer_platform
                 FROM payments p
                 LEFT JOIN orders o ON p.order_id = o.id
-                LEFT JOIN customer_profiles cp ON p.platform_user_id = cp.platform_user_id 
-                    AND cp.platform = COALESCE(p.platform, 'line')
+                LEFT JOIN customer_profiles cp ON 
+                    cp.platform_user_id = COALESCE(p.platform_user_id, JSON_UNQUOTE(JSON_EXTRACT(p.payment_details, '$.external_user_id')))
+                    AND cp.platform = COALESCE(p.platform, JSON_UNQUOTE(JSON_EXTRACT(p.payment_details, '$.platform')), 'line')
                 WHERE $where_clause
                 ORDER BY 
                     CASE WHEN p.status = 'pending' THEN 0 ELSE 1 END,
-                    p.created_at DESC
+                    p.id DESC
                 LIMIT ? OFFSET ?
             ");
             $params[] = $limit;

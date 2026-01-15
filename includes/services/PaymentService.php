@@ -216,11 +216,13 @@ class PaymentService
             $orderId = $matchedOrder['id'] ?? null;
             
             // 8. INSERT using ACTUAL production schema
-            // Columns that exist: payment_no, order_id, customer_id, tenant_id, amount,
-            //                     payment_type, payment_method, status, slip_image,
-            //                     payment_details, payment_date, source, created_at, updated_at
+            // Columns: user_id, platform_user_id, payment_no, order_id, customer_id, tenant_id, amount,
+            //          payment_type, payment_method, status, slip_image,
+            //          payment_details, payment_date, source, created_at, updated_at
             $sql = "
                 INSERT INTO payments (
+                    user_id,
+                    platform_user_id,
                     payment_no,
                     order_id,
                     customer_id,
@@ -236,6 +238,8 @@ class PaymentService
                     created_at,
                     updated_at
                 ) VALUES (
+                    :user_id,
+                    :platform_user_id,
                     :payment_no,
                     :order_id,
                     :customer_id,
@@ -254,9 +258,11 @@ class PaymentService
             ";
             
             $params = [
+                ':user_id' => $context['user_id'] ?? null, // Shop owner's user_id
+                ':platform_user_id' => $externalUserId, // Customer's platform ID for JOIN
                 ':payment_no' => $paymentNo,
                 ':order_id' => $orderId,
-                ':customer_id' => $customerId, // Now FK to customer_profiles.id
+                ':customer_id' => $customerId, // Legacy FK to customer_profiles.id
                 ':tenant_id' => $tenantId,
                 ':amount' => $amount,
                 ':slip_image' => $finalImageUrl, // Use GCS URL if upload succeeded, else original
