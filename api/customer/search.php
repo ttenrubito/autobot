@@ -35,10 +35,10 @@ if ($method !== 'GET') {
 try {
     $db = Database::getInstance();
     $pdo = getDB();
-    
+
     $query = trim($_GET['q'] ?? '');
-    $limit = min(20, max(1, (int)($_GET['limit'] ?? 10)));
-    
+    $limit = min(20, max(1, (int) ($_GET['limit'] ?? 10)));
+
     if (strlen($query) < 2) {
         echo json_encode([
             'success' => true,
@@ -47,10 +47,10 @@ try {
         ]);
         exit;
     }
-    
+
     $results = [];
     $searchPattern = '%' . $query . '%';
-    
+
     // First, try to search in customers table if it exists
     try {
         $stmt = $pdo->prepare("
@@ -85,9 +85,9 @@ try {
             LIMIT ?
         ");
         $stmt->execute([
-            $searchPattern, 
-            $searchPattern, 
-            $searchPattern, 
+            $searchPattern,
+            $searchPattern,
+            $searchPattern,
             $searchPattern,
             $searchPattern,
             $searchPattern,
@@ -97,103 +97,143 @@ try {
     } catch (PDOException $e) {
         // customers table doesn't exist, continue with conversations
     }
-    
-    // If no results from customers table, search in conversations
+
+    // If no results from customers table, search in customer_profiles
     if (empty($results)) {
-        $stmt = $pdo->prepare("
-            SELECT 
-                conv.id,
-                conv.conversation_id,
-                conv.external_user_id,
-                conv.platform_user_name as display_name,
-                ch.platform,
-                JSON_UNQUOTE(JSON_EXTRACT(conv.metadata, '$.line_profile_url')) as avatar_url,
-                JSON_UNQUOTE(JSON_EXTRACT(conv.metadata, '$.user_phone')) as phone,
-                conv.last_message_at,
-                conv.created_at
-            FROM conversations conv
-            JOIN channels ch ON conv.channel_id = ch.id
-            WHERE conv.platform_user_name LIKE ?
-               OR conv.external_user_id LIKE ?
-               OR JSON_UNQUOTE(JSON_EXTRACT(conv.metadata, '$.user_phone')) LIKE ?
-            ORDER BY conv.last_message_at DESC
-            LIMIT ?
-        ");
-        $stmt->execute([$searchPattern, $searchPattern, $searchPattern, $limit]);
-        $conversations = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        
-        // De-duplicate by external_user_id (same customer on same platform)
-        $seen = [];
-        foreach ($conversations as $conv) {
-            $key = $conv['platform'] . ':' . $conv['external_user_id'];
-            if (!isset($seen[$key])) {
-                $seen[$key] = true;
+        try {
+            $stmt = $pdo->prepare("
+                SELECT 
+                    cp.id,
+                    cp.platform_user_id as external_user_id,
+                    COALESCE(cp.display_name, cp.full_name) as display_name,
+                    cp.platform,
+                    COALESCE(cp.avatar_url, cp.profile_pic_url) as avatar_url,
+                    cp.phone,
+                    cp.last_active_at as last_contact_at,
+                    cp.created_at
+                FROM customer_profiles cp
+                WHERE COALESCE(cp.display_name, cp.full_name) LIKE ?
+                   OR cp.platform_user_id LIKE ?
+                   OR cp.phone LIKE ?
+                   OR cp.email LIKE ?
+                ORDER BY cp.last_active_at DESC
+                LIMIT ?
+            ");
+            $stmt->execute([$searchPattern, $searchPattern, $searchPattern, $searchPattern, $limit]);
+            $profiles = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            foreach ($profiles as $profile) {
                 $results[] = [
-                    'id' => $conv['id'],
-                    'external_user_id' => $conv['external_user_id'],
-                    'display_name' => $conv['platform_user_name'] ?? $conv['display_name'],
-                    'platform' => $conv['platform'],
-                    'avatar_url' => $conv['avatar_url'],
-                    'phone' => $conv['phone'],
-                    'last_contact_at' => $conv['last_message_at'],
-                    'source' => 'conversation'
+                    'id' => $profile['id'],
+                    'external_user_id' => $profile['external_user_id'],
+                    'display_name' => $profile['display_name'],
+                    'platform' => $profile['platform'],
+                    'avatar_url' => $profile['avatar_url'],
+                    'phone' => $profile['phone'],
+                    'last_contact_at' => $profile['last_contact_at'],
+                    'source' => 'customer_profile'
                 ];
             }
+        } catch (PDOException $e) {
+            // customer_profiles table issue, log and continue
+            error_log("Customer search: customer_profiles query failed: " . $e->getMessage());
         }
     }
-    
-    // Also search in orders for customer info
+
+    // Also search in orders for customer info (with defensive column checking)
     if (count($results) < $limit) {
-        $remaining = $limit - count($results);
-        $stmt = $pdo->prepare("
-            SELECT DISTINCT
-                o.customer_id as id,
-                o.customer_name as display_name,
-                o.customer_phone as phone,
-                o.customer_platform as platform,
-                o.customer_avatar as avatar_url,
-                o.source,
-                o.created_at as last_contact_at
-            FROM orders o
-            WHERE o.customer_name LIKE ?
-               OR o.customer_phone LIKE ?
-            ORDER BY o.created_at DESC
-            LIMIT ?
-        ");
-        $stmt->execute([$searchPattern, $searchPattern, $remaining]);
-        $orderCustomers = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        
-        // Add unique ones
-        foreach ($orderCustomers as $oc) {
-            $duplicate = false;
-            foreach ($results as $r) {
-                if (
-                    ($r['display_name'] === $oc['display_name'] && $r['phone'] === $oc['phone']) ||
-                    ($oc['phone'] && $r['phone'] === $oc['phone'])
-                ) {
-                    $duplicate = true;
-                    break;
+        try {
+            $remaining = $limit - count($results);
+
+            // Check which columns exist in orders table
+            $orderCols = [];
+            $colStmt = $pdo->query("SHOW COLUMNS FROM orders");
+            while ($col = $colStmt->fetch(PDO::FETCH_ASSOC)) {
+                $orderCols[$col['Field']] = true;
+            }
+
+            // Only run if customer_name or customer_phone exists
+            $hasCustomerName = isset($orderCols['customer_name']);
+            $hasCustomerPhone = isset($orderCols['customer_phone']);
+
+            if ($hasCustomerName || $hasCustomerPhone) {
+                // Build dynamic SELECT
+                $selectParts = ['o.id'];
+                if ($hasCustomerName)
+                    $selectParts[] = 'o.customer_name as display_name';
+                if ($hasCustomerPhone)
+                    $selectParts[] = 'o.customer_phone as phone';
+                if (isset($orderCols['customer_platform']))
+                    $selectParts[] = 'o.customer_platform as platform';
+                if (isset($orderCols['customer_avatar']))
+                    $selectParts[] = 'o.customer_avatar as avatar_url';
+                if (isset($orderCols['source']))
+                    $selectParts[] = 'o.source';
+                $selectParts[] = 'o.created_at as last_contact_at';
+
+                // Build WHERE clause
+                $whereParts = [];
+                $whereParams = [];
+                if ($hasCustomerName) {
+                    $whereParts[] = 'o.customer_name LIKE ?';
+                    $whereParams[] = $searchPattern;
+                }
+                if ($hasCustomerPhone) {
+                    $whereParts[] = 'o.customer_phone LIKE ?';
+                    $whereParams[] = $searchPattern;
+                }
+
+                if (!empty($whereParts)) {
+                    $whereParams[] = $remaining;
+
+                    $sql = "SELECT DISTINCT " . implode(', ', $selectParts) .
+                        " FROM orders o WHERE " . implode(' OR ', $whereParts) .
+                        " ORDER BY o.created_at DESC LIMIT ?";
+
+                    $stmt = $pdo->prepare($sql);
+                    $stmt->execute($whereParams);
+                    $orderCustomers = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                    // Add unique ones
+                    foreach ($orderCustomers as $oc) {
+                        $duplicate = false;
+                        foreach ($results as $r) {
+                            if (
+                                (isset($r['display_name']) && isset($oc['display_name']) && $r['display_name'] === $oc['display_name'] && ($r['phone'] ?? '') === ($oc['phone'] ?? '')) ||
+                                (isset($oc['phone']) && $oc['phone'] && isset($r['phone']) && $r['phone'] === $oc['phone'])
+                            ) {
+                                $duplicate = true;
+                                break;
+                            }
+                        }
+                        if (!$duplicate) {
+                            $oc['source'] = 'order';
+                            $results[] = $oc;
+                        }
+                    }
                 }
             }
-            if (!$duplicate) {
-                $oc['source'] = 'order';
-                $results[] = $oc;
-            }
+        } catch (PDOException $e) {
+            // Orders table might not have customer columns
+            error_log("Customer search: orders query failed: " . $e->getMessage());
         }
     }
-    
+
     echo json_encode([
         'success' => true,
         'data' => array_slice($results, 0, $limit),
         'count' => count($results),
         'query' => $query
     ]);
-    
+
 } catch (Exception $e) {
     error_log("Customer Search API Error: " . $e->getMessage());
     http_response_code(500);
     echo json_encode([
         'success' => false,
-        'message' => 'เกิดข้อผิดพลาดในการค้นหา'
+        'message' => 'เกิดข้อผิดพลาดในการค้นหา',
+        'debug_error' => $e->getMessage(),
+        'debug_file' => $e->getFile(),
+        'debug_line' => $e->getLine()
     ]);
 }

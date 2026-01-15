@@ -35,7 +35,13 @@ $case_id = $_GET['id'] ?? null;
 try {
     $pdo = getDB();
     
-    // Get tenant_id from user (เจ้าของร้านดู cases ทั้งหมดของร้าน by tenant_id)
+    // ✅ FIX: Get channel_ids owned by this user (not tenant_id)
+    // Each user (shop owner) can only see cases from their own channels
+    $channelStmt = $pdo->prepare("SELECT id FROM customer_channels WHERE user_id = ? AND is_deleted = 0");
+    $channelStmt->execute([$user_id]);
+    $userChannels = $channelStmt->fetchAll(PDO::FETCH_COLUMN);
+    
+    // Also get tenant_id for backward compatibility
     $stmt = $pdo->prepare("SELECT tenant_id FROM users WHERE id = ? LIMIT 1");
     $stmt->execute([$user_id]);
     $user = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -44,10 +50,10 @@ try {
     if ($method === 'GET') {
         if ($case_id) {
             // Get specific case
-            getCaseDetail($pdo, $case_id, $tenant_id);
+            getCaseDetail($pdo, $case_id, $user_id, $userChannels);
         } else {
-            // Get all cases for this shop/tenant
-            getAllCases($pdo, $tenant_id);
+            // Get all cases for this user's channels
+            getAllCases($pdo, $user_id, $userChannels);
         }
     } elseif ($method === 'POST') {
         // Create new case
@@ -67,9 +73,9 @@ try {
 }
 
 /**
- * Get all cases for shop/tenant (เจ้าของร้านดู cases ทั้งหมดของร้าน)
+ * Get all cases for user's channels (เจ้าของร้านดู cases ของ channel ตัวเอง)
  */
-function getAllCases($pdo, $tenant_id) {
+function getAllCases($pdo, $user_id, $userChannels) {
     $status = $_GET['status'] ?? null;
     $priority = $_GET['priority'] ?? null;
     
@@ -78,8 +84,23 @@ function getAllCases($pdo, $tenant_id) {
     $limit = isset($_GET['limit']) ? min(100, max(1, (int)$_GET['limit'])) : 20;
     $offset = ($page - 1) * $limit;
     
-    $where = ['c.tenant_id = ?'];
-    $params = [$tenant_id];
+    // ✅ FIX: Filter by user's channel_ids instead of tenant_id
+    if (empty($userChannels)) {
+        // User has no channels, return empty
+        echo json_encode([
+            'success' => true,
+            'data' => [
+                'cases' => [],
+                'summary' => ['total' => 0, 'open' => 0, 'in_progress' => 0, 'pending_admin' => 0, 'pending_customer' => 0, 'resolved' => 0, 'cancelled' => 0],
+                'pagination' => ['page' => 1, 'limit' => $limit, 'total' => 0, 'total_pages' => 0]
+            ]
+        ]);
+        return;
+    }
+    
+    $channelPlaceholders = implode(',', array_fill(0, count($userChannels), '?'));
+    $where = ["c.channel_id IN ({$channelPlaceholders})"];
+    $params = $userChannels;
     
     if ($status) {
         $where[] = 'c.status = ?';
@@ -139,14 +160,14 @@ function getAllCases($pdo, $tenant_id) {
     $stmt->execute($params);
     $cases = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // Calculate summary from all records (not just current page)
+    // ✅ FIX: Calculate summary from user's channels (not tenant_id)
     $summaryStmt = $pdo->prepare("
         SELECT status, COUNT(*) as count 
         FROM cases 
-        WHERE tenant_id = ? 
+        WHERE channel_id IN ({$channelPlaceholders})
         GROUP BY status
     ");
-    $summaryStmt->execute([$tenant_id]);
+    $summaryStmt->execute($userChannels);
     $statusCounts = $summaryStmt->fetchAll(PDO::FETCH_KEY_PAIR);
     
     $summary = [
@@ -176,8 +197,19 @@ function getAllCases($pdo, $tenant_id) {
 
 /**
  * Get specific case detail
+ * ✅ FIX: Use channel_id to filter cases (user can only see their own channels' cases)
  */
-function getCaseDetail($pdo, $case_id, $tenant_id) {
+function getCaseDetail($pdo, $case_id, $user_id, $userChannels) {
+    // ✅ Security check: Only allow if case belongs to user's channels
+    if (empty($userChannels)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'message' => 'No channels found for user']);
+        return;
+    }
+    
+    $channelPlaceholders = implode(',', array_fill(0, count($userChannels), '?'));
+    $params = array_merge([$case_id], $userChannels);
+    
     $stmt = $pdo->prepare("
         SELECT 
             c.*,
@@ -198,9 +230,9 @@ function getCaseDetail($pdo, $case_id, $tenant_id) {
         LEFT JOIN payments p ON c.payment_id = p.id
         LEFT JOIN savings_accounts sa ON c.savings_account_id = sa.id
         LEFT JOIN users u ON c.assigned_to = u.id
-        WHERE c.id = ? AND c.tenant_id = ?
+        WHERE c.id = ? AND c.channel_id IN ({$channelPlaceholders})
     ");
-    $stmt->execute([$case_id, $tenant_id]);
+    $stmt->execute($params);
     $case = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if (!$case) {

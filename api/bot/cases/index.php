@@ -73,6 +73,46 @@ function generateCaseNo(): string {
 }
 
 /**
+ * ✅ NEW: Get chat history summary for case context
+ * Returns formatted string of recent messages
+ */
+function getChatHistorySummary($db, int $sessionId, int $limit = 10): ?string {
+    try {
+        $messages = $db->query(
+            "SELECT role, text, created_at 
+             FROM chat_messages 
+             WHERE session_id = ? 
+             ORDER BY created_at DESC 
+             LIMIT ?",
+            [$sessionId, $limit]
+        );
+        
+        if (empty($messages)) {
+            return null;
+        }
+        
+        // Reverse to chronological order
+        $messages = array_reverse($messages);
+        
+        $lines = [];
+        foreach ($messages as $msg) {
+            $timestamp = date('H:i', strtotime($msg['created_at']));
+            $role = $msg['role'] === 'user' ? 'ลูกค้า' : ($msg['role'] === 'assistant' ? 'Bot' : $msg['role']);
+            $text = mb_substr(trim($msg['text'] ?? ''), 0, 200);
+            if ($text) {
+                $lines[] = "[{$timestamp}] {$role}: {$text}";
+            }
+        }
+        
+        return !empty($lines) ? implode("\n", $lines) : null;
+        
+    } catch (Exception $e) {
+        Logger::warning('Failed to get chat history: ' . $e->getMessage());
+        return null;
+    }
+}
+
+/**
  * Create new case
  * 
  * Required: channel_id, external_user_id, platform, case_type
@@ -173,7 +213,27 @@ function createCase($db) {
     $caseNo = generateCaseNo();
     $slots = isset($input['slots']) ? json_encode($input['slots']) : null;
     
-    // Include initial message in description
+    // ✅ NEW: Get chat history for context
+    $chatSummary = null;
+    $sessionId = $input['session_id'] ?? null;
+    if ($sessionId) {
+        $chatSummary = getChatHistorySummary($db, (int)$sessionId, 10);
+    }
+    
+    // ✅ NEW: Build products_interested array from slots
+    $productsInterested = null;
+    $slotsData = $input['slots'] ?? [];
+    if (!empty($slotsData['product_ref_id']) || !empty($slotsData['product_name'])) {
+        $productsInterested = json_encode([[
+            'product_ref_id' => $slotsData['product_ref_id'] ?? null,
+            'product_name' => $slotsData['product_name'] ?? null,
+            'product_price' => $slotsData['product_price'] ?? null,
+            'interest_type' => 'inquired',
+            'timestamp' => date('Y-m-d H:i:s'),
+        ]], JSON_UNESCAPED_UNICODE);
+    }
+    
+    // Include initial message and chat history in description
     $description = $input['description'] ?? null;
     if (!empty($input['message'])) {
         $timestamp = date('Y-m-d H:i:s');
@@ -202,15 +262,16 @@ function createCase($db) {
         $subject = $typeLabels[$input['case_type']] ?? 'New Case';
     }
     
+    // ✅ NEW: Include chat_summary and products_interested in INSERT
     $sql = "INSERT INTO cases (
         case_no, tenant_id, case_type, channel_id, external_user_id, 
-        customer_id, platform, session_id, subject, description, 
-        slots, product_ref_id, order_id, payment_id, savings_account_id,
+        customer_id, customer_profile_id, platform, session_id, subject, description, chat_summary,
+        slots, product_ref_id, products_interested, order_id, payment_id, savings_account_id,
         status, priority, created_at, updated_at
     ) VALUES (
         ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?,
         ?, ?, NOW(), NOW()
     )";
     
@@ -221,12 +282,15 @@ function createCase($db) {
         (int)$input['channel_id'],
         (string)$input['external_user_id'],
         $input['customer_id'] ?? null,
+        $input['customer_profile_id'] ?? null, // ✅ NEW
         $input['platform'],
-        $input['session_id'] ?? null,
+        $sessionId,
         $subject,
-        $input['description'] ?? null,
+        $description,
+        $chatSummary, // ✅ NEW
         $slots,
-        $input['product_ref_id'] ?? null,
+        $slotsData['product_ref_id'] ?? null,
+        $productsInterested, // ✅ NEW
         $input['order_id'] ?? null,
         $input['payment_id'] ?? null,
         $input['savings_account_id'] ?? null,
@@ -236,6 +300,18 @@ function createCase($db) {
     
     $db->execute($sql, $params);
     $newId = $db->lastInsertId();
+    
+    // ✅ NEW: Update customer_profiles stats
+    if (!empty($input['customer_profile_id'])) {
+        try {
+            $db->execute(
+                "UPDATE customer_profiles SET total_cases = COALESCE(total_cases, 0) + 1, last_case_at = NOW(), updated_at = NOW() WHERE id = ?",
+                [(int)$input['customer_profile_id']]
+            );
+        } catch (Exception $e) {
+            // Ignore if column doesn't exist yet
+        }
+    }
     
     // Log activity
     logCaseActivity($db, $newId, 'created', null, [

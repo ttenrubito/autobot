@@ -820,14 +820,32 @@ function sendFacebookImage(string $recipientPsid, string $imageUrl, array $chann
 /**
  * Upsert customer profile from Facebook
  * บันทึกหรืออัพเดท profile ลูกค้าจาก Facebook (ซ้ำไม่ได้)
+ * @return int|null Customer profile ID or null on failure
  */
-function upsertCustomerProfile(string $platform, string $platformUserId, string $pageAccessToken): void
+function upsertCustomerProfile(string $platform, string $platformUserId, string $pageAccessToken, string $tenantId = 'default'): ?int
 {
     if (empty($platformUserId) || empty($pageAccessToken)) {
-        return;
+        return null;
     }
     
     try {
+        $db = Database::getInstance();
+        
+        // First check if profile already exists
+        $existing = $db->queryOne(
+            "SELECT id FROM customer_profiles WHERE platform = ? AND platform_user_id = ? LIMIT 1",
+            [$platform, $platformUserId]
+        );
+        
+        if ($existing) {
+            // Update last_active_at and total_inquiries
+            $db->execute(
+                "UPDATE customer_profiles SET last_active_at = NOW(), total_inquiries = COALESCE(total_inquiries, 0) + 1, updated_at = NOW() WHERE id = ?",
+                [$existing['id']]
+            );
+            return (int)$existing['id'];
+        }
+        
         // Get profile from Facebook Graph API
         $profileUrl = "https://graph.facebook.com/v18.0/{$platformUserId}?fields=name,profile_pic&access_token={$pageAccessToken}";
         
@@ -840,49 +858,57 @@ function upsertCustomerProfile(string $platform, string $platformUserId, string 
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
         
-        if ($httpCode !== 200) {
-            Logger::warning('[FB_PROFILE] Failed to get profile from Facebook', [
+        $displayName = null;
+        $avatarUrl = null;
+        
+        if ($httpCode === 200) {
+            $profile = json_decode($resp, true);
+            if (is_array($profile)) {
+                $displayName = $profile['name'] ?? null;
+                $avatarUrl = $profile['profile_pic'] ?? null;
+            }
+        } else {
+            Logger::warning('[FB_PROFILE] Failed to get profile from Facebook API, creating with minimal data', [
                 'platform_user_id' => $platformUserId,
                 'http_code' => $httpCode,
             ]);
-            return;
         }
         
-        $profile = json_decode($resp, true);
-        if (!is_array($profile)) {
-            return;
-        }
-        
-        $displayName = $profile['name'] ?? null;
-        $avatarUrl = $profile['profile_pic'] ?? null;
-        
-        if (!$displayName && !$avatarUrl) {
-            return;
-        }
-        
-        // Upsert into customer_profiles (INSERT ... ON DUPLICATE KEY UPDATE)
-        $db = Database::getInstance();
+        // Insert new customer profile (always create even if no display name)
         $sql = "
-            INSERT INTO customer_profiles (platform, platform_user_id, display_name, avatar_url, first_seen_at, last_active_at, created_at, updated_at)
-            VALUES (?, ?, ?, ?, NOW(), NOW(), NOW(), NOW())
+            INSERT INTO customer_profiles (tenant_id, platform, platform_user_id, display_name, avatar_url, total_inquiries, first_seen_at, last_active_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 1, NOW(), NOW(), NOW(), NOW())
             ON DUPLICATE KEY UPDATE 
                 display_name = COALESCE(VALUES(display_name), display_name),
                 avatar_url = COALESCE(VALUES(avatar_url), avatar_url),
+                total_inquiries = COALESCE(total_inquiries, 0) + 1,
                 last_active_at = NOW(),
                 updated_at = NOW()
         ";
         
-        $db->execute($sql, [$platform, $platformUserId, $displayName, $avatarUrl]);
+        $db->execute($sql, [$tenantId, $platform, $platformUserId, $displayName, $avatarUrl]);
+        
+        // Get the ID (either new or existing due to race condition)
+        $result = $db->queryOne(
+            "SELECT id FROM customer_profiles WHERE platform = ? AND platform_user_id = ? LIMIT 1",
+            [$platform, $platformUserId]
+        );
+        
+        $profileId = $result ? (int)$result['id'] : null;
         
         Logger::info('[FB_PROFILE] Customer profile upserted', [
+            'profile_id' => $profileId,
             'platform' => $platform,
             'platform_user_id' => $platformUserId,
             'display_name' => $displayName,
         ]);
         
+        return $profileId;
+        
     } catch (Throwable $e) {
         Logger::error('[FB_PROFILE] Error upserting customer profile: ' . $e->getMessage(), [
             'platform_user_id' => $platformUserId,
         ]);
+        return null;
     }
 }

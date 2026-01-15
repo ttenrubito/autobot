@@ -18,7 +18,7 @@ class GoogleCloudStorage
     private $bucket;
     private $bucketName;
     private $projectId;
-    
+
     /**
      * Private constructor (Singleton pattern)
      */
@@ -37,7 +37,7 @@ class GoogleCloudStorage
         $keyFilePath = $envKeyFilePath && is_string($envKeyFilePath) ? $envKeyFilePath : $defaultKeyFilePath;
 
         try {
-            $isCloudRun = (bool)getenv('K_SERVICE');
+            $isCloudRun = (bool) getenv('K_SERVICE');
 
             $clientOptions = [
                 'projectId' => $this->projectId,
@@ -99,7 +99,7 @@ class GoogleCloudStorage
             throw $e;
         }
     }
-    
+
     /**
      * Get singleton instance
      */
@@ -110,7 +110,7 @@ class GoogleCloudStorage
         }
         return self::$instance;
     }
-    
+
     /**
      * Upload file to GCS
      * 
@@ -127,7 +127,7 @@ class GoogleCloudStorage
             // Generate unique filename
             $fileExt = pathinfo($fileName, PATHINFO_EXTENSION);
             $uniqueFileName = uniqid('doc_') . '_' . time() . '.' . $fileExt;
-            
+
             // Full path in bucket
             $objectPath = trim($folder, '/') . '/' . $uniqueFileName;
 
@@ -139,14 +139,16 @@ class GoogleCloudStorage
                         continue;
                     }
                     // GCS custom metadata should be under metadata => metadata
-                    $customMetadata[(string)$k] = is_scalar($v) ? (string)$v : json_encode($v, JSON_UNESCAPED_UNICODE);
+                    $customMetadata[(string) $k] = is_scalar($v) ? (string) $v : json_encode($v, JSON_UNESCAPED_UNICODE);
                 }
             }
-            
-            // Upload to GCS with public read access
+
+            // Upload to GCS
+            // Note: Bucket uses Uniform bucket-level access, so we don't set per-object ACLs
+            // Access is controlled at bucket level - ensure bucket is configured for public read if needed
             $object = $this->bucket->upload($fileContent, [
                 'name' => $objectPath,
-                'predefinedAcl' => 'publicRead', // Make object publicly accessible
+                // DO NOT use predefinedAcl - it's incompatible with Uniform bucket-level access
                 'metadata' => [
                     // Object-level contentType
                     'contentType' => $mimeType,
@@ -157,23 +159,23 @@ class GoogleCloudStorage
                     ], $customMetadata)
                 ]
             ]);
-            
+
             // Get public URL (if bucket is public)
             $publicUrl = sprintf(
                 'https://storage.googleapis.com/%s/%s',
                 $this->bucketName,
                 $objectPath
             );
-            
+
             // Generate signed URL (valid for 7 days)
             $signedUrl = $this->generateSignedUrl($objectPath, '+7 days');
-            
+
             Logger::info('[GCS] File uploaded successfully', [
                 'path' => $objectPath,
                 'size' => strlen($fileContent),
                 'mime_type' => $mimeType
             ]);
-            
+
             return [
                 'success' => true,
                 'path' => $objectPath,
@@ -181,20 +183,20 @@ class GoogleCloudStorage
                 'signed_url' => $signedUrl,
                 'bucket' => $this->bucketName
             ];
-            
+
         } catch (Exception $e) {
             Logger::error('[GCS] Upload failed', [
                 'error' => $e->getMessage(),
                 'file_name' => $fileName
             ]);
-            
+
             return [
                 'success' => false,
                 'error' => $e->getMessage()
             ];
         }
     }
-    
+
     /**
      * Generate signed URL for secure access
      * 
@@ -206,23 +208,23 @@ class GoogleCloudStorage
     {
         try {
             $object = $this->bucket->object($objectPath);
-            
+
             $signedUrl = $object->signedUrl(new \DateTime($expiration), [
                 'version' => 'v4'
             ]);
-            
+
             return $signedUrl;
-            
+
         } catch (Exception $e) {
             Logger::error('[GCS] Signed URL generation failed', [
                 'error' => $e->getMessage(),
                 'path' => $objectPath
             ]);
-            
+
             return '';
         }
     }
-    
+
     /**
      * Download file from GCS
      * 
@@ -233,34 +235,34 @@ class GoogleCloudStorage
     {
         try {
             $object = $this->bucket->object($objectPath);
-            
+
             if (!$object->exists()) {
                 throw new Exception('File not found');
             }
-            
+
             $content = $object->downloadAsString();
             $info = $object->info();
-            
+
             return [
                 'success' => true,
                 'content' => $content,
                 'metadata' => $info['metadata'] ?? [],
                 'mime_type' => $info['contentType'] ?? 'application/octet-stream'
             ];
-            
+
         } catch (Exception $e) {
             Logger::error('[GCS] Download failed', [
                 'error' => $e->getMessage(),
                 'path' => $objectPath
             ]);
-            
+
             return [
                 'success' => false,
                 'error' => $e->getMessage()
             ];
         }
     }
-    
+
     /**
      * Delete file from GCS
      * 
@@ -271,29 +273,29 @@ class GoogleCloudStorage
     {
         try {
             $object = $this->bucket->object($objectPath);
-            
+
             if ($object->exists()) {
                 $object->delete();
-                
+
                 Logger::info('[GCS] File deleted', [
                     'path' => $objectPath
                 ]);
-                
+
                 return true;
             }
-            
+
             return false;
-            
+
         } catch (Exception $e) {
             Logger::error('[GCS] Delete failed', [
                 'error' => $e->getMessage(),
                 'path' => $objectPath
             ]);
-            
+
             return false;
         }
     }
-    
+
     /**
      * Check if file exists
      * 

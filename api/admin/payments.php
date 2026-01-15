@@ -17,14 +17,14 @@ require_once __DIR__ . '/../../includes/Logger.php';
 require_once __DIR__ . '/../../includes/services/PushNotificationService.php';
 
 // Verify admin authentication
-$auth = verifyAdminToken();
-if (!$auth['valid']) {
+$adminData = AdminAuth::verify();
+if (!$adminData) {
     http_response_code(401);
     echo json_encode(['success' => false, 'message' => 'Unauthorized']);
     exit;
 }
 
-$adminId = $auth['user']['id'] ?? null;
+$adminId = $adminData['id'] ?? null;
 $method = $_SERVER['REQUEST_METHOD'];
 $action = $_GET['action'] ?? null;
 

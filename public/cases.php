@@ -774,6 +774,58 @@ async function viewCase(id) {
             urgent: 'danger'
         };
         
+        // Parse products_interested JSON
+        let productsHtml = '';
+        if (c.products_interested) {
+            try {
+                const products = typeof c.products_interested === 'string' 
+                    ? JSON.parse(c.products_interested) 
+                    : c.products_interested;
+                if (Array.isArray(products) && products.length > 0) {
+                    productsHtml = `
+                        <div class="case-detail-section">
+                            <label class="case-detail-label"><i class="fas fa-shopping-bag"></i> สินค้าที่สนใจ</label>
+                            <div class="products-interested-list" style="background: linear-gradient(135deg, #fff5f5, #fff0eb); padding: 1rem; border-radius: 8px; border-left: 4px solid #ff6b6b;">
+                                ${products.map(p => `
+                                    <div class="product-interest-item" style="display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0; border-bottom: 1px solid rgba(0,0,0,0.05);">
+                                        <i class="fas fa-gem" style="color: #ff6b6b;"></i>
+                                        <div style="flex: 1;">
+                                            <strong style="color: #333;">${escapeHtml(p.product_name || p.product_ref_id || 'สินค้า')}</strong>
+                                            ${p.product_ref_id ? `<span style="color: #888; font-size: 0.85rem;"> (${escapeHtml(p.product_ref_id)})</span>` : ''}
+                                            ${p.product_price ? `<div style="color: #ff6b6b; font-weight: 600; font-size: 0.9rem;">฿${Number(p.product_price).toLocaleString()}</div>` : ''}
+                                        </div>
+                                        <span class="badge badge-light" style="font-size: 0.7rem;">${p.interest_type || 'สนใจ'}</span>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    `;
+                }
+            } catch(e) {
+                console.warn('Failed to parse products_interested:', e);
+            }
+        }
+        
+        // Format chat_summary nicely
+        let chatSummaryHtml = '';
+        if (c.chat_summary) {
+            chatSummaryHtml = `
+                <div class="case-detail-section">
+                    <label class="case-detail-label"><i class="fas fa-history"></i> ประวัติบทสนทนา</label>
+                    <div class="chat-history-box" style="background: #f8f9fa; padding: 1rem; border-radius: 8px; max-height: 250px; overflow-y: auto; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85rem; line-height: 1.8;">
+                        ${escapeHtml(c.chat_summary).split('\\n').map(line => {
+                            if (line.includes('ลูกค้า:')) {
+                                return `<div style="color: #0066cc;">${line}</div>`;
+                            } else if (line.includes('Bot:')) {
+                                return `<div style="color: #28a745;">${line}</div>`;
+                            }
+                            return `<div>${line}</div>`;
+                        }).join('')}
+                    </div>
+                </div>
+            `;
+        }
+        
         document.getElementById('viewCaseBody').innerHTML = `
             <div class="case-detail">
                 <!-- Customer Profile Section -->
@@ -813,21 +865,26 @@ async function viewCase(id) {
                     </div>
                 </div>
                 
-                <!-- Description / Chat History -->
+                <!-- Products Interested (NEW) -->
+                ${productsHtml}
+                
+                <!-- Chat Summary (NEW) -->
+                ${chatSummaryHtml}
+                
+                <!-- Description / Latest Message -->
                 <div class="case-detail-section">
-                    <label class="case-detail-label"><i class="fas fa-comments"></i> ข้อความจากลูกค้า</label>
-                    <div class="case-detail-value" style="background: var(--color-light); padding: 1rem; border-radius: 8px; white-space: pre-wrap; max-height: 300px; overflow-y: auto; font-family: inherit; line-height: 1.6;">
+                    <label class="case-detail-label"><i class="fas fa-comment-dots"></i> ข้อความล่าสุด</label>
+                    <div class="case-detail-value" style="background: var(--color-light); padding: 1rem; border-radius: 8px; white-space: pre-wrap; max-height: 200px; overflow-y: auto; font-family: inherit; line-height: 1.6;">
                         ${escapeHtml(c.description || 'ยังไม่มีข้อความ')}
                     </div>
                 </div>
                 
-                <!-- Product Info (if any) -->
-                ${c.product_ref_id ? `
+                <!-- Product Info (legacy single product) -->
+                ${c.product_ref_id && !productsHtml ? `
                 <div class="case-detail-section">
                     <label class="case-detail-label">สินค้าที่เกี่ยวข้อง</label>
                     <div class="case-detail-value">
                         <i class="fas fa-box"></i> ${escapeHtml(c.product_ref_id)}
-                    </div>
                     </div>
                 </div>
                 ` : ''}

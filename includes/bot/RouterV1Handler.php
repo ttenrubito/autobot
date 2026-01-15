@@ -5,6 +5,7 @@ require_once __DIR__ . '/BotHandlerInterface.php';
 require_once __DIR__ . '/../Database.php';
 require_once __DIR__ . '/../Logger.php';
 require_once __DIR__ . '/CaseEngine.php';
+require_once __DIR__ . '/../services/CustomerInterestService.php';
 
 class RouterV1Handler implements BotHandlerInterface
 {
@@ -909,16 +910,21 @@ class RouterV1Handler implements BotHandlerInterface
                         $caseType = $caseEngine->detectCaseType($intent, $slots['action_type'] ?? null);
                         
                         if ($caseType) {
+                            // ✅ Get customer_profile_id for linking
+                            $customerProfileId = $this->getCustomerProfileId($context['platform'] ?? 'unknown', $externalUserId);
+                            
                             // Get case_create endpoint from config
                             $caseEndpoint = $backendCfg['endpoints']['case_create'] ?? '/api/bot/cases';
                             $casePayload = [
                                 'platform' => $context['platform'] ?? ($context['channel']['platform'] ?? 'unknown'),
                                 'channel_id' => $channelId,
                                 'external_user_id' => $externalUserId,
+                                'customer_profile_id' => $customerProfileId, // ✅ NEW: Link to customer profile
                                 'case_type' => $caseType,
                                 'slots' => $slots,
                                 'intent' => $intent,
                                 'message' => $text, // ✅ Include customer message
+                                'session_id' => $sessionId, // ✅ NEW: For chat history
                             ];
                             
                             // Call API endpoint
@@ -939,6 +945,16 @@ class RouterV1Handler implements BotHandlerInterface
                                     'case_id' => $caseData['id'] ?? null,
                                     'case_no' => $caseData['case_no'] ?? null,
                                 ]);
+                                
+                                // ✅ NEW: Track product interest if product_ref_id present
+                                if ($customerProfileId && !empty($slots['product_ref_id'])) {
+                                    $this->trackProductInterest($customerProfileId, $slots, [
+                                        'channel_id' => $channelId,
+                                        'case_id' => $caseData['id'] ?? null,
+                                        'message_text' => $text,
+                                        'intent' => $intent,
+                                    ]);
+                                }
                             } else {
                                 Logger::warning('[CASE_API] Failed to create case via API', [
                                     'trace_id' => $traceId,
@@ -4282,6 +4298,61 @@ class RouterV1Handler implements BotHandlerInterface
             if (mb_stripos($t, $k, 0, 'UTF-8') !== false) return true;
         }
         return false;
+    }
+
+    // =========================================================
+    // ✅ Customer Profile ID lookup
+    // =========================================================
+    protected function getCustomerProfileId(?string $platform, ?string $externalUserId): ?int
+    {
+        if (empty($platform) || empty($externalUserId)) {
+            return null;
+        }
+        
+        try {
+            $result = $this->db->queryOne(
+                "SELECT id FROM customer_profiles WHERE platform = ? AND platform_user_id = ? LIMIT 1",
+                [$platform, $externalUserId]
+            );
+            return $result ? (int)$result['id'] : null;
+        } catch (Throwable $e) {
+            Logger::warning('[ROUTER_V1] Failed to get customer profile: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    // =========================================================
+    // ✅ Track Product Interest
+    // =========================================================
+    protected function trackProductInterest(int $customerProfileId, array $slots, array $options = []): void
+    {
+        try {
+            $interestService = new CustomerInterestService();
+            
+            $productData = [
+                'product_ref_id' => $slots['product_ref_id'] ?? null,
+                'product_name' => $slots['product_name'] ?? null,
+                'product_category' => $slots['product_category'] ?? null,
+                'product_price' => $slots['product_price'] ?? null,
+            ];
+            
+            $interestOptions = [
+                'channel_id' => $options['channel_id'] ?? null,
+                'case_id' => $options['case_id'] ?? null,
+                'message_text' => $options['message_text'] ?? null,
+                'interest_type' => 'inquired',
+                'source' => 'chat',
+                'metadata' => [
+                    'intent' => $options['intent'] ?? null,
+                    'slots' => $slots,
+                ],
+            ];
+            
+            $interestService->trackProductInterest($customerProfileId, $productData, $interestOptions);
+            
+        } catch (Throwable $e) {
+            Logger::warning('[ROUTER_V1] Failed to track product interest: ' . $e->getMessage());
+        }
     }
 
     // normalizeBusinessTypeAnswer() moved to RouterV2BoxDesignHandler
