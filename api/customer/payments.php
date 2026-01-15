@@ -848,6 +848,9 @@ function approvePayment($pdo, $payment, $admin_id)
 
         $pdo->commit();
 
+        // ✅ Send push notification to customer
+        sendPaymentApprovalNotification($pdo, $payment, 'approved');
+
         echo json_encode([
             'success' => true,
             'message' => 'อนุมัติการชำระเงินเรียบร้อย'
@@ -882,6 +885,9 @@ function rejectPayment($pdo, $payment, $input, $admin_id)
             WHERE id = ?
         ");
         $stmt->execute([$admin_id, $reason ?: null, $payment['id']]);
+
+        // ✅ Send push notification to customer
+        sendPaymentApprovalNotification($pdo, $payment, 'rejected', $reason);
 
         echo json_encode([
             'success' => true,
@@ -1253,5 +1259,81 @@ function unlinkRepairFromPayment($pdo, $payment, $admin_id)
             'success' => false,
             'message' => 'ไม่สามารถยกเลิกได้: ' . $e->getMessage()
         ]);
+    }
+}
+
+/**
+ * Send push notification to customer after payment approval/rejection
+ * 
+ * @param PDO $pdo Database connection
+ * @param array $payment Payment data
+ * @param string $action 'approved' or 'rejected'
+ * @param string|null $reason Rejection reason (only for rejected)
+ */
+function sendPaymentApprovalNotification($pdo, $payment, $action, $reason = null)
+{
+    try {
+        // Get customer profile info from payment_details or customer_id
+        $paymentDetails = is_string($payment['payment_details'] ?? null)
+            ? json_decode($payment['payment_details'], true)
+            : ($payment['payment_details'] ?? []);
+
+        $platform = $paymentDetails['platform'] ?? $paymentDetails['customer_platform'] ?? null;
+        $platformUserId = $paymentDetails['external_user_id'] ?? $paymentDetails['platform_user_id'] ?? null;
+
+        // If not in payment_details, try to get from customer_profiles via customer_id
+        if ((!$platform || !$platformUserId) && !empty($payment['customer_id'])) {
+            $stmt = $pdo->prepare("SELECT platform, platform_user_id FROM customer_profiles WHERE id = ?");
+            $stmt->execute([$payment['customer_id']]);
+            $profile = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($profile) {
+                $platform = $platform ?: $profile['platform'];
+                $platformUserId = $platformUserId ?: $profile['platform_user_id'];
+            }
+        }
+
+        // Cannot send notification without platform info
+        if (!$platform || !$platformUserId) {
+            error_log("[PaymentNotification] Cannot send - no platform/user_id for payment #{$payment['id']}");
+            return;
+        }
+
+        // Skip web platform (no push for web users)
+        if ($platform === 'web') {
+            error_log("[PaymentNotification] Skipping web platform for payment #{$payment['id']}");
+            return;
+        }
+
+        // Load PushNotificationService
+        require_once __DIR__ . '/../../includes/services/PushNotificationService.php';
+        require_once __DIR__ . '/../../includes/Database.php';
+
+        $db = Database::getInstance();
+        $pushService = new PushNotificationService($db);
+
+        // Build payment data for notification
+        $paymentData = [
+            'payment_no' => $payment['payment_no'] ?? '-',
+            'amount' => number_format((float) ($payment['amount'] ?? 0), 2),
+            'payment_date' => $payment['payment_date'] ?? date('Y-m-d'),
+            'reason' => $reason ?: 'ไม่ระบุ'
+        ];
+
+        // Send notification based on action
+        if ($action === 'approved') {
+            $result = $pushService->sendPaymentVerified($platform, $platformUserId, $paymentData);
+        } else {
+            $result = $pushService->sendPaymentRejected($platform, $platformUserId, $paymentData);
+        }
+
+        if ($result['success']) {
+            error_log("[PaymentNotification] Sent {$action} notification to {$platform}:{$platformUserId}");
+        } else {
+            error_log("[PaymentNotification] Failed to send: " . ($result['error'] ?? 'Unknown error'));
+        }
+
+    } catch (Throwable $e) {
+        // Don't fail the main flow, just log the error
+        error_log("[PaymentNotification] Error: " . $e->getMessage());
     }
 }
