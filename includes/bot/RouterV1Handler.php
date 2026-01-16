@@ -370,6 +370,33 @@ class RouterV1Handler implements BotHandlerInterface
                 );
             }
 
+            // =========================================================
+            // ✅ Delivery de-duplication (protect against duplicate webhook deliveries)
+            // =========================================================
+            $sessionPolicy = $config['session_policy'] ?? [];
+            if (!$isAdmin && $sessionId && $messageType === 'text' && $text !== '') {
+                $dedupeEnabled = (bool) ($sessionPolicy['dedupe_enabled'] ?? true);
+                $dedupeWindowSec = (int) ($sessionPolicy['dedupe_window_seconds'] ?? 3);
+                if ($dedupeEnabled && $this->isDuplicateDelivery((int) $sessionId, $text, $dedupeWindowSec)) {
+                    Logger::info('[ROUTER_V1] Suppress duplicate delivery', [
+                        'trace_id' => $traceId,
+                        'session_id' => $sessionId,
+                        'window_sec' => $dedupeWindowSec,
+                        'text' => mb_substr($text, 0, 120, 'UTF-8'),
+                    ]);
+
+                    return [
+                        'reply_text' => null,
+                        'actions' => [],
+                        'meta' => [
+                            'handler' => 'router_v1',
+                            'reason' => 'duplicate_delivery_suppressed',
+                            'trace_id' => $traceId,
+                        ]
+                    ];
+                }
+            }
+
             // ✅ Anti-spam / repeat message behavior (text only)
             $antiSpamCfg = $config['anti_spam'] ?? [];
             $antiSpamEnabled = (bool) ($antiSpamCfg['enabled'] ?? true);
@@ -580,6 +607,107 @@ class RouterV1Handler implements BotHandlerInterface
             }
 
             // =========================================================
+            // ✅ Product context: reset / change / select from last list
+            // =========================================================
+            if ($sessionId && !$isAdmin) {
+                $productContextKeys = $sessionPolicy['product_context_keys'] ?? [
+                    'product_code',
+                    'product_name',
+                    'product_ref_id',
+                    'product_price',
+                    'last_product_query',
+                    'last_product_candidates',
+                    'last_product_candidates_ts',
+                ];
+
+                // Explicit reset command
+                if ($this->looksLikeResetContext($text, $sessionPolicy)) {
+                    $this->removeSlotKeys((int) $sessionId, $productContextKeys);
+                    $reply = $templates['reset_confirmed'] ?? 'โอเคค่ะ ✅ ล้างบริบทเดิมแล้วนะคะ\nตอนนี้อยากให้ช่วยหา “สินค้า/รุ่น/รหัส/งบ” อะไรดีคะ? 😊';
+                    $meta['reason'] = 'reset_context';
+
+                    if ($reply !== '') {
+                        $this->storeMessage($sessionId, 'assistant', $reply);
+                    }
+                    $this->logBotReply($context, $reply, 'text');
+
+                    return ['reply_text' => $reply, 'actions' => [], 'meta' => $meta];
+                }
+
+                // User says "change product" => clear product-only cache to avoid stale answers
+                if ($this->looksLikeChangeProduct($text, $sessionPolicy)) {
+                    $this->removeSlotKeys((int) $sessionId, $productContextKeys);
+                }
+
+                // Selection from last candidates list: "1" / "ข้อ 2" / "เอาอันที่ 3"
+                $sel = $this->detectSelectionIndex($text);
+                if ($sel !== null) {
+                    $cands = $this->getRecentProductCandidates($lastSlots, $sessionPolicy);
+                    if (!empty($cands)) {
+                        $idx = $sel - 1;
+                        if (isset($cands[$idx])) {
+                            $p = $cands[$idx];
+                            $pName = trim((string) ($p['name'] ?? ''));
+                            $pCode = trim((string) ($p['code'] ?? ''));
+                            $pPrice = (string) ($p['price'] ?? '');
+                            $pRef = $p['ref_id'] ?? null;
+                            $pImg = $p['image_url'] ?? null;
+
+                            // Build a more sales-friendly reply
+                            $tpl = $templates['product_selected']
+                                ?? "ได้เลยค่ะ 😊 เลือก: {{name}}" . ($pCode ? " (รหัส {{code}})" : "") . ($pPrice !== '' ? "\nราคา: {{price}} บาท" : "")
+                                . "\n\nสนใจทำรายการแบบไหนคะ?\n1) สอบถามสภาพ/รายละเอียดเพิ่ม\n2) จอง/มัดจำ\n3) ซื้อเลย";
+                            $reply = $this->renderTemplate($tpl, [
+                                'name' => $pName ?: 'สินค้า',
+                                'code' => $pCode,
+                                'price' => $pPrice,
+                            ]);
+
+                            $actionsOut = [];
+                            if ($pImg) {
+                                $actionsOut[] = ['type' => 'image', 'url' => $pImg];
+                            }
+
+                            // Create/update case
+                            try {
+                                $caseEngine = new CaseEngine($config, $context);
+                                $caseSlots = [
+                                    'product_ref_id' => $pRef,
+                                    'product_code' => $pCode,
+                                    'product_name' => $pName,
+                                    'product_price' => $pPrice,
+                                ];
+                                $case = $caseEngine->getOrCreateCase(CaseEngine::CASE_PRODUCT_INQUIRY, $caseSlots);
+                                $meta['case'] = ['id' => $case['id'] ?? null, 'case_no' => $case['case_no'] ?? null];
+                            } catch (Throwable $e) {
+                                Logger::error('[ROUTER_V1] case create failed (selection)', ['error' => $e->getMessage(), 'trace_id' => $traceId]);
+                            }
+
+                            // Update session with selected product
+                            $slots = $this->mergeSlots($lastSlots, [
+                                'product_ref_id' => $pRef,
+                                'product_code' => $pCode,
+                                'product_name' => $pName,
+                                'product_price' => $pPrice,
+                            ]);
+                            $this->updateSessionState((int) $sessionId, 'product_selected', $slots);
+
+                            if ($reply !== '') {
+                                $this->storeMessage($sessionId, 'assistant', $reply);
+                            }
+                            $this->logBotReply($context, $reply, 'text');
+
+                            return [
+                                'reply_text' => $reply,
+                                'actions' => $actionsOut,
+                                'meta' => $meta,
+                            ];
+                        }
+                    }
+                }
+            }
+
+            // =========================================================
             // ✅ KB FIRST (with KB-only buffering)
             // =========================================================
             $kbQuery = $text;
@@ -766,6 +894,9 @@ class RouterV1Handler implements BotHandlerInterface
                         $replyText = ProductSearchService::formatMultipleForChat($products, 3);
                         $imageUrl = $products[0]['thumbnail_url'] ?? null;
 
+                        // Cache candidates for later selection (e.g., 'เอาอันที่ 2')
+                        $slots = $this->attachProductCandidatesToSlots($slots, $products, $detectedCode, $sessionPolicy);
+
                         // Create case for product inquiry
                         try {
                             $caseEngine = new CaseEngine($config, $context);
@@ -787,10 +918,11 @@ class RouterV1Handler implements BotHandlerInterface
                         }
                         $this->logBotReply($context, $replyText, 'text');
 
+                        $actionsOut = $this->buildImageActionsFromProducts($products, 3);
+
                         return [
                             'reply_text' => $replyText,
-                            'image_url' => $imageUrl,
-                            'actions' => [],
+                            'actions' => $actionsOut,
                             'meta' => $meta,
                         ];
                     }
@@ -830,6 +962,23 @@ class RouterV1Handler implements BotHandlerInterface
 
                     // ✅ merge last slots
                     $slots = $this->mergeSlots($lastSlots, $slots);
+
+                    // ✅ CONTEXT RESET: Clear stale product data when searching for new product
+                    if (in_array($intent, ['product_availability', 'product_lookup_by_code', 'price_inquiry'])) {
+                        $newProductName = trim((string) ($slots['product_name'] ?? ''));
+                        $oldProductCode = trim((string) ($lastSlots['product_code'] ?? ''));
+
+                        // If user is searching for something new and old code is NOT in current text
+                        if ($newProductName !== '' && $oldProductCode !== '' && mb_stripos($text, $oldProductCode) === false) {
+                            // Clear stale product context
+                            unset($slots['product_code'], $slots['product_ref_id'], $slots['last_product_candidates']);
+                            Logger::info('[CONTEXT_RESET] Cleared stale product context for new search', [
+                                'new_product_name' => $newProductName,
+                                'cleared_code' => $oldProductCode,
+                                'text' => $text
+                            ]);
+                        }
+                    }
 
                     // ✅ rule-based slot rescue (สำคัญ: "สินค้า รหัส xxxx")
                     $slots = $this->rescueSlotsFromText($intent, $slots, $text);
@@ -915,7 +1064,7 @@ class RouterV1Handler implements BotHandlerInterface
                             $this->storeMessage($sessionId, 'assistant', $reply);
                         $this->logBotReply($context, $reply, 'text');
 
-                        return ['reply_text' => $reply, 'actions' => [], 'meta' => $meta];
+                        return ['reply_text' => $reply, 'actions' => $handled['actions'] ?? [], 'meta' => $meta];
                     }
 
                     // ยังไม่ handled -> ถามต่อ
@@ -1001,6 +1150,21 @@ class RouterV1Handler implements BotHandlerInterface
                 $meta['llm_intent'] = $llmResult['meta'] ?? null;
 
                 $slots = $this->mergeSlots($lastSlots, $slots);
+
+                // ✅ CONTEXT RESET: Clear stale product data when searching for new product
+                if (in_array($intent, ['product_availability', 'product_lookup_by_code', 'price_inquiry'])) {
+                    $newProductName = trim((string) ($slots['product_name'] ?? ''));
+                    $oldProductCode = trim((string) ($lastSlots['product_code'] ?? ''));
+
+                    if ($newProductName !== '' && $oldProductCode !== '' && mb_stripos($text, $oldProductCode) === false) {
+                        unset($slots['product_code'], $slots['product_ref_id'], $slots['last_product_candidates']);
+                        Logger::info('[CONTEXT_RESET] Cleared stale product context (LLM path)', [
+                            'new_product_name' => $newProductName,
+                            'cleared_code' => $oldProductCode
+                        ]);
+                    }
+                }
+
                 $slots = $this->rescueSlotsFromText($intent, $slots, $text);
 
                 if ($intent === 'installment_flow' && empty($slots['action_type'])) {
@@ -1047,7 +1211,16 @@ class RouterV1Handler implements BotHandlerInterface
                     $textLower = mb_strtolower($text, 'UTF-8');
 
                     // Savings keywords
-                    if (preg_match('/ออม|ออมทอง|เปิดออม|สะสม/u', $textLower)) {
+                    if (preg_match('/ดอก\s*กี่|ดอก\s*เท่าไหร่|ดอกเบี้ย\s*กี่|ดอกเบี้ย\s*เท่าไหร่|ดอก\s*%|ดอกเบี้ย\s*%/u', $textLower)) {
+                        $intent = 'interest_rate_inquiry';
+                        // Determine mode: pawn vs installment
+                        $slots['interest_mode'] = (preg_match('/จำนำ|ฝากจำนำ|ต่อดอก|ไถ่ถอน/u', $textLower)) ? 'pawn' : 'installment';
+                        Logger::info("[INTENT_FALLBACK] Keyword match: interest_rate_inquiry", ['text' => $text, 'mode' => $slots['interest_mode']]);
+                    }
+
+
+                    // Savings keywords
+                    elseif (preg_match('/ออม|ออมทอง|เปิดออม|สะสม/u', $textLower)) {
                         $intent = 'savings_new';
                         $slots['action_type'] = 'new';
                         Logger::info("[INTENT_FALLBACK] Keyword match: savings_new", ['text' => $text]);
@@ -1622,10 +1795,20 @@ class RouterV1Handler implements BotHandlerInterface
                     Logger::error('[ROUTER_V1] Failed to create case: ' . $caseErr->getMessage());
                 }
 
+                // Cache candidates for selection and store key product fields
+                $slots = $this->attachProductCandidatesToSlots($slots, $products, $code, $config['session_policy'] ?? []);
+                $slots = $this->mergeSlots($slots, [
+                    'product_ref_id' => $products[0]['ref_id'] ?? null,
+                    'product_name' => $products[0]['title'] ?? ($products[0]['name'] ?? null),
+                    'product_price' => $products[0]['price'] ?? null,
+                ]);
+
+                $actionsOut = $this->buildImageActionsFromProducts($products, 3);
+
                 return [
                     'handled' => true,
                     'reply_text' => $replyText,
-                    'image_url' => $imageUrl,
+                    'actions' => $actionsOut,
                     'reason' => 'internal_product_lookup_by_code',
                     'meta' => ['products' => $products],
                     'slots' => $slots
@@ -1834,6 +2017,9 @@ class RouterV1Handler implements BotHandlerInterface
 
             $rendered = $this->renderProductsFromBackend($products, $templates);
 
+            // Cache candidates for selection (e.g., 'เอาอันที่ 2')
+            $slots = $this->attachProductCandidatesToSlots($slots, $products, $searchKeyword, $config['session_policy'] ?? []);
+
             return [
                 'handled' => true,
                 'reply_text' => $rendered['text'],
@@ -1917,6 +2103,39 @@ class RouterV1Handler implements BotHandlerInterface
         }
 
         // -------------------------
+        // -------------------------
+        // Intent: interest_rate_inquiry
+        // -------------------------
+        if ($intent === 'interest_rate_inquiry') {
+            $mode = trim((string) ($slots['interest_mode'] ?? ''));
+            $rules = $config['business_rules'] ?? [];
+
+            if ($mode === 'pawn') {
+                $rate = $rules['pawn_interest_rate_percent_default'] ?? $rules['pawn_interest_rate_percent'] ?? null;
+                $tpl = $templates['pawn_interest_rate_info']
+                    ?? "ดอกเบี้ยจำนำจะขึ้นกับเงื่อนไขสัญญา/ประเภทสินค้าเป็นหลักค่ะ 😊
+" .
+                    "ตอนนี้อัตราโดยทั่วไปอยู่ประมาณ {{interest_rate}}%/เดือน (ถ้าไม่ตรง รบกวนแจ้งเลขสัญญา/ส่งรูปสัญญา เดี๋ยวเช็คให้ได้ค่ะ)";
+                $reply = $this->renderTemplate($tpl, [
+                    'interest_rate' => ($rate === null || $rate === '') ? '-' : (string) $rate,
+                ]);
+                return ['handled' => true, 'reply_text' => $reply, 'reason' => 'interest_rate_info_pawn', 'slots' => $slots];
+            }
+
+            // Default: installment
+            $rate = $rules['installment_interest_rate_percent_default'] ?? $rules['installment_interest_rate_percent'] ?? null;
+            $tpl = $templates['installment_interest_rate_info']
+                ?? "ดอกเบี้ย/เงื่อนไขการผ่อนจะขึ้นกับโปรฯ และสัญญาของแต่ละรายการค่ะ 😊
+" .
+                "ถ้าต้องการเช็คให้ตรงที่สุด พิมพ์ ‘เลขสัญญา/เบอร์ลูกค้า’ หรือส่งรูปสัญญา/ใบแจ้งหนี้ได้เลยค่ะ
+" .
+                "(ค่าเริ่มต้นที่ตั้งไว้: {{interest_rate}}%/เดือน)";
+            $reply = $this->renderTemplate($tpl, [
+                'interest_rate' => ($rate === null || $rate === '') ? '-' : (string) $rate,
+            ]);
+            return ['handled' => true, 'reply_text' => $reply, 'reason' => 'interest_rate_info_installment', 'slots' => $slots];
+        }
+
         // Intent: installment_flow
         // -------------------------
         if ($intent === 'installment_flow') {
@@ -3123,6 +3342,12 @@ class RouterV1Handler implements BotHandlerInterface
                     // ✅ renderProductsFromBackend returns {text, actions}
                     $rendered = $this->renderProductsFromBackend($products, $templates);
                     $reply = (string) ($rendered['text'] ?? $reply);
+
+                    // Cache candidates for selection from image search
+                    if ($sessionId) {
+                        $slotsCand = $this->attachProductCandidatesToSlots([], $products, 'image_search', $config['session_policy'] ?? []);
+                        $this->updateSessionState((int) $sessionId, 'product_lookup_by_image', $slotsCand);
+                    }
                     $actionsOut = (isset($rendered['actions']) && is_array($rendered['actions'])) ? $rendered['actions'] : [];
 
                     $meta['reason'] = 'image_product_backend';
@@ -3192,13 +3417,14 @@ class RouterV1Handler implements BotHandlerInterface
             ]);
 
             // Add image if available
-            if (!empty($p['image_url'])) {
+            $_img = $this->extractProductImageUrl($p);
+            if (!empty($_img)) {
                 $actions[] = [
                     'type' => 'image',
-                    'url' => $p['image_url']
+                    'url' => $_img
                 ];
                 Logger::info("[RENDER_PRODUCTS] ✅ Added image for single product", [
-                    'image_url' => $p['image_url'],
+                    'image_url' => $_img,
                     'product_name' => $p['name'] ?? 'Unknown'
                 ]);
             } else {
@@ -3225,10 +3451,11 @@ class RouterV1Handler implements BotHandlerInterface
             $lines[] = "{$i}) {$name}" . ($code ? " (รหัส {$code})" : "") . ($price !== '' ? " - {$price} บาท" : "");
 
             // Add image for first 3 products only (to avoid too many images)
-            if ($i <= 3 && !empty($p['image_url'])) {
+            $_img = $this->extractProductImageUrl($p);
+            if ($i <= 3 && !empty($_img)) {
                 $actions[] = [
                     'type' => 'image',
-                    'url' => $p['image_url']
+                    'url' => $_img
                 ];
                 Logger::info("[RENDER_PRODUCTS] ✅ Added image #{$i}", [
                     'image_url' => $p['image_url'],
@@ -3699,6 +3926,288 @@ class RouterV1Handler implements BotHandlerInterface
         return true;
     }
 
+
+
+    // =========================================================
+    // ✅ Delivery de-duplication & session slot maintenance
+    // =========================================================
+
+    /**
+     * Prevent duplicate webhook deliveries from producing duplicated replies.
+     * We treat a delivery as duplicate if the same normalized user text has been recorded
+     * within the last N seconds.
+     */
+    protected function isDuplicateDelivery(int $sessionId, string $text, int $windowSeconds = 3): bool
+    {
+        $windowSeconds = max(1, min(30, (int) $windowSeconds));
+        $normalized = $this->normalizeTextForRepeat($text);
+        if ($normalized === '') {
+            return false;
+        }
+
+        $sql = "SELECT text, created_at
+                FROM chat_messages
+                WHERE session_id = ?
+                  AND role = 'user'
+                  AND created_at >= (NOW() - INTERVAL {$windowSeconds} SECOND)
+                ORDER BY created_at DESC
+                LIMIT 3";
+        $rows = $this->db->query($sql, [$sessionId]);
+        foreach ($rows as $r) {
+            $t = $this->normalizeTextForRepeat((string) ($r['text'] ?? ''));
+            if ($t === $normalized) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Remove keys from session slots (overwrite slots JSON).
+     * IMPORTANT: updateSessionState() merges and never deletes keys, so we need this for cache busting.
+     */
+    protected function removeSlotKeys(int $sessionId, array $keys, ?string $intent = null): void
+    {
+        $keys = array_values(array_filter(array_map('strval', $keys)));
+        if (empty($keys)) {
+            return;
+        }
+
+        $row = $this->db->queryOne('SELECT last_intent, last_slots_json FROM chat_sessions WHERE id = ? LIMIT 1', [$sessionId]);
+        $currentIntent = $intent ?? ($row['last_intent'] ?? null);
+        $slots = [];
+        if (!empty($row['last_slots_json'])) {
+            $tmp = json_decode($row['last_slots_json'], true);
+            if (is_array($tmp)) {
+                $slots = $tmp;
+            }
+        }
+
+        foreach ($keys as $k) {
+            if (array_key_exists($k, $slots)) {
+                unset($slots[$k]);
+            }
+        }
+
+        $this->db->execute(
+            'UPDATE chat_sessions SET last_intent = ?, last_slots_json = ?, updated_at = NOW() WHERE id = ?',
+            [
+                $currentIntent,
+                !empty($slots) ? json_encode($slots, JSON_UNESCAPED_UNICODE) : null,
+                $sessionId,
+            ]
+        );
+    }
+
+    /**
+     * Detect selection index from a list: "1", "ข้อ 2", "เอาอันที่ 3", "ตัวที่4".
+     */
+    protected function detectSelectionIndex(string $text): ?int
+    {
+        $t = trim($text);
+        if ($t === '') {
+            return null;
+        }
+
+        // Pure number
+        if (preg_match('/^\s*(\d{1,2})\s*$/u', $t, $m)) {
+            $n = (int) $m[1];
+            return ($n >= 1 && $n <= 20) ? $n : null;
+        }
+
+        if (preg_match('/(?:ข้อ|ตัว|อัน|รายการ|item|no\.?|หมายเลข|เบอร์)\s*#?\s*(\d{1,2})/iu', $t, $m)) {
+            $n = (int) $m[1];
+            return ($n >= 1 && $n <= 20) ? $n : null;
+        }
+
+        return null;
+    }
+
+    /**
+     * Get recent product candidates from slots if still within TTL.
+     */
+    protected function getRecentProductCandidates(array $lastSlots, array $sessionPolicy): array
+    {
+        $ttl = (int) ($sessionPolicy['product_context_ttl_seconds'] ?? 600);
+        $ttl = max(30, min(7200, $ttl));
+
+        $cands = $lastSlots['last_product_candidates'] ?? null;
+        $ts = $lastSlots['last_product_candidates_ts'] ?? null;
+        if (!is_array($cands) || empty($cands) || !$ts) {
+            return [];
+        }
+
+        $t0 = strtotime((string) $ts);
+        if (!$t0) {
+            return [];
+        }
+        if (time() - $t0 > $ttl) {
+            return [];
+        }
+
+        return array_values(array_filter($cands, 'is_array'));
+    }
+
+    /**
+     * Attach product candidates (for later selection: "เอาอันที่ 2") into slots.
+     */
+    protected function attachProductCandidatesToSlots(array $slots, array $products, string $query, array $sessionPolicy): array
+    {
+        $max = (int) ($sessionPolicy['max_product_candidates'] ?? 5);
+        $max = max(1, min(10, $max));
+
+        $cands = [];
+        $i = 0;
+        foreach ($products as $p) {
+            if (!is_array($p)) {
+                continue;
+            }
+            $i++
+            ;
+            $cands[] = $this->extractProductCandidate($p);
+            if ($i >= $max) {
+                break;
+            }
+        }
+
+        if (!empty($cands)) {
+            $slots['last_product_query'] = mb_substr((string) $query, 0, 120, 'UTF-8');
+            $slots['last_product_candidates'] = $cands;
+            $slots['last_product_candidates_ts'] = date('c');
+        }
+
+        return $slots;
+    }
+
+    /**
+     * Extract a compact product structure to store in session slots.
+     */
+    protected function extractProductCandidate(array $p): array
+    {
+        $code = $p['sku'] ?? ($p['code'] ?? ($p['product_code'] ?? ($p['productCode'] ?? '')));
+        $name = $p['name'] ?? ($p['title'] ?? ($p['product_name'] ?? ''));
+        $price = $p['price'] ?? ($p['selling_price'] ?? ($p['sellingPrice'] ?? ''));
+        $refId = $p['ref_id'] ?? ($p['id'] ?? ($p['product_id'] ?? null));
+        $img = $this->extractProductImageUrl($p);
+
+        return [
+            'ref_id' => $refId,
+            'code' => $code,
+            'name' => $name,
+            'price' => $price,
+            'image_url' => $img,
+            // keep minimal fields only
+        ];
+    }
+
+    /**
+     * Extract image url from various product formats.
+     */
+    protected function extractProductImageUrl(array $p): ?string
+    {
+        $candidates = [
+            $p['image_url'] ?? null,
+            $p['thumbnail_url'] ?? null,
+            $p['thumb_url'] ?? null,
+            $p['image'] ?? null,
+        ];
+
+        // images: [ {url:...}, ... ]
+        if (empty($candidates[0]) && !empty($p['images']) && is_array($p['images'])) {
+            $first = $p['images'][0] ?? null;
+            if (is_array($first)) {
+                $candidates[] = $first['url'] ?? ($first['image_url'] ?? null);
+            } elseif (is_string($first)) {
+                $candidates[] = $first;
+            }
+        }
+
+        // media: {thumbnail:..., url:...}
+        if (empty($candidates[0]) && !empty($p['media']) && is_array($p['media'])) {
+            $candidates[] = $p['media']['thumbnail'] ?? null;
+            $candidates[] = $p['media']['url'] ?? null;
+        }
+
+        foreach ($candidates as $u) {
+            $u = is_string($u) ? trim($u) : '';
+            if ($u !== '' && preg_match('~^https?://~i', $u)) {
+                return $u;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Build image actions for chat channels.
+     */
+    protected function buildImageActionsFromProducts(array $products, int $max = 3): array
+    {
+        $max = max(0, min(10, (int) $max));
+        $actions = [];
+        $i = 0;
+        foreach ($products as $p) {
+            if (!is_array($p)) {
+                continue;
+            }
+            $img = $this->extractProductImageUrl($p);
+            if ($img) {
+                $actions[] = ['type' => 'image', 'url' => $img];
+                $i++;
+                if ($i >= $max) {
+                    break;
+                }
+            }
+        }
+        return $actions;
+    }
+
+    protected function looksLikeResetContext(string $text, array $sessionPolicy): bool
+    {
+        $t = mb_strtolower(trim($text), 'UTF-8');
+        if ($t === '') {
+            return false;
+        }
+        $cmds = $sessionPolicy['reset_keywords'] ?? ['reset', 'ล้างค่า', 'เริ่มใหม่', 'เริ่มต้นใหม่', 'ลืมเรื่องเดิม'];
+        if (!is_array($cmds)) {
+            return false;
+        }
+        foreach ($cmds as $k) {
+            $k = mb_strtolower(trim((string) $k), 'UTF-8');
+            if ($k !== '' && mb_strpos($t, $k, 0, 'UTF-8') !== false) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    protected function looksLikeChangeProduct(string $text, array $sessionPolicy): bool
+    {
+        $t = mb_strtolower(trim($text), 'UTF-8');
+        if ($t === '') {
+            return false;
+        }
+        $keys = $sessionPolicy['change_product_keywords'] ?? [
+            'เปลี่ยน',
+            'เปลี่ยนเป็น',
+            'หาใหม่',
+            'ขอดูตัวอื่น',
+            'ตัวอื่น',
+            'อันอื่น',
+            'รุ่นอื่น',
+            'อย่างอื่น',
+            'ไม่เอาอันนี้',
+        ];
+        if (!is_array($keys)) {
+            return false;
+        }
+        foreach ($keys as $k) {
+            $k = mb_strtolower(trim((string) $k), 'UTF-8');
+            if ($k !== '' && mb_strpos($t, $k, 0, 'UTF-8') !== false) {
+                return true;
+            }
+        }
+        return false;
+    }
     // =========================================================
     // Slot helpers
     // =========================================================
