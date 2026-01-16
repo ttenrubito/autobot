@@ -32,7 +32,222 @@ function buildAddressesLinkForOrder(order) {
 
 document.addEventListener('DOMContentLoaded', () => {
     loadOrders();
+
+    // Check if coming from Case with prefill data
+    const fromCase = getQueryParam('from_case');
+    const createMode = getQueryParam('create');
+
+    if (fromCase || createMode === '1') {
+        // Open create modal and prefill from URL params
+        setTimeout(() => {
+            openCreateOrderModal();
+            prefillOrderFromUrlParams();
+        }, 300);
+    }
 });
+
+/**
+ * Prefill order form from URL parameters (e.g., from Case page)
+ */
+function prefillOrderFromUrlParams() {
+    const params = new URLSearchParams(window.location.search);
+
+    // Product info
+    const productName = params.get('product_name');
+    const productCode = params.get('product_code');
+    const totalAmount = params.get('total_amount');
+    const downPayment = params.get('down_payment');
+
+    // Customer info
+    const customerName = params.get('customer_name');
+    const customerPhone = params.get('customer_phone');
+    const customerId = params.get('customer_id');
+    const source = params.get('source');
+    const externalUserId = params.get('external_user_id');
+
+    // Payment type
+    const paymentType = params.get('payment_type');
+
+    // Notes
+    const notes = params.get('notes');
+
+    // Case reference
+    const fromCase = params.get('from_case');
+
+    // Fill product fields
+    if (productName) {
+        const el = document.getElementById('productName');
+        if (el) el.value = productName;
+    }
+    if (productCode) {
+        const el = document.getElementById('productCode');
+        if (el) el.value = productCode;
+    }
+    if (totalAmount) {
+        const el = document.getElementById('totalAmount');
+        if (el) el.value = totalAmount;
+    }
+
+    // Fill customer fields
+    if (customerName) {
+        const el = document.getElementById('customerName');
+        if (el) el.value = customerName;
+    }
+    if (customerPhone) {
+        const el = document.getElementById('customerPhone');
+        if (el) el.value = customerPhone;
+    }
+    if (customerId) {
+        const el = document.getElementById('selectedCustomerId');
+        if (el) el.value = customerId;
+    }
+    if (source) {
+        const el = document.getElementById('customerSource');
+        if (el) el.value = source;
+    }
+    if (externalUserId) {
+        // Store for push message later
+        const el = document.getElementById('externalUserId');
+        if (el) el.value = externalUserId;
+    }
+
+    // Select payment type
+    if (paymentType) {
+        const radio = document.querySelector(`input[name="payment_type"][value="${paymentType}"]`);
+        if (radio) {
+            radio.checked = true;
+            if (paymentType === 'installment') {
+                toggleInstallmentFields();
+            }
+        }
+    }
+
+    // Fill down payment for installment
+    if (downPayment) {
+        const el = document.getElementById('downPayment');
+        if (el) el.value = downPayment;
+    }
+
+    // Fill notes with case reference
+    if (notes || fromCase) {
+        const el = document.getElementById('orderNotes');
+        if (el) {
+            el.value = notes || `จากเคส #${fromCase}`;
+        }
+    }
+
+    // Store from_case_id for reference
+    if (fromCase) {
+        const el = document.getElementById('fromCaseId');
+        if (el) el.value = fromCase;
+    }
+
+    // =========================================================================
+    // Auto-fetch and select customer from customer_profiles
+    // =========================================================================
+    if (customerId || externalUserId || customerName) {
+        autoSelectCustomerFromParams({
+            customer_id: customerId,
+            external_user_id: externalUserId,
+            customer_name: customerName,
+            customer_phone: customerPhone,
+            source: source
+        });
+    }
+
+    // Show info toast
+    if (fromCase) {
+        showToast(`กำลังสร้าง Order จากเคส #${fromCase}`, 'info');
+    }
+
+    // Clean URL without reloading
+    if (window.history.replaceState) {
+        const cleanUrl = window.location.pathname;
+        window.history.replaceState({}, document.title, cleanUrl);
+    }
+}
+
+/**
+ * Auto-fetch and select customer from URL params
+ * Tries to find customer in customer_profiles by id, external_user_id, or name
+ */
+async function autoSelectCustomerFromParams(params) {
+    const { customer_id, external_user_id, customer_name, customer_phone, source } = params;
+
+    try {
+        // Try to search by external_user_id first (most reliable from chat)
+        let searchQuery = external_user_id || customer_name;
+
+        if (searchQuery) {
+            // Use the same search API as manual customer search
+            const apiUrl = '/api/customer/search.php';
+            const result = await apiCall(`${apiUrl}?q=${encodeURIComponent(searchQuery)}&limit=10`);
+
+            if (result && result.success && result.data && result.data.length > 0) {
+                // Find best match - prefer exact external_user_id match
+                let bestMatch = result.data[0];
+
+                if (external_user_id) {
+                    const exactMatch = result.data.find(c =>
+                        c.external_user_id === external_user_id ||
+                        c.platform_user_id === external_user_id ||
+                        c.line_user_id === external_user_id ||
+                        c.facebook_user_id === external_user_id
+                    );
+                    if (exactMatch) {
+                        bestMatch = exactMatch;
+                        console.log('[autoSelectCustomer] Found exact match by external_user_id:', bestMatch);
+                    }
+                }
+
+                // If no external_user_id match, try customer_id
+                if (customer_id && !bestMatch._matched) {
+                    const idMatch = result.data.find(c =>
+                        String(c.id) === String(customer_id) ||
+                        String(c.customer_id) === String(customer_id)
+                    );
+                    if (idMatch) {
+                        bestMatch = idMatch;
+                        console.log('[autoSelectCustomer] Found match by customer_id:', bestMatch);
+                    }
+                }
+
+                selectCustomer(bestMatch);
+                console.log('[autoSelectCustomer] Selected customer from search:', bestMatch.display_name || bestMatch.platform_user_name);
+                return;
+            }
+        }
+
+        // No existing customer found - create temporary customer object for display
+        if (customer_name) {
+            const tempCustomer = {
+                id: customer_id || null,
+                display_name: customer_name,
+                phone: customer_phone || '',
+                platform: source || 'line',
+                external_user_id: external_user_id || null,
+                avatar_url: null,
+                _is_temporary: true // Flag to indicate this is not from DB
+            };
+            selectCustomer(tempCustomer);
+            console.log('[autoSelectCustomer] Created temporary customer from params:', tempCustomer);
+        }
+
+    } catch (error) {
+        console.error('[autoSelectCustomer] Error fetching customer:', error);
+
+        // Fallback: create temporary customer object
+        if (customer_name) {
+            selectCustomer({
+                id: customer_id || null,
+                display_name: customer_name,
+                phone: customer_phone || '',
+                platform: source || 'line',
+                external_user_id: external_user_id || null
+            });
+        }
+    }
+}
 
 async function loadOrders(page = 1) {
     currentPage = page;
@@ -534,18 +749,24 @@ async function searchProducts(query) {
             resultsContainer.innerHTML = '<div class="autocomplete-loading"><i class="fas fa-spinner fa-spin"></i> กำลังค้นหา...</div>';
             resultsContainer.style.display = 'block';
 
-            // Call Product Search API
-            const apiUrl = (typeof API_ENDPOINTS !== 'undefined' && API_ENDPOINTS.PRODUCTS_SEARCH)
-                ? API_ENDPOINTS.PRODUCTS_SEARCH
-                : '/api/products/search';
+            // Call Product Search API v1 (POST method)
+            const apiUrl = (typeof API_ENDPOINTS !== 'undefined' && API_ENDPOINTS.PRODUCTS_SEARCH_V1)
+                ? API_ENDPOINTS.PRODUCTS_SEARCH_V1
+                : '/api/v1/products/search';
 
-            const result = await apiCall(`${apiUrl}?q=${encodeURIComponent(query.trim())}&limit=10`);
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    keyword: query.trim(),
+                    page: { limit: 10 }
+                })
+            });
+            const result = await response.json();
 
-            if (result && result.success && result.data && result.data.length > 0) {
+            // v1 API returns { data: [...] }
+            if (result && result.data && result.data.length > 0) {
                 renderProductSearchResults(result.data);
-            } else if (result && result.ok && result.data && result.data.products) {
-                // Alternative response format from productSearch API
-                renderProductSearchResults(result.data.products);
             } else {
                 resultsContainer.innerHTML = `
                     <div class="autocomplete-empty">
@@ -558,7 +779,7 @@ async function searchProducts(query) {
             console.error('Product search error:', error);
             resultsContainer.innerHTML = `
                 <div class="autocomplete-empty">
-                    <p>⚠️ ไม่สามารถค้นหาได้ (API ยังไม่พร้อม)</p>
+                    <p>⚠️ ไม่สามารถค้นหาได้</p>
                     <small>กรุณากรอกข้อมูลสินค้าเองด้านล่าง</small>
                 </div>
             `;
@@ -658,20 +879,20 @@ function handlePaymentTypeClick(event, value) {
     // Prevent default label behavior that causes scroll
     event.preventDefault();
     event.stopPropagation();
-    
+
     // Save current scroll position of modal body
     const modalBody = document.querySelector('#createOrderModal .order-modal-body');
     const scrollTop = modalBody ? modalBody.scrollTop : 0;
-    
+
     // Check the radio button
     const radio = document.querySelector(`input[name="payment_type"][value="${value}"]`);
     if (radio) {
         radio.checked = true;
     }
-    
+
     // Toggle installment fields
     toggleInstallmentFields();
-    
+
     // Restore scroll position after a short delay
     if (modalBody) {
         requestAnimationFrame(() => {
@@ -686,11 +907,122 @@ function handlePaymentTypeClick(event, value) {
 function toggleInstallmentFields() {
     const paymentType = document.querySelector('input[name="payment_type"]:checked')?.value || 'full';
     const installmentFields = document.getElementById('installmentFields');
+    const depositFields = document.getElementById('depositFields');
 
     if (installmentFields) {
         installmentFields.style.display = paymentType === 'installment' ? 'block' : 'none';
     }
+
+    if (depositFields) {
+        depositFields.style.display = paymentType === 'deposit' ? 'block' : 'none';
+    }
+
+    // Auto-calculate deposit amount (10% of total)
+    if (paymentType === 'deposit') {
+        autoCalculateDeposit();
+    }
+
+    // Auto-calculate installment
+    if (paymentType === 'installment') {
+        calculateInstallment();
+    }
 }
+
+/**
+ * Auto-calculate deposit amount (10% of total)
+ */
+function autoCalculateDeposit() {
+    const totalAmount = parseFloat(document.getElementById('totalAmount')?.value) || 0;
+    const depositInput = document.getElementById('depositAmount');
+    const expiryInput = document.getElementById('depositExpiry');
+
+    if (depositInput && !depositInput.value) {
+        // Default 10% deposit
+        depositInput.value = Math.ceil(totalAmount * 0.1);
+    }
+
+    if (expiryInput && !expiryInput.value) {
+        // Default 14 days from now
+        const expiry = new Date();
+        expiry.setDate(expiry.getDate() + 14);
+        expiryInput.value = expiry.toISOString().split('T')[0];
+    }
+}
+
+/**
+ * Calculate installment breakdown (3 months, 3% interest per month)
+ */
+function calculateInstallment() {
+    const totalAmount = parseFloat(document.getElementById('totalAmount')?.value) || 0;
+    const downPayment = parseFloat(document.getElementById('downPayment')?.value) || 0;
+    const summaryDiv = document.getElementById('installmentSummary');
+    const calcDiv = document.getElementById('installmentCalc');
+
+    if (!summaryDiv || !calcDiv || totalAmount <= 0) {
+        if (summaryDiv) summaryDiv.style.display = 'none';
+        return;
+    }
+
+    const remaining = totalAmount - downPayment;
+    if (remaining <= 0) {
+        calcDiv.innerHTML = '<p style="color: #c00;">⚠️ เงินดาวน์มากกว่าหรือเท่ากับราคาสินค้า</p>';
+        summaryDiv.style.display = 'block';
+        return;
+    }
+
+    // 3 months, 3% interest per month
+    const interestRate = 0.03;
+    const months = 3;
+    const monthlyPrincipal = remaining / months;
+    const monthlyInterest = remaining * interestRate;
+    const monthlyPayment = monthlyPrincipal + monthlyInterest;
+    const totalInterest = monthlyInterest * months;
+    const grandTotal = totalAmount + totalInterest;
+
+    calcDiv.innerHTML = `
+        <table style="width: 100%; font-size: 0.9rem;">
+            <tr><td>ราคาสินค้า:</td><td style="text-align: right; font-weight: 600;">${formatNumber(totalAmount)} บาท</td></tr>
+            <tr><td>เงินดาวน์:</td><td style="text-align: right;">${formatNumber(downPayment)} บาท</td></tr>
+            <tr><td>ยอดคงเหลือ:</td><td style="text-align: right;">${formatNumber(remaining)} บาท</td></tr>
+            <tr style="border-top: 1px solid #ddd;"><td colspan="2" style="padding-top: 0.5rem;"><strong>แบ่งจ่าย 3 งวด:</strong></td></tr>
+            <tr><td>• งวดละ:</td><td style="text-align: right;">${formatNumber(monthlyPayment)} บาท</td></tr>
+            <tr><td>• รวมดอกเบี้ย (3% x 3):</td><td style="text-align: right; color: #c00;">${formatNumber(totalInterest)} บาท</td></tr>
+            <tr style="border-top: 1px solid #ddd; font-weight: 600;"><td style="padding-top: 0.5rem;">ยอดรวมทั้งหมด:</td><td style="text-align: right; padding-top: 0.5rem; color: #007bff;">${formatNumber(grandTotal)} บาท</td></tr>
+        </table>
+    `;
+    summaryDiv.style.display = 'block';
+}
+
+/**
+ * Toggle shipping address fields visibility
+ */
+function toggleShippingFields() {
+    const shippingMethod = document.getElementById('shippingMethod')?.value || 'pickup';
+    const addressFields = document.getElementById('shippingAddressFields');
+
+    if (addressFields) {
+        // Show address fields for post and grab delivery
+        addressFields.style.display = (shippingMethod === 'post' || shippingMethod === 'grab') ? 'block' : 'none';
+    }
+}
+
+// Add event listeners for auto-calculation
+document.addEventListener('DOMContentLoaded', function () {
+    const totalAmountInput = document.getElementById('totalAmount');
+    const downPaymentInput = document.getElementById('downPayment');
+
+    if (totalAmountInput) {
+        totalAmountInput.addEventListener('input', function () {
+            const paymentType = document.querySelector('input[name="payment_type"]:checked')?.value;
+            if (paymentType === 'deposit') autoCalculateDeposit();
+            if (paymentType === 'installment') calculateInstallment();
+        });
+    }
+
+    if (downPaymentInput) {
+        downPaymentInput.addEventListener('input', calculateInstallment);
+    }
+});
 
 /**
  * Update message template when bank account is selected
@@ -701,19 +1033,19 @@ function updateMessageTemplate() {
     const customerName = document.getElementById('customerName')?.value?.trim() || 'ลูกค้า';
     const totalAmount = document.getElementById('totalAmount')?.value || '0';
     const productName = document.getElementById('productName')?.value?.trim() || 'สินค้า';
-    
+
     if (!select || !textarea) return;
-    
+
     const selectedOption = select.options[select.selectedIndex];
     if (!selectedOption || !selectedOption.value) {
         textarea.value = '';
         return;
     }
-    
+
     const bankName = selectedOption.dataset.bank || '';
     const accountName = selectedOption.dataset.name || '';
     const accountNumber = selectedOption.dataset.number || '';
-    
+
     const template = `ขอบพระคุณค่ะ คุณ${customerName} 
 ที่ไว้วางใจเลือกซื้อ ${productName} จากร้าน ฮ.เฮง เฮง 💎
 
@@ -725,7 +1057,7 @@ function updateMessageTemplate() {
 เลขบัญชี: ${accountNumber}
 
 หากคุณ${customerName} ชำระแล้วแจ้งสลิปให้แอดมินได้เลยนะคะ ขอบพระคุณค่ะ 🙏`;
-    
+
     textarea.value = template;
 }
 

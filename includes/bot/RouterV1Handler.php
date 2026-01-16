@@ -6,6 +6,7 @@ require_once __DIR__ . '/../Database.php';
 require_once __DIR__ . '/../Logger.php';
 require_once __DIR__ . '/CaseEngine.php';
 require_once __DIR__ . '/../services/CustomerInterestService.php';
+require_once __DIR__ . '/../services/ProductSearchService.php';
 
 class RouterV1Handler implements BotHandlerInterface
 {
@@ -19,7 +20,7 @@ class RouterV1Handler implements BotHandlerInterface
 
     public function handleMessage(array $context): array
     {
-        $traceId = (string)($context['trace_id'] ?? '');
+        $traceId = (string) ($context['trace_id'] ?? '');
         if ($traceId === '') {
             // keep stable even if caller didn't pass it
             $traceId = bin2hex(random_bytes(8));
@@ -36,7 +37,7 @@ class RouterV1Handler implements BotHandlerInterface
             'bot_profile_name' => $context['bot_profile']['name'] ?? null,
             'message_type' => $context['message']['message_type'] ?? ($context['message']['type'] ?? null),
             'has_text' => !empty($context['message']['text'] ?? ''),
-            'text_len' => mb_strlen((string)($context['message']['text'] ?? ''), 'UTF-8'),
+            'text_len' => mb_strlen((string) ($context['message']['text'] ?? ''), 'UTF-8'),
             'has_attachments' => !empty($context['message']['attachments'] ?? null),
         ]);
 
@@ -46,13 +47,13 @@ class RouterV1Handler implements BotHandlerInterface
 
             // Templates
             $templates = $config['response_templates'] ?? [];
-            $greeting  = $templates['greeting'] ?? 'สวัสดีค่ะ มีอะไรให้ช่วยไหมคะ';
-            $fallback  = $templates['fallback'] ?? 'ขออภัยค่ะ พอแจ้งรายละเอียดเพิ่มเติมได้ไหมคะ';
+            $greeting = $templates['greeting'] ?? 'สวัสดีค่ะ มีอะไรให้ช่วยไหมคะ';
+            $fallback = $templates['fallback'] ?? 'ขออภัยค่ะ พอแจ้งรายละเอียดเพิ่มเติมได้ไหมคะ';
 
             // Persona & behavior flags
-            $persona      = $config['persona'] ?? [];
-            $skills       = $config['skills'] ?? [];
-            $handoffCfg   = $config['handoff'] ?? [];
+            $persona = $config['persona'] ?? [];
+            $skills = $config['skills'] ?? [];
+            $handoffCfg = $config['handoff'] ?? [];
             $bufferingCfg = $config['buffering'] ?? [];
 
             // Store info (optional config)
@@ -62,12 +63,12 @@ class RouterV1Handler implements BotHandlerInterface
 
             // Integrations
             $integrations = $context['integrations'] ?? [];
-            $googleNlpIntegrations     = $integrations['google_nlp'] ?? [];
-            $googleVisionIntegrations  = $integrations['google_vision'] ?? [];
-            $llmIntegrations           = $integrations['llm'] ?? ($integrations['openai'] ?? ($integrations['gemini'] ?? []));
+            $googleNlpIntegrations = $integrations['google_nlp'] ?? [];
+            $googleVisionIntegrations = $integrations['google_vision'] ?? [];
+            $llmIntegrations = $integrations['llm'] ?? ($integrations['openai'] ?? ($integrations['gemini'] ?? []));
 
-            $googleNlp      = $googleNlpIntegrations[0] ?? null;
-            $googleVision   = $googleVisionIntegrations[0] ?? null;
+            $googleNlp = $googleNlpIntegrations[0] ?? null;
+            $googleVision = $googleVisionIntegrations[0] ?? null;
             $llmIntegration = $llmIntegrations[0] ?? null;
 
             Logger::info("RouterV1 - Integrations loaded", [
@@ -81,7 +82,7 @@ class RouterV1Handler implements BotHandlerInterface
 
             // Incoming message
             $message = $context['message'] ?? [];
-            $text = trim((string)($message['text'] ?? ''));
+            $text = trim((string) ($message['text'] ?? ''));
 
             // ✅ DEBUG LOG: Detailed message intake for LINE vs FB comparison
             Logger::info("INCOMING_RAW_SUMMARY", [
@@ -91,19 +92,19 @@ class RouterV1Handler implements BotHandlerInterface
                 'msg_keys' => array_keys($message),
                 'msg_type_field' => $message['message_type'] ?? ($message['type'] ?? null),
                 'has_attachments' => !empty($message['attachments']),
-                'attachments_shape' => !empty($message['attachments']) ? array_map(function($a){
+                'attachments_shape' => !empty($message['attachments']) ? array_map(function ($a) {
                     return [
                         'type' => $a['type'] ?? null,
                         'has_url' => !empty($a['url']) || !empty($a['payload']['url']),
                         'mime' => $a['mime_type'] ?? null,
                     ];
-                }, (array)$message['attachments']) : [],
+                }, (array) $message['attachments']) : [],
                 'text_len' => mb_strlen($text, 'UTF-8'),
                 'trace_id' => $traceId,
             ]);
 
             // ✅ ignore echo/system messages
-            $isEcho = (bool)($message['is_echo'] ?? false);
+            $isEcho = (bool) ($message['is_echo'] ?? false);
             if ($isEcho) {
                 Logger::info("RouterV1 - Ignored echo message");
                 return ['reply_text' => null, 'actions' => [], 'meta' => ['reason' => 'ignore_echo']];
@@ -116,16 +117,17 @@ class RouterV1Handler implements BotHandlerInterface
             // =========================================================
             // ✅ Session (MUST be created before admin command / handoff)
             // =========================================================
-            $channel   = $context['channel'] ?? [];
+            $channel = $context['channel'] ?? [];
             $channelId = $channel['id'] ?? null;
             $externalUserId = $context['external_user_id'] ?? ($context['user']['external_user_id'] ?? null);
 
             $session = null;
             $sessionId = null;
             if ($channelId && $externalUserId) {
-                $session = $this->findOrCreateSession((int)$channelId, (string)$externalUserId);
+                $session = $this->findOrCreateSession((int) $channelId, (string) $externalUserId);
                 $sessionId = $session['id'] ?? null;
-                if ($sessionId) $context['session_id'] = (int)$sessionId;
+                if ($sessionId)
+                    $context['session_id'] = (int) $sessionId;
             }
 
             // ✅ Admin bypass
@@ -207,7 +209,7 @@ class RouterV1Handler implements BotHandlerInterface
             }
 
             // Human-like delay (optional)
-            $delayMs = (int)($config['llm']['reply_delay_ms'] ?? 0);
+            $delayMs = (int) ($config['llm']['reply_delay_ms'] ?? 0);
             if ($delayMs > 0 && $delayMs <= 5000) {
                 usleep($delayMs * 1000);
             }
@@ -288,8 +290,8 @@ class RouterV1Handler implements BotHandlerInterface
 
                 if ($lastAdminMsg !== null) {
                     // ✅ Use configurable timeout (default 5 minutes = 300 seconds)
-                    $adminActiveThreshold = (int)($handoffCfg['timeout_seconds'] ?? 300);
-                    $lastAdminTime = strtotime((string)$lastAdminMsg);
+                    $adminActiveThreshold = (int) ($handoffCfg['timeout_seconds'] ?? 300);
+                    $lastAdminTime = strtotime((string) $lastAdminMsg);
                     $currentTime = time();
                     $timeSinceAdmin = $currentTime - $lastAdminTime;
 
@@ -344,7 +346,8 @@ class RouterV1Handler implements BotHandlerInterface
             // ✅ Image flow must be BEFORE empty-text greeting
             if ($messageType === 'image' || $imageUrl) {
                 if ($sessionId) {
-                    if ($text !== '') $this->storeMessage($sessionId, 'user', $text);
+                    if ($text !== '')
+                        $this->storeMessage($sessionId, 'user', $text);
                     $this->storeMessage($sessionId, 'user', '[image] ' . ($imageUrl ?: ''));
                 }
 
@@ -369,17 +372,17 @@ class RouterV1Handler implements BotHandlerInterface
 
             // ✅ Anti-spam / repeat message behavior (text only)
             $antiSpamCfg = $config['anti_spam'] ?? [];
-            $antiSpamEnabled   = (bool)($antiSpamCfg['enabled'] ?? true);
-            $repeatThreshold   = (int)($antiSpamCfg['repeat_threshold'] ?? 3);
-            $repeatWindowSec   = (int)($antiSpamCfg['window_seconds'] ?? 25);
-            $repeatAction      = (string)($antiSpamCfg['action'] ?? 'template'); // template | silent | handoff
-            $repeatTemplateKey = (string)($antiSpamCfg['template_key'] ?? 'repeat_detected');
-            $repeatDefaultReply = (string)($antiSpamCfg['default_reply']
+            $antiSpamEnabled = (bool) ($antiSpamCfg['enabled'] ?? true);
+            $repeatThreshold = (int) ($antiSpamCfg['repeat_threshold'] ?? 3);
+            $repeatWindowSec = (int) ($antiSpamCfg['window_seconds'] ?? 25);
+            $repeatAction = (string) ($antiSpamCfg['action'] ?? 'template'); // template | silent | handoff
+            $repeatTemplateKey = (string) ($antiSpamCfg['template_key'] ?? 'repeat_detected');
+            $repeatDefaultReply = (string) ($antiSpamCfg['default_reply']
                 ?? 'เหมือนข้อความเดิมเมื่อสักครู่ค่ะ 😊 รบกวนพิมพ์รายละเอียดเพิ่มอีกนิดนะคะ');
 
             // New: extra safety bypasses to prevent false positives
-            $antiSpamMinLen = (int)($antiSpamCfg['min_length'] ?? 0); // optional config
-            $antiSpamBypassShortLen = (int)($antiSpamCfg['bypass_short_length'] ?? 3); // default: bypass <= 3 chars
+            $antiSpamMinLen = (int) ($antiSpamCfg['min_length'] ?? 0); // optional config
+            $antiSpamBypassShortLen = (int) ($antiSpamCfg['bypass_short_length'] ?? 3); // default: bypass <= 3 chars
 
             if ($antiSpamEnabled && !$isAdmin && $sessionId && $messageType === 'text' && $text !== '') {
                 $normalized = $this->normalizeTextForRepeat($text);
@@ -387,9 +390,24 @@ class RouterV1Handler implements BotHandlerInterface
                 // Bypass ultra-short texts and common acknowledgements
                 $normalizedLen = mb_strlen($normalized, 'UTF-8');
                 $ackSet = [
-                    'ok','okay','kk','k','thx','thanks','ty',
-                    'ค่ะ','ครับ','คับ','จ้า','ได้','ได้ค่ะ','ได้ครับ',
-                    'yes','no','y','n',
+                    'ok',
+                    'okay',
+                    'kk',
+                    'k',
+                    'thx',
+                    'thanks',
+                    'ty',
+                    'ค่ะ',
+                    'ครับ',
+                    'คับ',
+                    'จ้า',
+                    'ได้',
+                    'ได้ค่ะ',
+                    'ได้ครับ',
+                    'yes',
+                    'no',
+                    'y',
+                    'n',
                 ];
 
                 $shouldBypass = false;
@@ -441,7 +459,8 @@ class RouterV1Handler implements BotHandlerInterface
                             $meta['actions'][] = ['type' => 'handoff_to_admin', 'reason' => 'repeat_spam'];
                         }
 
-                        if ($reply !== '') $this->storeMessage($sessionId, 'assistant', $reply);
+                        if ($reply !== '')
+                            $this->storeMessage($sessionId, 'assistant', $reply);
 
                         return [
                             'reply_text' => $reply,
@@ -464,14 +483,15 @@ class RouterV1Handler implements BotHandlerInterface
                 $reply = $greeting;
                 $meta['reason'] = 'empty_text_use_greeting';
 
-                if ($sessionId && $reply !== '') $this->storeMessage($sessionId, 'assistant', $reply);
+                if ($sessionId && $reply !== '')
+                    $this->storeMessage($sessionId, 'assistant', $reply);
                 $this->logBotReply($context, $reply, 'text');
 
                 Logger::info('[ROUTER_V1] end', [
                     'trace_id' => $traceId,
-                    'elapsed_ms' => (int)round((microtime(true) - $t0) * 1000),
+                    'elapsed_ms' => (int) round((microtime(true) - $t0) * 1000),
                     'reason' => $meta['reason'] ?? null,
-                    'reply_len' => mb_strlen((string)$reply, 'UTF-8'),
+                    'reply_len' => mb_strlen((string) $reply, 'UTF-8'),
                     'actions_count' => 0,
                 ]);
 
@@ -483,13 +503,14 @@ class RouterV1Handler implements BotHandlerInterface
             // =========================================================
             $policy = $this->getPolicy($config);
             if ($text !== '' && $this->isOutOfScopeByPolicy($text, $policy)) {
-                $key = (string)($policy['out_of_scope_template_key'] ?? 'out_of_scope');
+                $key = (string) ($policy['out_of_scope_template_key'] ?? 'out_of_scope');
                 $reply = $templates[$key] ?? $fallback;
                 $meta['reason'] = 'policy_out_of_scope';
-                
-                if ($sessionId && $reply !== '') $this->storeMessage($sessionId, 'assistant', $reply);
+
+                if ($sessionId && $reply !== '')
+                    $this->storeMessage($sessionId, 'assistant', $reply);
                 $this->logBotReply($context, $reply, 'text');
-                
+
                 return ['reply_text' => $reply, 'actions' => [], 'meta' => $meta];
             }
 
@@ -497,25 +518,27 @@ class RouterV1Handler implements BotHandlerInterface
             // ✅ Quick answers: Store info (before KB / routing)
             // =========================================================
             if ($this->looksLikeStoreInfoQuestion($text)) {
-                $name = trim((string)($storeCfg['name'] ?? ''));
-                $desc = trim((string)($storeCfg['description'] ?? ''));
-                $contact = trim((string)($storeCfg['contact'] ?? ''));
-                $hours = trim((string)($storeCfg['hours'] ?? ''));
+                $name = trim((string) ($storeCfg['name'] ?? ''));
+                $desc = trim((string) ($storeCfg['description'] ?? ''));
+                $contact = trim((string) ($storeCfg['contact'] ?? ''));
+                $hours = trim((string) ($storeCfg['hours'] ?? ''));
 
                 // If you want address to be handled by KB, keep it out here.
                 $reply = $templates['store_info']
                     ?? ($name ? "ร้าน{$name}ค่ะ 😊 " : "ยินดีให้ข้อมูลร้านค่ะ 😊 ")
-                        . ($desc ? $desc . " " : "")
-                        . ($hours ? "เวลาเปิด-ปิด: {$hours} " : "")
-                        . ($contact ? "ติดต่อ: {$contact}" : "");
+                    . ($desc ? $desc . " " : "")
+                    . ($hours ? "เวลาเปิด-ปิด: {$hours} " : "")
+                    . ($contact ? "ติดต่อ: {$contact}" : "");
 
                 $reply = trim($reply);
-                if ($reply === '') $reply = $fallback;
+                if ($reply === '')
+                    $reply = $fallback;
 
                 $meta['reason'] = 'store_info_quick_answer';
                 $meta['route'] = 'store_info';
 
-                if ($sessionId && $reply !== '') $this->storeMessage($sessionId, 'assistant', $reply);
+                if ($sessionId && $reply !== '')
+                    $this->storeMessage($sessionId, 'assistant', $reply);
                 $this->logBotReply($context, $reply, 'text');
 
                 return ['reply_text' => $reply, 'actions' => [], 'meta' => $meta];
@@ -526,7 +549,7 @@ class RouterV1Handler implements BotHandlerInterface
             // =========================================================
             if ($sessionId && !$isAdmin) {
                 $follow = $this->tryHandleFollowupFromLastMedia(
-                    (int)$sessionId,
+                    (int) $sessionId,
                     $lastIntent,
                     $lastSlots,
                     $context,
@@ -536,18 +559,20 @@ class RouterV1Handler implements BotHandlerInterface
                 );
 
                 if (!empty($follow['handled'])) {
-                    $reply = (string)($follow['reply_text'] ?? $fallback);
+                    $reply = (string) ($follow['reply_text'] ?? $fallback);
                     $meta['reason'] = $follow['reason'] ?? 'followup_handled';
                     $meta['route'] = $follow['route'] ?? $meta['route'];
-                    if (!empty($follow['meta'])) $meta['followup'] = $follow['meta'];
+                    if (!empty($follow['meta']))
+                        $meta['followup'] = $follow['meta'];
 
                     if (!empty($follow['intent'])) {
                         $meta['intent'] = $follow['intent'];
-                        $meta['slots']  = $follow['slots'] ?? null;
-                        $this->updateSessionState((int)$sessionId, $follow['intent'], $follow['slots'] ?? []);
+                        $meta['slots'] = $follow['slots'] ?? null;
+                        $this->updateSessionState((int) $sessionId, $follow['intent'], $follow['slots'] ?? []);
                     }
 
-                    if ($reply !== '') $this->storeMessage($sessionId, 'assistant', $reply);
+                    if ($reply !== '')
+                        $this->storeMessage($sessionId, 'assistant', $reply);
                     $this->logBotReply($context, $reply, 'text');
 
                     return ['reply_text' => $reply, 'actions' => [], 'meta' => $meta];
@@ -559,11 +584,11 @@ class RouterV1Handler implements BotHandlerInterface
             // =========================================================
             $kbQuery = $text;
             if ($sessionId) {
-                $kbQuery = $this->buildKbBufferedText((int)$sessionId, $text, $bufferingCfg);
+                $kbQuery = $this->buildKbBufferedText((int) $sessionId, $text, $bufferingCfg);
                 $meta['kb_buffering'] = [
-                    'enabled' => (bool)($bufferingCfg['kb_enabled'] ?? true),
-                    'window_seconds' => (int)($bufferingCfg['kb_window_seconds'] ?? 25),
-                    'max_messages' => (int)($bufferingCfg['kb_max_messages'] ?? 2),
+                    'enabled' => (bool) ($bufferingCfg['kb_enabled'] ?? true),
+                    'window_seconds' => (int) ($bufferingCfg['kb_window_seconds'] ?? 25),
+                    'max_messages' => (int) ($bufferingCfg['kb_max_messages'] ?? 2),
                     'kb_query' => $kbQuery,
                 ];
             }
@@ -571,7 +596,7 @@ class RouterV1Handler implements BotHandlerInterface
             $kbResults = $this->searchKnowledgeBase($context, $kbQuery);
             if (!empty($kbResults) && isset($kbResults[0])) {
                 $bestMatch = $kbResults[0];
-                $reply = (string)($bestMatch['answer'] ?? $fallback);
+                $reply = (string) ($bestMatch['answer'] ?? $fallback);
 
                 $meta['knowledge_base'] = [
                     'matched' => true,
@@ -582,9 +607,10 @@ class RouterV1Handler implements BotHandlerInterface
                     'metadata' => $bestMatch['metadata'] ?? [],
                 ];
                 $meta['reason'] = 'knowledge_base_answer';
-                $meta['route']  = $bestMatch['category'] ?? 'knowledge';
+                $meta['route'] = $bestMatch['category'] ?? 'knowledge';
 
-                if ($sessionId && $reply !== '') $this->storeMessage($sessionId, 'assistant', $reply);
+                if ($sessionId && $reply !== '')
+                    $this->storeMessage($sessionId, 'assistant', $reply);
                 $this->logBotReply($context, $reply, 'text');
 
                 return [
@@ -596,7 +622,7 @@ class RouterV1Handler implements BotHandlerInterface
 
             // ✅ KB pending hold (fixed logic)
             if (!$isAdmin && $sessionId) {
-                $kbHoldEnabled = (bool)($bufferingCfg['kb_enabled'] ?? true);
+                $kbHoldEnabled = (bool) ($bufferingCfg['kb_enabled'] ?? true);
                 if ($kbHoldEnabled && $this->hasAdvancedKbPending($context, $text)) {
                     $pendingReply = $templates['kb_pending']
                         ?? 'รับทราบค่ะ 😊 พิมพ์รายละเอียดต่อได้เลย เช่น ชื่อสินค้า/รุ่น/รหัส/งบ หรือส่งรูปมาได้เลยค่ะ';
@@ -618,23 +644,23 @@ class RouterV1Handler implements BotHandlerInterface
             $caseManagement = $config['case_management'] ?? [];
             $handoffTriggers = $caseManagement['admin_handoff_triggers'] ?? [];
             $matchedHandoffKeyword = null;
-            
+
             if (!$isAdmin && !empty($handoffTriggers)) {
                 foreach ($handoffTriggers as $keyword) {
-                    $keyword = trim((string)$keyword);
+                    $keyword = trim((string) $keyword);
                     if ($keyword !== '' && mb_stripos($text, $keyword, 0, 'UTF-8') !== false) {
                         $matchedHandoffKeyword = $keyword;
                         break;
                     }
                 }
-                
+
                 if ($matchedHandoffKeyword) {
                     Logger::info('[HANDOFF_TRIGGER] Keyword matched', [
                         'trace_id' => $traceId,
                         'keyword' => $matchedHandoffKeyword,
                         'text_preview' => mb_substr($text, 0, 50, 'UTF-8'),
                     ]);
-                    
+
                     // Get slots from LLM if available
                     $handoffSlots = $lastSlots;
                     if ($llmIntegration && !empty($config['llm']['enabled'])) {
@@ -643,10 +669,10 @@ class RouterV1Handler implements BotHandlerInterface
                             $handoffSlots = $this->mergeSlots($lastSlots, $llmForSlots['slots']);
                         }
                     }
-                    
+
                     // Detect case type from keyword
                     $handoffCaseType = $this->detectCaseTypeFromKeyword($matchedHandoffKeyword);
-                    
+
                     // Create case via API with pending_admin status
                     $backendCfg = $config['backend_api'] ?? [];
                     if (!empty($caseManagement['enabled']) && !empty($backendCfg['enabled'])) {
@@ -663,9 +689,9 @@ class RouterV1Handler implements BotHandlerInterface
                                 'message' => $text,
                                 'handoff_trigger' => $matchedHandoffKeyword,
                             ];
-                            
+
                             $caseResp = $this->callBackendJson($backendCfg, $caseEndpoint, $casePayload);
-                            
+
                             if ($caseResp['ok'] && !empty($caseResp['data'])) {
                                 $meta['case'] = [
                                     'id' => $caseResp['data']['id'] ?? null,
@@ -686,21 +712,21 @@ class RouterV1Handler implements BotHandlerInterface
                             ]);
                         }
                     }
-                    
+
                     // Add handoff action
                     $meta['actions'][] = ['type' => 'handoff_to_admin', 'reason' => 'keyword_trigger', 'keyword' => $matchedHandoffKeyword];
                     $meta['handoff_trigger'] = $matchedHandoffKeyword;
-                    
+
                     // Reply with handoff message
                     $handoffReply = $templates['handoff_to_admin'] ?? 'ขอส่งต่อให้เจ้าหน้าที่ดูแลต่อนะคะ 👩‍💼 สักครู่ค่ะ';
                     $meta['reason'] = 'handoff_keyword_trigger';
-                    
+
                     if ($sessionId) {
                         $this->updateSessionState($sessionId, 'handoff_request', $handoffSlots);
                         $this->storeMessage($sessionId, 'assistant', $handoffReply);
                     }
                     $this->logBotReply($context, $handoffReply, 'text');
-                    
+
                     return [
                         'reply_text' => $handoffReply,
                         'actions' => $meta['actions'],
@@ -718,7 +744,7 @@ class RouterV1Handler implements BotHandlerInterface
             foreach ($routing as $rule) {
                 $keywords = $rule['when_any'] ?? [];
                 foreach ($keywords as $kw) {
-                    $kw = trim((string)$kw);
+                    $kw = trim((string) $kw);
                     if ($kw !== '' && mb_stripos($text, $kw, 0, 'UTF-8') !== false) {
                         $matchedRoute = $rule['route_to'] ?? null;
                         break 2;
@@ -734,7 +760,7 @@ class RouterV1Handler implements BotHandlerInterface
                 if ($llmIntegration && !empty($config['llm']['enabled'])) {
                     $llm = $this->handleWithLlmIntent($llmIntegration, $config, $context, $text);
                     $intent = $matchedRoute; // force route from keywords
-                    $slots  = is_array($llm['slots'] ?? null) ? $llm['slots'] : [];
+                    $slots = is_array($llm['slots'] ?? null) ? $llm['slots'] : [];
                     $confidence = $llm['confidence'] ?? null;
                     $nextQuestion = $llm['next_question'] ?? null;
 
@@ -758,7 +784,7 @@ class RouterV1Handler implements BotHandlerInterface
                         try {
                             $caseEngine = new CaseEngine($config, $context);
                             $caseType = $caseEngine->detectCaseType($intent, $slots['action_type'] ?? null);
-                            
+
                             if ($caseType) {
                                 // Get case_create endpoint from config
                                 $caseEndpoint = $backendCfg['endpoints']['case_create'] ?? '/api/bot/cases';
@@ -771,10 +797,10 @@ class RouterV1Handler implements BotHandlerInterface
                                     'intent' => $intent,
                                     'message' => $text, // ✅ Include customer message
                                 ];
-                                
+
                                 // Call API endpoint
                                 $caseResp = $this->callBackendJson($backendCfg, $caseEndpoint, $casePayload);
-                                
+
                                 if ($caseResp['ok'] && !empty($caseResp['data'])) {
                                     $caseData = $caseResp['data'];
                                     $meta['case'] = [
@@ -805,10 +831,11 @@ class RouterV1Handler implements BotHandlerInterface
                     $meta['llm_intent'] = $llm['meta'] ?? null;
                     $meta['intent'] = $intent;
                     $meta['slots'] = $slots;
-                    if ($confidence !== null) $meta['confidence'] = (float)$confidence;
+                    if ($confidence !== null)
+                        $meta['confidence'] = (float) $confidence;
 
                     if (!empty($handled['handled'])) {
-                        $reply = (string)($handled['reply_text'] ?? $fallback);
+                        $reply = (string) ($handled['reply_text'] ?? $fallback);
                         $meta['reason'] = $handled['reason'] ?? 'route_backend_handled';
                         $meta['backend'] = $handled['meta'] ?? null;
 
@@ -820,7 +847,8 @@ class RouterV1Handler implements BotHandlerInterface
                         if ($sessionId && $intent) {
                             $this->updateSessionState($sessionId, $intent, $handled['slots'] ?? $slots);
                         }
-                        if ($sessionId && $reply !== '') $this->storeMessage($sessionId, 'assistant', $reply);
+                        if ($sessionId && $reply !== '')
+                            $this->storeMessage($sessionId, 'assistant', $reply);
                         $this->logBotReply($context, $reply, 'text');
 
                         return ['reply_text' => $reply, 'actions' => [], 'meta' => $meta];
@@ -829,10 +857,10 @@ class RouterV1Handler implements BotHandlerInterface
                     // ยังไม่ handled -> ถามต่อ
                     $reply = '';
                     if (!empty($handled['reply_text'])) {
-                        $reply = (string)$handled['reply_text'];
+                        $reply = (string) $handled['reply_text'];
                         $meta['reason'] = $handled['reason'] ?? 'route_need_more_info';
                     } elseif ($nextQuestion) {
-                        $reply = (string)$nextQuestion;
+                        $reply = (string) $nextQuestion;
                         $meta['reason'] = 'route_slot_filling_next_question';
                     } else {
                         $reply = $this->fallbackByIntentTemplate($intent, $templates, $fallback);
@@ -841,8 +869,8 @@ class RouterV1Handler implements BotHandlerInterface
 
                     // handoff policy
                     $handoffEnabled = !empty($handoffCfg['enabled']);
-                    $handoffThreshold = isset($handoffCfg['when_confidence_below']) ? (float)$handoffCfg['when_confidence_below'] : 0.0;
-                    if ($handoffEnabled && $confidence !== null && (float)$confidence < $handoffThreshold) {
+                    $handoffThreshold = isset($handoffCfg['when_confidence_below']) ? (float) $handoffCfg['when_confidence_below'] : 0.0;
+                    if ($handoffEnabled && $confidence !== null && (float) $confidence < $handoffThreshold) {
                         $meta['actions'][] = ['type' => 'handoff_to_admin', 'reason' => 'low_confidence'];
                     }
 
@@ -854,7 +882,8 @@ class RouterV1Handler implements BotHandlerInterface
                     $backendEnabled = !empty($config['backend_api']['enabled']);
                     $reply = $this->applyPolicyGuards($reply, $intent, $config, $templates, $backendEnabled, false, $slots);
 
-                    if ($sessionId && $reply !== '') $this->storeMessage($sessionId, 'assistant', $reply);
+                    if ($sessionId && $reply !== '')
+                        $this->storeMessage($sessionId, 'assistant', $reply);
                     $this->logBotReply($context, $reply, 'text');
 
                     return [
@@ -867,8 +896,10 @@ class RouterV1Handler implements BotHandlerInterface
                 // ถ้าไม่มี LLM ก็ใช้ template ตาม intent ไปก่อน
                 $reply = $this->fallbackByIntentTemplate($matchedRoute, $templates, $fallback);
                 $meta['reason'] = 'matched_route_no_llm';
-                if ($sessionId && $matchedRoute) $this->updateSessionState($sessionId, $matchedRoute, $lastSlots);
-                if ($sessionId && $reply !== '') $this->storeMessage($sessionId, 'assistant', $reply);
+                if ($sessionId && $matchedRoute)
+                    $this->updateSessionState($sessionId, $matchedRoute, $lastSlots);
+                if ($sessionId && $reply !== '')
+                    $this->storeMessage($sessionId, 'assistant', $reply);
                 $this->logBotReply($context, $reply, 'text');
                 return ['reply_text' => $reply, 'actions' => [], 'meta' => $meta];
             }
@@ -892,15 +923,15 @@ class RouterV1Handler implements BotHandlerInterface
                     'intent' => $llmResult['intent'] ?? null,
                     'confidence' => $llmResult['confidence'] ?? null,
                     'has_reply_text' => !empty($llmResult['reply_text'] ?? null),
-                    'reply_preview' => isset($llmResult['reply_text']) ? mb_substr((string)$llmResult['reply_text'], 0, 120, 'UTF-8') : null,
+                    'reply_preview' => isset($llmResult['reply_text']) ? mb_substr((string) $llmResult['reply_text'], 0, 120, 'UTF-8') : null,
                     'slots_keys' => (isset($llmResult['slots']) && is_array($llmResult['slots'])) ? array_keys($llmResult['slots']) : null,
                     'next_question_present' => !empty($llmResult['next_question'] ?? null),
                 ]);
 
-                $reply = (string)($llmResult['reply_text'] ?? $fallback);
+                $reply = (string) ($llmResult['reply_text'] ?? $fallback);
                 $intent = $llmResult['intent'] ?? null;
-                $slots  = is_array($llmResult['slots'] ?? null) ? $llmResult['slots'] : [];
-                $confidence   = $llmResult['confidence'] ?? null;
+                $slots = is_array($llmResult['slots'] ?? null) ? $llmResult['slots'] : [];
+                $confidence = $llmResult['confidence'] ?? null;
                 $nextQuestion = $llmResult['next_question'] ?? null;
 
                 $meta['llm_intent'] = $llmResult['meta'] ?? null;
@@ -916,20 +947,20 @@ class RouterV1Handler implements BotHandlerInterface
                 // If LLM already answered (has reply_text), respect that
                 if (empty($intent) && !empty($slots['product_name'])) {
                     // Check if this is an ordering/purchasing question (not product search)
-                    $isOrderingQuestion = 
+                    $isOrderingQuestion =
                         preg_match('/สั่ง|ซื้อ|จอง|ชำระ|วิธี|ยังไง|อย่างไร|ขั้นตอน|payment|order|buy|purchase|how/iu', $text);
-                    
+
                     if ($isOrderingQuestion) {
                         Logger::info("[INTENT_FALLBACK] Ordering question detected - NOT forcing product_availability", [
                             'product_name' => $slots['product_name'],
                             'text' => $text
                         ]);
                     } else {
-                        $llmReply = trim((string)$llmResult['reply_text'] ?? '');
-                        $isFallbackReply = empty($llmReply) || 
+                        $llmReply = trim((string) $llmResult['reply_text'] ?? '');
+                        $isFallbackReply = empty($llmReply) ||
                             strpos($llmReply, 'ช่วยบอก') !== false ||
                             strpos($llmReply, 'รบกวน') !== false;
-                        
+
                         // Only force if LLM gave generic/empty response
                         if ($isFallbackReply) {
                             $intent = 'product_availability';
@@ -950,7 +981,7 @@ class RouterV1Handler implements BotHandlerInterface
                 // =========================================================
                 if (empty($intent)) {
                     $textLower = mb_strtolower($text, 'UTF-8');
-                    
+
                     // Savings keywords
                     if (preg_match('/ออม|ออมทอง|เปิดออม|สะสม/u', $textLower)) {
                         $intent = 'savings_new';
@@ -995,7 +1026,8 @@ class RouterV1Handler implements BotHandlerInterface
                 $meta['intent'] = $intent;
                 $meta['slots'] = $slots;
                 $meta['missing_slots'] = $missingSlots;
-                if ($confidence !== null) $meta['confidence'] = (float)$confidence;
+                if ($confidence !== null)
+                    $meta['confidence'] = (float) $confidence;
 
                 // =========================================================
                 // ✅ AUTO-CREATE CASE when intent detected (via API)
@@ -1006,11 +1038,11 @@ class RouterV1Handler implements BotHandlerInterface
                     try {
                         $caseEngine = new CaseEngine($config, $context);
                         $caseType = $caseEngine->detectCaseType($intent, $slots['action_type'] ?? null);
-                        
+
                         if ($caseType) {
                             // ✅ Get customer_profile_id for linking
                             $customerProfileId = $this->getCustomerProfileId($context['platform'] ?? 'unknown', $externalUserId);
-                            
+
                             // Get case_create endpoint from config
                             $caseEndpoint = $backendCfg['endpoints']['case_create'] ?? '/api/bot/cases';
                             $casePayload = [
@@ -1024,10 +1056,10 @@ class RouterV1Handler implements BotHandlerInterface
                                 'message' => $text, // ✅ Include customer message
                                 'session_id' => $sessionId, // ✅ NEW: For chat history
                             ];
-                            
+
                             // Call API endpoint
                             $caseResp = $this->callBackendJson($backendCfg, $caseEndpoint, $casePayload);
-                            
+
                             if ($caseResp['ok'] && !empty($caseResp['data'])) {
                                 $caseData = $caseResp['data'];
                                 $meta['case'] = [
@@ -1043,7 +1075,7 @@ class RouterV1Handler implements BotHandlerInterface
                                     'case_id' => $caseData['id'] ?? null,
                                     'case_no' => $caseData['case_no'] ?? null,
                                 ]);
-                                
+
                                 // ✅ NEW: Track product interest if product_ref_id present
                                 if ($customerProfileId && !empty($slots['product_ref_id'])) {
                                     $this->trackProductInterest($customerProfileId, $slots, [
@@ -1082,10 +1114,11 @@ class RouterV1Handler implements BotHandlerInterface
                 ]);
 
                 if (!empty($handled['handled'])) {
-                    $reply = (string)($handled['reply_text'] ?? $fallback);
+                    $reply = (string) ($handled['reply_text'] ?? $fallback);
                     $meta['backend'] = $handled['meta'] ?? null;
-                    $meta['reason']  = $handled['reason'] ?? 'llm_intent_backend_handled';
-                    if (!empty($intent)) $meta['route'] = $intent;
+                    $meta['reason'] = $handled['reason'] ?? 'llm_intent_backend_handled';
+                    if (!empty($intent))
+                        $meta['route'] = $intent;
 
                     // ✅ PRESERVE actions from backend (for product images, etc.)
                     $actionsOut = (isset($handled['actions']) && is_array($handled['actions'])) ? $handled['actions'] : [];
@@ -1094,7 +1127,8 @@ class RouterV1Handler implements BotHandlerInterface
                         $this->updateSessionState($sessionId, $intent, $handled['slots'] ?? $slots);
                     }
 
-                    if ($sessionId && $reply !== '') $this->storeMessage($sessionId, 'assistant', $reply);
+                    if ($sessionId && $reply !== '')
+                        $this->storeMessage($sessionId, 'assistant', $reply);
                     $this->logBotReply($context, $reply, 'text');
                     return [
                         'reply_text' => $reply,
@@ -1105,7 +1139,7 @@ class RouterV1Handler implements BotHandlerInterface
 
                 // ถ้ายังไม่พร้อม -> ถามต่อ
                 if ($intent && !empty($missingSlots) && $nextQuestion) {
-                    $reply = (string)$nextQuestion;
+                    $reply = (string) $nextQuestion;
                     $meta['reason'] = 'llm_intent_slot_filling';
                 } else {
                     if ($sessionId) {
@@ -1116,25 +1150,28 @@ class RouterV1Handler implements BotHandlerInterface
 
                 // handoff policy
                 $handoffEnabled = !empty($handoffCfg['enabled']);
-                $handoffThreshold = isset($handoffCfg['when_confidence_below']) ? (float)$handoffCfg['when_confidence_below'] : 0.0;
+                $handoffThreshold = isset($handoffCfg['when_confidence_below']) ? (float) $handoffCfg['when_confidence_below'] : 0.0;
 
-                if ($handoffEnabled && $confidence !== null && (float)$confidence < $handoffThreshold) {
+                if ($handoffEnabled && $confidence !== null && (float) $confidence < $handoffThreshold) {
                     $meta['actions'][] = ['type' => 'handoff_to_admin', 'reason' => 'low_confidence'];
-                    if ($reply === '' && $nextQuestion) $reply = (string)$nextQuestion;
+                    if ($reply === '' && $nextQuestion)
+                        $reply = (string) $nextQuestion;
                 }
 
-                if (!empty($intent)) $meta['route'] = $intent;
-                
+                if (!empty($intent))
+                    $meta['route'] = $intent;
+
                 // ✅ Apply policy guards - LLM only
                 $backendEnabled = !empty($config['backend_api']['enabled']);
                 $reply = $this->applyPolicyGuards($reply, $intent, $config, $templates, $backendEnabled, false, $slots);
             } elseif ($llmIntegration && !empty($config['llm']['enabled'])) {
                 $llmResult = $this->handleWithLlm($llmIntegration, $config, $context, $text);
-                $reply = (string)($llmResult['reply_text'] ?? $fallback);
+                $reply = (string) ($llmResult['reply_text'] ?? $fallback);
                 $meta['llm'] = $llmResult['meta'] ?? null;
-                if (!empty($llmResult['intent'])) $meta['route'] = $llmResult['intent'];
+                if (!empty($llmResult['intent']))
+                    $meta['route'] = $llmResult['intent'];
                 $meta['reason'] = 'llm_fallback';
-                
+
                 // ✅ Apply policy guards - LLM only
                 $backendEnabled = !empty($config['backend_api']['enabled']);
                 $reply = $this->applyPolicyGuards($reply, $llmResult['intent'] ?? null, $config, $templates, $backendEnabled, false, $llmResult['slots'] ?? []);
@@ -1157,16 +1194,17 @@ class RouterV1Handler implements BotHandlerInterface
                 }
             }
 
-            if ($sessionId && $reply !== '') $this->storeMessage($sessionId, 'assistant', $reply);
+            if ($sessionId && $reply !== '')
+                $this->storeMessage($sessionId, 'assistant', $reply);
             $this->logBotReply($context, $reply, 'text');
 
             Logger::info('[ROUTER_V1] end', [
                 'trace_id' => $traceId,
-                'elapsed_ms' => (int)round((microtime(true) - $t0) * 1000),
+                'elapsed_ms' => (int) round((microtime(true) - $t0) * 1000),
                 'reason' => $meta['reason'] ?? null,
                 'route' => $meta['route'] ?? null,
                 'intent' => $meta['intent'] ?? null,
-                'reply_len' => mb_strlen((string)$reply, 'UTF-8'),
+                'reply_len' => mb_strlen((string) $reply, 'UTF-8'),
                 'actions_count' => isset($meta['actions']) && is_array($meta['actions']) ? count($meta['actions']) : 0,
             ]);
 
@@ -1186,7 +1224,7 @@ class RouterV1Handler implements BotHandlerInterface
 
             // Fail safe: never crash gateway; return fallback reply
             return [
-                'reply_text' => (string)('ขออภัยค่ะ ระบบขัดข้องชั่วคราว รบกวนลองใหม่อีกครั้งนะคะ'),
+                'reply_text' => (string) ('ขออภัยค่ะ ระบบขัดข้องชั่วคราว รบกวนลองใหม่อีกครั้งนะคะ'),
                 'actions' => [],
                 'meta' => [
                     'handler' => 'router_v1',
@@ -1212,10 +1250,10 @@ class RouterV1Handler implements BotHandlerInterface
         $now = time();
 
         // last image
-        $lastImageUrl  = (string)($lastSlots['last_image_url'] ?? '');
-        $lastImageKind = (string)($lastSlots['last_image_kind'] ?? ''); // product_image | payment_proof | image_generic
-        $lastImageTs   = (string)($lastSlots['last_image_ts'] ?? '');
-        $lastImageAge  = $lastImageTs ? ($now - strtotime($lastImageTs)) : 999999;
+        $lastImageUrl = (string) ($lastSlots['last_image_url'] ?? '');
+        $lastImageKind = (string) ($lastSlots['last_image_kind'] ?? ''); // product_image | payment_proof | image_generic
+        $lastImageTs = (string) ($lastSlots['last_image_ts'] ?? '');
+        $lastImageAge = $lastImageTs ? ($now - strtotime($lastImageTs)) : 999999;
 
         // if too old, ignore
         if ($lastImageUrl === '' || $lastImageAge > 600) { // 10 minutes
@@ -1225,11 +1263,11 @@ class RouterV1Handler implements BotHandlerInterface
         $tLower = mb_strtolower($text, 'UTF-8');
 
         // Follow-up product from last image
-        $askHave = $this->containsAny($tLower, ["มีไหม","ยังอยู่ไหม","เช็คของ","อยู่มั้ย","มีของไหม","มีรุ่นนี้ไหม","มีมั้ย"]);
-        $askPrice = $this->containsAny($tLower, ["ราคา","เท่าไหร่","ขอราคา","ต่อรอง","ลดได้ไหม"]);
+        $askHave = $this->containsAny($tLower, ["มีไหม", "ยังอยู่ไหม", "เช็คของ", "อยู่มั้ย", "มีของไหม", "มีรุ่นนี้ไหม", "มีมั้ย"]);
+        $askPrice = $this->containsAny($tLower, ["ราคา", "เท่าไหร่", "ขอราคา", "ต่อรอง", "ลดได้ไหม"]);
 
         // Follow-up payment from last slip image
-        $askPaid = $this->containsAny($tLower, ["โอนแล้ว","ชำระแล้ว","จ่ายแล้ว","ส่งสลิป","แนบสลิป","โอนเงินแล้ว","ตรวจสอบยอด","เช็คยอด","เช็คสลิป"]);
+        $askPaid = $this->containsAny($tLower, ["โอนแล้ว", "ชำระแล้ว", "จ่ายแล้ว", "ส่งสลิป", "แนบสลิป", "โอนเงินแล้ว", "ตรวจสอบยอด", "เช็คยอด", "เช็คสลิป"]);
 
         // ถ้ารูปก่อนหน้าเป็นสลิป แล้ว user พิมพ์โอนแล้ว => ยิง receipt_get ได้เลย
         if ($lastImageKind === 'payment_proof' && $askPaid) {
@@ -1277,7 +1315,8 @@ class RouterV1Handler implements BotHandlerInterface
         // ถ้ารูปก่อนหน้าเป็นสินค้า และ user ถามมีไหม/ราคา => ยิง image_search ได้เลย
         if (($lastImageKind === 'product_image' || $lastImageKind === 'image_generic') && ($askHave || $askPrice)) {
             $backendCfg = $config['backend_api'] ?? [];
-            if (empty($backendCfg['enabled'])) return ['handled' => false];
+            if (empty($backendCfg['enabled']))
+                return ['handled' => false];
 
             $endpoints = $backendCfg['endpoints'] ?? [];
             $endpoint = $endpoints['image_search'] ?? ($endpoints['searchImage'] ?? '/api/searchImage');
@@ -1297,7 +1336,8 @@ class RouterV1Handler implements BotHandlerInterface
             $resp = $this->callBackendJson($backendCfg, $endpoint, $payload);
             if (!empty($resp['ok'])) {
                 $products = $resp['data']['products'] ?? ($resp['data']['items'] ?? ($resp['data']['candidates'] ?? []));
-                if (!is_array($products)) $products = [];
+                if (!is_array($products))
+                    $products = [];
 
                 $rendered = $this->renderProductsFromBackend($products, $templates);
                 return [
@@ -1333,14 +1373,14 @@ class RouterV1Handler implements BotHandlerInterface
     // =========================================================
     protected function rescueSlotsFromText(?string $intent, array $slots, string $text): array
     {
-        $intent = trim((string)$intent);
+        $intent = trim((string) $intent);
         if ($intent === '') {
             return $slots;
         }
 
         // product_code extraction
         if ($intent === 'product_lookup_by_code') {
-            $pc = trim((string)($slots['product_code'] ?? ''));
+            $pc = trim((string) ($slots['product_code'] ?? ''));
             if ($pc === '') {
                 // Examples: "รหัส xxxx", "code: RX-001", "SKU#123"
                 if (preg_match('/(?:รหัส|โค้ด|code|sku|serial|ซีเรียล)\s*[:#]?\s*([A-Za-z0-9\-\_\.\/]+)\b/iu', $text, $m)) {
@@ -1351,13 +1391,14 @@ class RouterV1Handler implements BotHandlerInterface
 
         // product_name extraction (improved to catch plain queries)
         if ($intent === 'product_availability' || $intent === 'price_inquiry') {
-            $pn = trim((string)($slots['product_name'] ?? ''));
+            $pn = trim((string) ($slots['product_name'] ?? ''));
             if ($pn === '') {
                 // Try pattern with question keywords first
                 if (preg_match('/(?:มีรุ่นนี้ไหม|มีของไหม|มีไหม|ราคา|เท่าไหร่|สนใจ|มี)\s+(.+?)(?:\s+ไหม|บ้าง|มั้ย)?$/iu', $text, $m)) {
                     $guess = trim($m[1]);
-                    if (mb_strlen($guess, 'UTF-8') >= 2) $slots['product_name'] = $guess;
-                } 
+                    if (mb_strlen($guess, 'UTF-8') >= 2)
+                        $slots['product_name'] = $guess;
+                }
                 // If no keywords, use the entire text as product_name (for queries like "Rolex", "นาฬิกา Rolex")
                 else {
                     $guess = trim($text);
@@ -1371,7 +1412,7 @@ class RouterV1Handler implements BotHandlerInterface
 
         // amount extraction (best-effort)
         if ($intent === 'payment_slip_verify' || $intent === 'installment_flow') {
-            $amt = trim((string)($slots['amount'] ?? ''));
+            $amt = trim((string) ($slots['amount'] ?? ''));
             if ($amt === '' && preg_match('/(\d{2,3}(?:,\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)\s*(?:บาท|thb)?/iu', $text, $m)) {
                 $slots['amount'] = $this->normalizeAmount($m[1]);
             }
@@ -1386,11 +1427,12 @@ class RouterV1Handler implements BotHandlerInterface
     protected function tryHandleByIntentWithBackend(?string $intent, array $slots, array $context, array $config, array $templates, string $rawText, ?array $extra = null): array
     {
         $intent = $intent ? trim($intent) : null;
-        if (!$intent) return ['handled' => false];
+        if (!$intent)
+            return ['handled' => false];
 
         $backendCfg = $config['backend_api'] ?? [];
         $toolPolicy = $config['tool_policy'] ?? [];
-        $preferBackend = (bool)($toolPolicy['prefer_backend_over_llm'] ?? true);
+        $preferBackend = (bool) ($toolPolicy['prefer_backend_over_llm'] ?? true);
 
         if (!$preferBackend || empty($backendCfg['enabled'])) {
             return ['handled' => false, 'reason' => 'backend_disabled_or_not_preferred'];
@@ -1400,8 +1442,10 @@ class RouterV1Handler implements BotHandlerInterface
         $externalUserId = $context['external_user_id'] ?? ($context['user']['external_user_id'] ?? null);
 
         // Normalize some slots
-        if (!empty($slots['customer_phone'])) $slots['customer_phone'] = $this->normalizePhone((string)$slots['customer_phone']);
-        if (!empty($slots['amount'])) $slots['amount'] = $this->normalizeAmount((string)$slots['amount']);
+        if (!empty($slots['customer_phone']))
+            $slots['customer_phone'] = $this->normalizePhone((string) $slots['customer_phone']);
+        if (!empty($slots['amount']))
+            $slots['amount'] = $this->normalizeAmount((string) $slots['amount']);
 
         // Helper ask templates
         $askProductCode = $templates['ask_product_code'] ?? $templates['fallback'] ?? 'รบกวนส่งรหัส/รุ่นเพิ่มนิดนึงค่ะ';
@@ -1409,18 +1453,20 @@ class RouterV1Handler implements BotHandlerInterface
         $askSlipMissing = $templates['ask_slip_missing'] ?? 'รบกวนแจ้งยอด/เวลา/ชื่อผู้โอนเพิ่มนิดนึงค่ะ';
 
         // Endpoint resolver (supports both old & new keys)
-        $ep = function(array $keys) use ($backendCfg) {
+        $ep = function (array $keys) use ($backendCfg) {
             $endpoints = $backendCfg['endpoints'] ?? [];
             foreach ($keys as $k) {
-                if (!empty($endpoints[$k]) && is_string($endpoints[$k])) return $endpoints[$k];
+                if (!empty($endpoints[$k]) && is_string($endpoints[$k]))
+                    return $endpoints[$k];
             }
             return null;
         };
 
         // Render helpers
-        $renderProductReply = function(array $products) use ($templates) {
+        $renderProductReply = function (array $products) use ($templates) {
             $products = array_values($products);
-            if (count($products) <= 0) return $templates['product_not_found'] ?? 'ตอนนี้ยังไม่เจอในระบบค่ะ 😅';
+            if (count($products) <= 0)
+                return $templates['product_not_found'] ?? 'ตอนนี้ยังไม่เจอในระบบค่ะ 😅';
 
             if (count($products) === 1) {
                 $p = $products[0];
@@ -1441,7 +1487,8 @@ class RouterV1Handler implements BotHandlerInterface
                 $price = $p['price'] ?? ($p['selling_price'] ?? '');
                 $lines[] = "{$i}) {$name}" . ($code ? " (รหัส {$code})" : "") . ($price !== '' ? " - {$price} บาท" : "");
                 $i++;
-                if ($i > 5) break;
+                if ($i > 5)
+                    break;
             }
 
             $tpl = $templates['product_found_many'] ?? "พบหลายรายการ:\n{{list}}\nพิมพ์เลือกเลข 1-{{n}} ได้เลยค่ะ";
@@ -1455,14 +1502,39 @@ class RouterV1Handler implements BotHandlerInterface
         // Intent: product_lookup_by_code
         // -------------------------
         if ($intent === 'product_lookup_by_code') {
-            $code = trim((string)($slots['product_code'] ?? ''));
+            $code = trim((string) ($slots['product_code'] ?? ''));
             if ($code === '') {
                 return ['handled' => false, 'reply_text' => $askProductCode, 'reason' => 'missing_product_code', 'slots' => $slots];
             }
 
+            // Try internal ProductSearchService first (uses mock/local data)
             $endpoint = $ep(['product_search', 'product_get', 'product_lookup']);
-            if (!$endpoint) return ['handled' => false, 'reason' => 'missing_endpoint_product_search'];
 
+            if (!$endpoint) {
+                // Use internal ProductSearchService
+                $products = ProductSearchService::searchByProductCode($code);
+
+                if (empty($products)) {
+                    return [
+                        'handled' => true,
+                        'reply_text' => "❌ ไม่พบสินค้ารหัส {$code} ค่ะ\n\nลองค้นหาด้วยรหัสอื่น หรือพิมพ์ชื่อสินค้าได้เลยค่ะ 😊",
+                        'reason' => 'product_not_found',
+                        'slots' => $slots
+                    ];
+                }
+
+                $replyText = ProductSearchService::formatMultipleForChat($products, 3);
+
+                return [
+                    'handled' => true,
+                    'reply_text' => $replyText,
+                    'reason' => 'internal_product_lookup_by_code',
+                    'meta' => ['products' => $products],
+                    'slots' => $slots
+                ];
+            }
+
+            // Fallback to backend API if configured
             $payload = [
                 'q' => $code,
                 'product_code' => $code,
@@ -1476,7 +1548,8 @@ class RouterV1Handler implements BotHandlerInterface
             }
 
             $products = $resp['data']['products'] ?? ($resp['data']['items'] ?? ($resp['data']['candidates'] ?? []));
-            if (!is_array($products)) $products = [];
+            if (!is_array($products))
+                $products = [];
 
             $rendered = $this->renderProductsFromBackend($products, $templates);
 
@@ -1494,7 +1567,7 @@ class RouterV1Handler implements BotHandlerInterface
         // Intent: product_availability / price_inquiry
         // -------------------------
         if ($intent === 'product_availability' || $intent === 'price_inquiry') {
-            $name = trim((string)($slots['product_name'] ?? ''));
+            $name = trim((string) ($slots['product_name'] ?? ''));
             if ($name === '') {
                 // Use fallback template instead of non-existent product_availability template
                 $tpl = $templates['fallback'] ?? 'ลูกค้าสนใจสินค้าไหมค่ะ 😊 ช่วยอธิบายรายละเอียดเพิ่มอีกนิดทีค่ะ เช่น รุ่น/รหัส';
@@ -1502,7 +1575,8 @@ class RouterV1Handler implements BotHandlerInterface
             }
 
             $endpoint = $ep(['product_search']);
-            if (!$endpoint) return ['handled' => false, 'reason' => 'missing_endpoint_product_search'];
+            if (!$endpoint)
+                return ['handled' => false, 'reason' => 'missing_endpoint_product_search'];
 
             // Build payload with attributes from slots
             $payload = [
@@ -1511,20 +1585,28 @@ class RouterV1Handler implements BotHandlerInterface
                 'channel_id' => $channelId,
                 'external_user_id' => $externalUserId,
             ];
-            
+
             // Extract attributes from slots (color, brand, etc.)
             $attributes = [];
             if (!empty($slots['color'])) {
                 // Map Thai colors to English
                 $colorMap = [
-                    'ดำ' => 'black', 'สีดำ' => 'black',
-                    'น้ำเงิน' => 'blue', 'สีน้ำเงิน' => 'blue',
-                    'เงิน' => 'silver', 'สีเงิน' => 'silver',
-                    'ทอง' => 'gold', 'สีทอง' => 'gold',
-                    'ขาว' => 'white', 'สีขาว' => 'white',
-                    'เขียว' => 'green', 'สีเขียว' => 'green',
-                    'แดง' => 'red', 'สีแดง' => 'red',
-                    'ชมพู' => 'pink', 'สีชมพู' => 'pink',
+                    'ดำ' => 'black',
+                    'สีดำ' => 'black',
+                    'น้ำเงิน' => 'blue',
+                    'สีน้ำเงิน' => 'blue',
+                    'เงิน' => 'silver',
+                    'สีเงิน' => 'silver',
+                    'ทอง' => 'gold',
+                    'สีทอง' => 'gold',
+                    'ขาว' => 'white',
+                    'สีขาว' => 'white',
+                    'เขียว' => 'green',
+                    'สีเขียว' => 'green',
+                    'แดง' => 'red',
+                    'สีแดง' => 'red',
+                    'ชมพู' => 'pink',
+                    'สีชมพู' => 'pink',
                 ];
                 $colorValue = mb_strtolower(trim($slots['color']), 'UTF-8');
                 $attributes['color'] = $colorMap[$colorValue] ?? $colorValue;
@@ -1535,10 +1617,10 @@ class RouterV1Handler implements BotHandlerInterface
             if (!empty($attributes)) {
                 $payload['attributes'] = $attributes;
             }
-            
+
             // Price range from budget slot
             if (!empty($slots['budget'])) {
-                $budget = (int)preg_replace('/[^0-9]/', '', $slots['budget']);
+                $budget = (int) preg_replace('/[^0-9]/', '', $slots['budget']);
                 if ($budget > 0) {
                     $payload['max_price'] = $budget;
                 }
@@ -1550,10 +1632,11 @@ class RouterV1Handler implements BotHandlerInterface
             }
 
             $products = $resp['data']['products'] ?? ($resp['data']['items'] ?? ($resp['data']['candidates'] ?? []));
-            if (!is_array($products)) $products = [];
+            if (!is_array($products))
+                $products = [];
 
             $rendered = $this->renderProductsFromBackend($products, $templates);
-            
+
             return [
                 'handled' => true,
                 'reply_text' => $rendered['text'],
@@ -1569,17 +1652,19 @@ class RouterV1Handler implements BotHandlerInterface
         // -------------------------
         if ($intent === 'payment_slip_verify') {
             $endpoint = $ep(['receipt_get', 'payment_verify']);
-            if (!$endpoint) return ['handled' => false, 'reason' => 'missing_endpoint_payment_verify'];
+            if (!$endpoint)
+                return ['handled' => false, 'reason' => 'missing_endpoint_payment_verify'];
 
-            $amount = trim((string)($slots['amount'] ?? ''));
-            $time   = trim((string)($slots['time'] ?? ''));
-            $sender = trim((string)($slots['sender_name'] ?? ''));
-            $paymentRef = trim((string)($slots['payment_ref'] ?? ''));
-            $bank = trim((string)($slots['bank'] ?? ''));
+            $amount = trim((string) ($slots['amount'] ?? ''));
+            $time = trim((string) ($slots['time'] ?? ''));
+            $sender = trim((string) ($slots['sender_name'] ?? ''));
+            $paymentRef = trim((string) ($slots['payment_ref'] ?? ''));
+            $bank = trim((string) ($slots['bank'] ?? ''));
 
             $slipImageUrl = $extra['slip_image_url'] ?? null;
-            if (!$slipImageUrl) $slipImageUrl = $context['message']['attachments'][0]['url'] ?? null;
-            
+            if (!$slipImageUrl)
+                $slipImageUrl = $context['message']['attachments'][0]['url'] ?? null;
+
             $visionText = $extra['vision_text'] ?? null;
             $geminiDetails = $extra['gemini_details'] ?? [];
 
@@ -1616,7 +1701,7 @@ class RouterV1Handler implements BotHandlerInterface
             $status = $resp['data']['status'] ?? null;
             $paymentNo = $resp['data']['payment_no'] ?? null;
             $matchedOrderNo = $resp['data']['matched_order_no'] ?? null;
-            
+
             if ($status === 'ok' || $status === 'paid' || $status === 'matched') {
                 $tpl = $templates['payment_verify_ok'] ?? 'ตรวจสอบแล้วค่ะ ✅ ยอดเข้าเรียบร้อย ขอบคุณมากนะคะ 🙏';
                 return ['handled' => true, 'reply_text' => $tpl, 'reason' => 'backend_payment_ok', 'meta' => $resp, 'slots' => $slots];
@@ -1630,7 +1715,7 @@ class RouterV1Handler implements BotHandlerInterface
             if ($matchedOrderNo) {
                 $pendingMsg .= "\n📦 จับคู่กับออเดอร์: #{$matchedOrderNo}";
             }
-            
+
             return ['handled' => true, 'reply_text' => $pendingMsg, 'reason' => 'backend_payment_pending', 'meta' => $resp, 'slots' => $slots];
         }
 
@@ -1638,15 +1723,15 @@ class RouterV1Handler implements BotHandlerInterface
         // Intent: installment_flow
         // -------------------------
         if ($intent === 'installment_flow') {
-            $action = trim((string)($slots['action_type'] ?? ''));
+            $action = trim((string) ($slots['action_type'] ?? ''));
             if ($action === '') {
                 $tpl = $templates['installment_choose_action']
                     ?? 'ต้องการ “ชำระงวด / ต่อดอก / ปิดยอด” แบบไหนคะ 😊 (พิมพ์คำที่ต้องการได้เลยค่ะ)';
                 return ['handled' => false, 'reply_text' => $tpl, 'reason' => 'missing_action_type', 'slots' => $slots];
             }
 
-            $installmentId = trim((string)($slots['installment_id'] ?? ''));
-            $phone = trim((string)($slots['customer_phone'] ?? ''));
+            $installmentId = trim((string) ($slots['installment_id'] ?? ''));
+            $phone = trim((string) ($slots['customer_phone'] ?? ''));
 
             $wantSummary = in_array($action, ['summary', 'check', 'status', 'close_check', 'pay_check'], true);
 
@@ -1689,12 +1774,13 @@ class RouterV1Handler implements BotHandlerInterface
             }
 
             if ($endpointPay) {
-                $amount = trim((string)($slots['amount'] ?? ''));
-                $time   = trim((string)($slots['time'] ?? ''));
-                $sender = trim((string)($slots['sender_name'] ?? ''));
+                $amount = trim((string) ($slots['amount'] ?? ''));
+                $time = trim((string) ($slots['time'] ?? ''));
+                $sender = trim((string) ($slots['sender_name'] ?? ''));
 
                 $slipImageUrl = $extra['slip_image_url'] ?? null;
-                if (!$slipImageUrl) $slipImageUrl = $context['message']['attachments'][0]['url'] ?? null;
+                if (!$slipImageUrl)
+                    $slipImageUrl = $context['message']['attachments'][0]['url'] ?? null;
 
                 if (($installmentId === '' && $phone === '') || $amount === '' || $time === '' || $sender === '') {
                     return ['handled' => false, 'reply_text' => $askInstallment, 'reason' => 'missing_installment_payment_fields', 'slots' => $slots];
@@ -1731,10 +1817,11 @@ class RouterV1Handler implements BotHandlerInterface
         // -------------------------
         if ($intent === 'order_status') {
             $endpoint = $ep(['order_status']);
-            if (!$endpoint) return ['handled' => false, 'reason' => 'missing_endpoint_order_status'];
+            if (!$endpoint)
+                return ['handled' => false, 'reason' => 'missing_endpoint_order_status'];
 
-            $orderId = trim((string)($slots['order_id'] ?? ''));
-            $phone   = trim((string)($slots['customer_phone'] ?? ''));
+            $orderId = trim((string) ($slots['order_id'] ?? ''));
+            $phone = trim((string) ($slots['customer_phone'] ?? ''));
             if ($orderId === '' && $phone === '') {
                 $tpl = $templates['ask_order_status']
                     ?? 'รบกวนแจ้ง “เลขออเดอร์/ชื่อ-เบอร์โทร” เพื่อเช็คสถานะจัดส่งให้ค่ะ 😊';
@@ -1773,63 +1860,67 @@ class RouterV1Handler implements BotHandlerInterface
         // -------------------------
         if (in_array($intent, ['savings_new', 'savings_deposit', 'savings_inquiry'])) {
             $actionType = null;
-            if ($intent === 'savings_new') $actionType = 'new';
-            elseif ($intent === 'savings_deposit') $actionType = 'deposit';
-            elseif ($intent === 'savings_inquiry') $actionType = 'inquiry';
-            
+            if ($intent === 'savings_new')
+                $actionType = 'new';
+            elseif ($intent === 'savings_deposit')
+                $actionType = 'deposit';
+            elseif ($intent === 'savings_inquiry')
+                $actionType = 'inquiry';
+
             // Get action_type from slots if provided
             if (!empty($slots['action_type'])) {
                 $actionType = $slots['action_type'];
             }
-            
+
             $askSavingsProduct = $templates['ask_savings_product'] ?? 'สนใจออมสินค้าตัวไหนคะ? 🎁 ส่งชื่อหรือรหัสสินค้ามาได้เลยค่ะ';
             $askSlipMissing = $templates['ask_slip_missing'] ?? 'รบกวนส่งรูปสลิปการโอนด้วยนะคะ 📷';
-            
+
             // Handle savings_new
             if ($actionType === 'new') {
-                $productRefId = trim((string)($slots['product_ref_id'] ?? ''));
-                $productName = trim((string)($slots['product_name'] ?? ''));
-                
+                $productRefId = trim((string) ($slots['product_ref_id'] ?? ''));
+                $productName = trim((string) ($slots['product_name'] ?? ''));
+
                 if ($productRefId === '' && $productName === '') {
                     return ['handled' => false, 'reply_text' => $askSavingsProduct, 'reason' => 'missing_product_for_savings', 'slots' => $slots];
                 }
-                
+
                 $endpoint = $ep(['savings_create']);
-                if (!$endpoint) return ['handled' => false, 'reason' => 'missing_endpoint_savings_create'];
-                
+                if (!$endpoint)
+                    return ['handled' => false, 'reason' => 'missing_endpoint_savings_create'];
+
                 $payload = [
                     'channel_id' => $channelId,
                     'external_user_id' => $externalUserId,
                     'platform' => $context['platform'] ?? ($context['channel']['platform'] ?? 'unknown'),
                     'product_ref_id' => $productRefId ?: null,
                     'product_name' => $productName ?: 'Unknown Product',
-                    'product_price' => (float)($slots['product_price'] ?? ($slots['target_amount'] ?? 0))
+                    'product_price' => (float) ($slots['product_price'] ?? ($slots['target_amount'] ?? 0))
                 ];
-                
+
                 $resp = $this->callBackendJson($backendCfg, $endpoint, $payload);
                 if (!$resp['ok']) {
                     return ['handled' => false, 'reply_text' => $templates['fallback'] ?? 'ขออภัยค่ะ มีปัญหาในการเปิดบัญชีออม', 'reason' => 'backend_error', 'meta' => $resp, 'slots' => $slots];
                 }
-                
+
                 $data = $resp['data'] ?? [];
                 $tpl = $templates['savings_created'] ?? "เปิดบัญชีออมให้แล้วค่ะ ✅\nสินค้า: {{product_name}}\nเป้าหมาย: {{target_amount}} บาท\nสินค้ากันไว้ให้แล้วนะคะ 🎯";
                 $reply = $this->renderTemplate($tpl, [
                     'product_name' => $data['product_name'] ?? $productName,
-                    'target_amount' => number_format((float)($data['target_amount'] ?? 0)),
+                    'target_amount' => number_format((float) ($data['target_amount'] ?? 0)),
                     'account_no' => $data['account_no'] ?? ''
                 ]);
-                
+
                 $slots['savings_id'] = $data['id'] ?? null;
                 $slots['savings_account_no'] = $data['account_no'] ?? null;
-                
+
                 return ['handled' => true, 'reply_text' => $reply, 'reason' => 'backend_savings_created', 'meta' => $resp, 'slots' => $slots];
             }
-            
+
             // Handle savings_deposit
             if ($actionType === 'deposit') {
-                $savingsId = trim((string)($slots['savings_id'] ?? ($slots['savings_account_id'] ?? '')));
+                $savingsId = trim((string) ($slots['savings_id'] ?? ($slots['savings_account_id'] ?? '')));
                 $slipImageUrl = $extra['slip_image_url'] ?? ($context['message']['attachments'][0]['url'] ?? null);
-                
+
                 // Try to find savings account if not provided
                 if ($savingsId === '') {
                     $existingSavings = $this->db->queryOne(
@@ -1837,64 +1928,65 @@ class RouterV1Handler implements BotHandlerInterface
                         [$channelId, $externalUserId]
                     );
                     if ($existingSavings) {
-                        $savingsId = (string)$existingSavings['id'];
+                        $savingsId = (string) $existingSavings['id'];
                         $slots['savings_id'] = $savingsId;
                     }
                 }
-                
+
                 if ($savingsId === '') {
                     return ['handled' => false, 'reply_text' => 'ไม่พบบัญชีออมที่เปิดไว้ค่ะ ต้องการเปิดบัญชีออมใหม่ไหมคะ? 🏦', 'reason' => 'no_savings_account', 'slots' => $slots];
                 }
-                
+
                 if (!$slipImageUrl) {
                     return ['handled' => false, 'reply_text' => $askSlipMissing, 'reason' => 'missing_slip_image', 'slots' => $slots];
                 }
-                
+
                 $endpoint = $ep(['savings_deposit']);
-                if (!$endpoint) return ['handled' => false, 'reason' => 'missing_endpoint_savings_deposit'];
-                
+                if (!$endpoint)
+                    return ['handled' => false, 'reason' => 'missing_endpoint_savings_deposit'];
+
                 // Replace {id} placeholder in endpoint
                 $endpoint = str_replace('{id}', $savingsId, $endpoint);
-                
+
                 $payload = [
-                    'amount' => (float)($slots['amount'] ?? 0),
+                    'amount' => (float) ($slots['amount'] ?? 0),
                     'slip_image_url' => $slipImageUrl,
                     'payment_time' => $slots['time'] ?? null,
                     'sender_name' => $slots['sender_name'] ?? null
                 ];
-                
+
                 $resp = $this->callBackendJson($backendCfg, $endpoint, $payload);
                 if (!$resp['ok']) {
                     return ['handled' => false, 'reply_text' => $templates['payment_verify_pending'] ?? 'บันทึกยอดฝากให้แล้วค่ะ รอเจ้าหน้าที่ตรวจสอบนะคะ', 'reason' => 'backend_error', 'meta' => $resp, 'slots' => $slots];
                 }
-                
+
                 $tpl = $templates['savings_deposit_pending'] ?? 'ได้รับยอดฝากแล้วค่ะ 💰 รอเจ้าหน้าที่ตรวจสอบนะคะ';
                 return ['handled' => true, 'reply_text' => $tpl, 'reason' => 'backend_savings_deposit', 'meta' => $resp, 'slots' => $slots];
             }
-            
+
             // Handle savings_inquiry
             if ($actionType === 'inquiry') {
-                $savingsId = trim((string)($slots['savings_id'] ?? ($slots['savings_account_id'] ?? '')));
-                
+                $savingsId = trim((string) ($slots['savings_id'] ?? ($slots['savings_account_id'] ?? '')));
+
                 // Try to find savings account if not provided
                 if ($savingsId === '') {
                     $existingSavings = $this->db->queryAll(
                         "SELECT * FROM savings_accounts WHERE channel_id = ? AND external_user_id = ? AND status = 'active' ORDER BY created_at DESC",
                         [$channelId, $externalUserId]
                     );
-                    
+
                     if (empty($existingSavings)) {
                         return ['handled' => true, 'reply_text' => 'ไม่มีบัญชีออมที่กำลังดำเนินการอยู่ค่ะ 📭', 'reason' => 'no_savings_account', 'slots' => $slots];
                     }
-                    
+
                     // Format multiple savings accounts
                     if (count($existingSavings) === 1) {
                         $sa = $existingSavings[0];
-                        $current = (float)$sa['current_amount'];
-                        $target = (float)$sa['target_amount'];
+                        $current = (float) $sa['current_amount'];
+                        $target = (float) $sa['target_amount'];
                         $remaining = $target - $current;
                         $progress = $target > 0 ? round(($current / $target) * 100) : 0;
-                        
+
                         $tpl = $templates['savings_status'] ?? "ยอดออมปัจจุบัน: {{current_amount}} บาท\nเป้าหมาย: {{target_amount}} บาท\nเหลืออีก: {{remaining}} บาท\nความคืบหน้า: {{progress}}% 📊";
                         $reply = $this->renderTemplate($tpl, [
                             'current_amount' => number_format($current),
@@ -1904,33 +1996,33 @@ class RouterV1Handler implements BotHandlerInterface
                         ]);
                         return ['handled' => true, 'reply_text' => $reply, 'reason' => 'savings_inquiry_single', 'slots' => $slots];
                     }
-                    
+
                     // Multiple accounts
                     $lines = [];
                     foreach ($existingSavings as $i => $sa) {
-                        $current = (float)$sa['current_amount'];
-                        $target = (float)$sa['target_amount'];
+                        $current = (float) $sa['current_amount'];
+                        $target = (float) $sa['target_amount'];
                         $progress = $target > 0 ? round(($current / $target) * 100) : 0;
                         $lines[] = ($i + 1) . ") {$sa['product_name']}: " . number_format($current) . "/" . number_format($target) . " บาท ({$progress}%)";
                     }
-                    
+
                     $reply = "บัญชีออมที่มีค่ะ 📋\n" . implode("\n", $lines);
                     return ['handled' => true, 'reply_text' => $reply, 'reason' => 'savings_inquiry_multiple', 'slots' => $slots];
                 }
-                
+
                 // Get specific savings account
                 $endpoint = $ep(['savings_status']);
                 if ($endpoint) {
                     $endpoint = str_replace('{id}', $savingsId, $endpoint);
                     $resp = $this->callBackendJson($backendCfg, $endpoint, []);
-                    
+
                     if ($resp['ok'] && !empty($resp['data'])) {
                         $sa = $resp['data'];
-                        $current = (float)($sa['current_amount'] ?? 0);
-                        $target = (float)($sa['target_amount'] ?? 0);
+                        $current = (float) ($sa['current_amount'] ?? 0);
+                        $target = (float) ($sa['target_amount'] ?? 0);
                         $remaining = $target - $current;
                         $progress = $target > 0 ? round(($current / $target) * 100) : 0;
-                        
+
                         $tpl = $templates['savings_status'] ?? "ยอดออมปัจจุบัน: {{current_amount}} บาท\nเป้าหมาย: {{target_amount}} บาท\nเหลืออีก: {{remaining}} บาท\nความคืบหน้า: {{progress}}% 📊";
                         $reply = $this->renderTemplate($tpl, [
                             'current_amount' => number_format($current),
@@ -1941,10 +2033,10 @@ class RouterV1Handler implements BotHandlerInterface
                         return ['handled' => true, 'reply_text' => $reply, 'reason' => 'backend_savings_status', 'meta' => $resp, 'slots' => $slots];
                     }
                 }
-                
+
                 return ['handled' => false, 'reply_text' => 'ไม่พบข้อมูลบัญชีออมค่ะ 😅', 'reason' => 'savings_not_found', 'slots' => $slots];
             }
-            
+
             // Default: ask what action they want
             $tpl = $templates['savings_choose_action'] ?? 'ต้องการ "เปิดออมใหม่ / ฝากเงิน / เช็คยอด" แบบไหนคะ 😊';
             return ['handled' => false, 'reply_text' => $tpl, 'reason' => 'missing_savings_action_type', 'slots' => $slots];
@@ -1955,64 +2047,68 @@ class RouterV1Handler implements BotHandlerInterface
         // -------------------------
         if (in_array($intent, ['deposit_new', 'deposit_payment', 'deposit_inquiry'])) {
             $actionType = null;
-            if ($intent === 'deposit_new') $actionType = 'new';
-            elseif ($intent === 'deposit_payment') $actionType = 'pay';
-            elseif ($intent === 'deposit_inquiry') $actionType = 'inquiry';
-            
+            if ($intent === 'deposit_new')
+                $actionType = 'new';
+            elseif ($intent === 'deposit_payment')
+                $actionType = 'pay';
+            elseif ($intent === 'deposit_inquiry')
+                $actionType = 'inquiry';
+
             if (!empty($slots['action_type'])) {
                 $actionType = $slots['action_type'];
             }
-            
+
             $askProductForDeposit = $templates['ask_product_for_deposit'] ?? 'สนใจมัดจำสินค้าตัวไหนคะ? 🎁 ส่งชื่อหรือรหัสสินค้ามาได้เลยค่ะ';
             $askDepositSlip = $templates['ask_deposit_slip'] ?? 'รบกวนส่งรูปสลิปโอนมัดจำด้วยนะคะ 📷';
-            
+
             // Handle deposit_new
             if ($actionType === 'new') {
-                $productRefId = trim((string)($slots['product_ref_id'] ?? ''));
-                $productName = trim((string)($slots['product_name'] ?? ''));
-                
+                $productRefId = trim((string) ($slots['product_ref_id'] ?? ''));
+                $productName = trim((string) ($slots['product_name'] ?? ''));
+
                 if ($productRefId === '' && $productName === '') {
                     return ['handled' => false, 'reply_text' => $askProductForDeposit, 'reason' => 'missing_product_for_deposit', 'slots' => $slots];
                 }
-                
+
                 $endpoint = $ep(['deposit_create']);
-                if (!$endpoint) return ['handled' => false, 'reason' => 'missing_endpoint_deposit_create'];
-                
+                if (!$endpoint)
+                    return ['handled' => false, 'reason' => 'missing_endpoint_deposit_create'];
+
                 $payload = [
                     'channel_id' => $channelId,
                     'external_user_id' => $externalUserId,
                     'platform' => $context['platform'] ?? ($context['channel']['platform'] ?? 'unknown'),
                     'product_ref_id' => $productRefId ?: null,
                     'product_name' => $productName ?: null,
-                    'product_price' => (float)($slots['product_price'] ?? 0),
+                    'product_price' => (float) ($slots['product_price'] ?? 0),
                     'deposit_percentage' => 10 // 10% มัดจำ
                 ];
-                
+
                 $resp = $this->callBackendJson($backendCfg, $endpoint, $payload);
                 if (!$resp['ok']) {
                     return ['handled' => false, 'reply_text' => $templates['fallback'] ?? 'ขออภัยค่ะ มีปัญหาในการสร้างรายการมัดจำ', 'reason' => 'backend_error', 'meta' => $resp, 'slots' => $slots];
                 }
-                
+
                 $data = $resp['data'] ?? [];
                 $tpl = $templates['deposit_created'] ?? "กันสินค้าให้แล้วค่ะ 🎯\nรหัส: {{deposit_no}}\nสินค้า: {{product_name}}\nราคาสินค้า: {{product_price}} บาท\nยอดมัดจำ: {{deposit_amount}} บาท (10%)\n\nโอนได้ที่:\nSCB: 1653014242 (บจก.เพชรวิบวับ)\nแล้วส่งสลิปมาได้เลยนะคะ 💳";
                 $reply = $this->renderTemplate($tpl, [
                     'deposit_no' => $data['deposit_no'] ?? '',
                     'product_name' => $data['product_name'] ?? $productName,
-                    'product_price' => number_format((float)($data['product_price'] ?? 0)),
-                    'deposit_amount' => number_format((float)($data['deposit_amount'] ?? 0))
+                    'product_price' => number_format((float) ($data['product_price'] ?? 0)),
+                    'deposit_amount' => number_format((float) ($data['deposit_amount'] ?? 0))
                 ]);
-                
+
                 $slots['deposit_id'] = $data['id'] ?? null;
                 $slots['deposit_no'] = $data['deposit_no'] ?? null;
-                
+
                 return ['handled' => true, 'reply_text' => $reply, 'reason' => 'backend_deposit_created', 'meta' => $resp, 'slots' => $slots];
             }
-            
+
             // Handle deposit_payment
             if ($actionType === 'pay') {
-                $depositId = trim((string)($slots['deposit_id'] ?? ''));
+                $depositId = trim((string) ($slots['deposit_id'] ?? ''));
                 $slipImageUrl = $extra['slip_image_url'] ?? ($context['message']['attachments'][0]['url'] ?? null);
-                
+
                 // Try to find deposit if not provided
                 if ($depositId === '') {
                     $existingDeposit = $this->db->queryOne(
@@ -2020,98 +2116,99 @@ class RouterV1Handler implements BotHandlerInterface
                         [$channelId, $externalUserId]
                     );
                     if ($existingDeposit) {
-                        $depositId = (string)$existingDeposit['id'];
+                        $depositId = (string) $existingDeposit['id'];
                         $slots['deposit_id'] = $depositId;
                     }
                 }
-                
+
                 if ($depositId === '') {
                     return ['handled' => false, 'reply_text' => 'ไม่พบรายการมัดจำที่รอชำระค่ะ ต้องการมัดจำสินค้าใหม่ไหมคะ? 🛍️', 'reason' => 'no_pending_deposit', 'slots' => $slots];
                 }
-                
+
                 if (!$slipImageUrl) {
                     return ['handled' => false, 'reply_text' => $askDepositSlip, 'reason' => 'missing_deposit_slip', 'slots' => $slots];
                 }
-                
+
                 $endpoint = $ep(['deposit_pay']);
-                if (!$endpoint) return ['handled' => false, 'reason' => 'missing_endpoint_deposit_pay'];
-                
+                if (!$endpoint)
+                    return ['handled' => false, 'reason' => 'missing_endpoint_deposit_pay'];
+
                 $endpoint = str_replace('{id}', $depositId, $endpoint);
-                
+
                 $payload = [
                     'slip_image_url' => $slipImageUrl,
-                    'amount' => (float)($slots['amount'] ?? 0),
+                    'amount' => (float) ($slots['amount'] ?? 0),
                     'payment_time' => $slots['time'] ?? null,
                     'sender_name' => $slots['sender_name'] ?? null
                 ];
-                
+
                 $resp = $this->callBackendJson($backendCfg, $endpoint, $payload);
                 if (!$resp['ok']) {
                     return ['handled' => false, 'reply_text' => $templates['deposit_payment_pending'] ?? 'บันทึกการโอนมัดจำให้แล้วค่ะ รอเจ้าหน้าที่ตรวจสอบนะคะ 🙏', 'reason' => 'backend_error', 'meta' => $resp, 'slots' => $slots];
                 }
-                
+
                 $tpl = $templates['deposit_payment_received'] ?? 'ได้รับสลิปมัดจำแล้วค่ะ ✅ รอเจ้าหน้าที่ตรวจสอบนะคะ สินค้ากันไว้ให้แล้วค่ะ 🎁';
                 return ['handled' => true, 'reply_text' => $tpl, 'reason' => 'backend_deposit_payment', 'meta' => $resp, 'slots' => $slots];
             }
-            
+
             // Handle deposit_inquiry
             if ($actionType === 'inquiry') {
-                $depositId = trim((string)($slots['deposit_id'] ?? ''));
-                
+                $depositId = trim((string) ($slots['deposit_id'] ?? ''));
+
                 if ($depositId === '') {
                     $deposits = $this->db->queryAll(
                         "SELECT * FROM deposits WHERE channel_id = ? AND external_user_id = ? AND status IN ('pending', 'paid') ORDER BY created_at DESC",
                         [$channelId, $externalUserId]
                     );
-                    
+
                     if (empty($deposits)) {
                         return ['handled' => true, 'reply_text' => 'ไม่มีรายการมัดจำที่กำลังดำเนินการอยู่ค่ะ 📭', 'reason' => 'no_deposits', 'slots' => $slots];
                     }
-                    
+
                     if (count($deposits) === 1) {
                         $d = $deposits[0];
                         $tpl = $templates['deposit_status'] ?? "รายการมัดจำ {{deposit_no}}\nสินค้า: {{product_name}}\nยอดมัดจำ: {{deposit_amount}} บาท\nสถานะ: {{status}}\nหมดอายุ: {{expires_at}} 📅";
                         $reply = $this->renderTemplate($tpl, [
                             'deposit_no' => $d['deposit_no'] ?? '',
                             'product_name' => $d['product_name'] ?? '',
-                            'deposit_amount' => number_format((float)($d['deposit_amount'] ?? 0)),
+                            'deposit_amount' => number_format((float) ($d['deposit_amount'] ?? 0)),
                             'status' => $d['status'] === 'pending' ? 'รอชำระ' : ($d['status'] === 'paid' ? 'ชำระแล้ว' : $d['status']),
                             'expires_at' => $d['expires_at'] ?? '-'
                         ]);
                         return ['handled' => true, 'reply_text' => $reply, 'reason' => 'deposit_inquiry_single', 'slots' => $slots];
                     }
-                    
+
                     $lines = [];
                     foreach ($deposits as $i => $d) {
                         $statusTh = $d['status'] === 'pending' ? 'รอชำระ' : ($d['status'] === 'paid' ? 'ชำระแล้ว' : $d['status']);
-                        $lines[] = ($i + 1) . ") {$d['product_name']}: " . number_format((float)($d['deposit_amount'] ?? 0)) . " บ. ({$statusTh})";
+                        $lines[] = ($i + 1) . ") {$d['product_name']}: " . number_format((float) ($d['deposit_amount'] ?? 0)) . " บ. ({$statusTh})";
                     }
-                    
+
                     $reply = "รายการมัดจำค่ะ 📋\n" . implode("\n", $lines);
                     return ['handled' => true, 'reply_text' => $reply, 'reason' => 'deposit_inquiry_multiple', 'slots' => $slots];
                 }
-                
+
                 $endpoint = $ep(['deposit_status']);
                 if ($endpoint) {
                     $endpoint = str_replace('{id}', $depositId, $endpoint);
                     $resp = $this->callBackendJson($backendCfg, $endpoint, []);
-                    
+
                     if ($resp['ok'] && !empty($resp['data'])) {
                         $d = $resp['data'];
                         $tpl = $templates['deposit_status'] ?? "รายการมัดจำ {{deposit_no}}\nสินค้า: {{product_name}}\nยอดมัดจำ: {{deposit_amount}} บาท\nสถานะ: {{status}} 📅";
                         $reply = $this->renderTemplate($tpl, [
                             'deposit_no' => $d['deposit_no'] ?? '',
                             'product_name' => $d['product_name'] ?? '',
-                            'deposit_amount' => number_format((float)($d['deposit_amount'] ?? 0)),
+                            'deposit_amount' => number_format((float) ($d['deposit_amount'] ?? 0)),
                             'status' => $d['status_display'] ?? $d['status']
                         ]);
                         return ['handled' => true, 'reply_text' => $reply, 'reason' => 'backend_deposit_status', 'meta' => $resp, 'slots' => $slots];
                     }
                 }
-                
+
                 return ['handled' => false, 'reply_text' => 'ไม่พบข้อมูลมัดจำค่ะ 😅', 'reason' => 'deposit_not_found', 'slots' => $slots];
             }
-            
+
             $tpl = $templates['deposit_choose_action'] ?? 'ต้องการ "มัดจำใหม่ / ส่งสลิป / เช็คสถานะ" แบบไหนคะ 😊';
             return ['handled' => false, 'reply_text' => $tpl, 'reason' => 'missing_deposit_action_type', 'slots' => $slots];
         }
@@ -2121,46 +2218,50 @@ class RouterV1Handler implements BotHandlerInterface
         // -------------------------
         if (in_array($intent, ['pawn_new', 'pawn_pay_interest', 'pawn_redeem', 'pawn_inquiry'])) {
             $actionType = null;
-            if ($intent === 'pawn_new') $actionType = 'new';
-            elseif ($intent === 'pawn_pay_interest') $actionType = 'pay_interest';
-            elseif ($intent === 'pawn_redeem') $actionType = 'redeem';
-            elseif ($intent === 'pawn_inquiry') $actionType = 'inquiry';
-            
+            if ($intent === 'pawn_new')
+                $actionType = 'new';
+            elseif ($intent === 'pawn_pay_interest')
+                $actionType = 'pay_interest';
+            elseif ($intent === 'pawn_redeem')
+                $actionType = 'redeem';
+            elseif ($intent === 'pawn_inquiry')
+                $actionType = 'inquiry';
+
             if (!empty($slots['action_type'])) {
                 $actionType = $slots['action_type'];
             }
-            
+
             $askPawnItem = $templates['ask_pawn_item'] ?? 'ต้องการจำนำสินค้าชิ้นไหนคะ? 💎 บอกรายละเอียดได้เลยค่ะ';
             $askPawnInterestSlip = $templates['ask_pawn_interest_slip'] ?? 'รบกวนส่งรูปสลิปชำระดอกเบี้ยด้วยนะคะ 📷';
-            
+
             // Handle pawn_new - ต้องส่งต่อแอดมิน (ต้องประเมินของ)
             if ($actionType === 'new') {
-                $itemDesc = trim((string)($slots['item_description'] ?? ($slots['product_name'] ?? '')));
-                
+                $itemDesc = trim((string) ($slots['item_description'] ?? ($slots['product_name'] ?? '')));
+
                 if ($itemDesc === '') {
                     return ['handled' => false, 'reply_text' => $askPawnItem, 'reason' => 'missing_pawn_item', 'slots' => $slots];
                 }
-                
+
                 // Pawn ต้อง handoff to admin เพราะต้องประเมินราคา
                 $tpl = $templates['pawn_handoff'] ?? "รับทราบค่ะ ต้องการจำนำ {{item_description}} 💎\nรบกวนส่งรูปสินค้ามาให้ตรวจสอบด้วยนะคะ\nเจ้าหน้าที่จะติดต่อกลับเพื่อประเมินราคาค่ะ ✨";
                 $reply = $this->renderTemplate($tpl, [
                     'item_description' => $itemDesc
                 ]);
-                
+
                 // Create case for admin follow-up
                 $this->db->execute(
                     "INSERT INTO cases (channel_id, external_user_id, case_type, status, subject, description, priority) VALUES (?, ?, 'pawn', 'open', ?, ?, 'high')",
                     [$channelId, $externalUserId, "ลูกค้าต้องการจำนำ: {$itemDesc}", $itemDesc]
                 );
-                
+
                 return ['handled' => true, 'reply_text' => $reply, 'reason' => 'pawn_handoff_to_admin', 'handoff' => true, 'slots' => $slots];
             }
-            
+
             // Handle pawn_pay_interest (ต่อดอก)
             if ($actionType === 'pay_interest') {
-                $pawnId = trim((string)($slots['pawn_id'] ?? ''));
+                $pawnId = trim((string) ($slots['pawn_id'] ?? ''));
                 $slipImageUrl = $extra['slip_image_url'] ?? ($context['message']['attachments'][0]['url'] ?? null);
-                
+
                 // Try to find active pawn if not provided
                 if ($pawnId === '') {
                     $existingPawn = $this->db->queryOne(
@@ -2168,20 +2269,20 @@ class RouterV1Handler implements BotHandlerInterface
                         [$channelId, $externalUserId]
                     );
                     if ($existingPawn) {
-                        $pawnId = (string)$existingPawn['id'];
+                        $pawnId = (string) $existingPawn['id'];
                         $slots['pawn_id'] = $pawnId;
                     }
                 }
-                
+
                 if ($pawnId === '') {
                     return ['handled' => false, 'reply_text' => 'ไม่พบรายการจำนำที่ต้องต่อดอกค่ะ 📭', 'reason' => 'no_active_pawn', 'slots' => $slots];
                 }
-                
+
                 if (!$slipImageUrl) {
                     // Get interest amount first
                     $pawnData = $this->db->queryOne("SELECT * FROM pawns WHERE id = ?", [$pawnId]);
                     if ($pawnData) {
-                        $interestAmount = (float)$pawnData['principal_amount'] * ((float)$pawnData['interest_rate_percent'] / 100);
+                        $interestAmount = (float) $pawnData['principal_amount'] * ((float) $pawnData['interest_rate_percent'] / 100);
                         $tpl = $templates['pawn_interest_info'] ?? "ยอดดอกเบี้ยที่ต้องชำระ: {{interest_amount}} บาท\n\nโอนได้ที่:\nSCB: 1653014242 (บจก.เพชรวิบวับ)\nแล้วส่งสลิปมาได้เลยนะคะ 💳";
                         $reply = $this->renderTemplate($tpl, [
                             'interest_amount' => number_format($interestAmount)
@@ -2190,24 +2291,25 @@ class RouterV1Handler implements BotHandlerInterface
                     }
                     return ['handled' => false, 'reply_text' => $askPawnInterestSlip, 'reason' => 'missing_pawn_slip', 'slots' => $slots];
                 }
-                
+
                 $endpoint = $ep(['pawn_pay_interest']);
-                if (!$endpoint) return ['handled' => false, 'reason' => 'missing_endpoint_pawn_pay_interest'];
-                
+                if (!$endpoint)
+                    return ['handled' => false, 'reason' => 'missing_endpoint_pawn_pay_interest'];
+
                 $endpoint = str_replace('{id}', $pawnId, $endpoint);
-                
+
                 $payload = [
                     'slip_image_url' => $slipImageUrl,
-                    'amount' => (float)($slots['amount'] ?? 0),
+                    'amount' => (float) ($slots['amount'] ?? 0),
                     'payment_time' => $slots['time'] ?? null,
                     'sender_name' => $slots['sender_name'] ?? null
                 ];
-                
+
                 $resp = $this->callBackendJson($backendCfg, $endpoint, $payload);
                 if (!$resp['ok']) {
                     return ['handled' => false, 'reply_text' => $templates['pawn_payment_pending'] ?? 'บันทึกการชำระดอกเบี้ยให้แล้วค่ะ รอเจ้าหน้าที่ตรวจสอบนะคะ 🙏', 'reason' => 'backend_error', 'meta' => $resp, 'slots' => $slots];
                 }
-                
+
                 $data = $resp['data'] ?? [];
                 $tpl = $templates['pawn_interest_paid'] ?? "ได้รับการชำระดอกเบี้ยแล้วค่ะ ✅\nงวดถัดไปครบกำหนด: {{next_due_date}}\nขอบคุณค่ะ 🙏";
                 $reply = $this->renderTemplate($tpl, [
@@ -2215,105 +2317,105 @@ class RouterV1Handler implements BotHandlerInterface
                 ]);
                 return ['handled' => true, 'reply_text' => $reply, 'reason' => 'backend_pawn_interest_paid', 'meta' => $resp, 'slots' => $slots];
             }
-            
+
             // Handle pawn_redeem (ไถ่ถอน)
             if ($actionType === 'redeem') {
-                $pawnId = trim((string)($slots['pawn_id'] ?? ''));
-                
+                $pawnId = trim((string) ($slots['pawn_id'] ?? ''));
+
                 if ($pawnId === '') {
                     $existingPawn = $this->db->queryOne(
                         "SELECT * FROM pawns WHERE channel_id = ? AND external_user_id = ? AND status = 'active' ORDER BY next_interest_due ASC LIMIT 1",
                         [$channelId, $externalUserId]
                     );
                     if ($existingPawn) {
-                        $pawnId = (string)$existingPawn['id'];
+                        $pawnId = (string) $existingPawn['id'];
                         $slots['pawn_id'] = $pawnId;
                     }
                 }
-                
+
                 if ($pawnId === '') {
                     return ['handled' => false, 'reply_text' => 'ไม่พบรายการจำนำที่สามารถไถ่ถอนได้ค่ะ 📭', 'reason' => 'no_active_pawn_redeem', 'slots' => $slots];
                 }
-                
+
                 // Get redemption amount
                 $endpoint = $ep(['pawn_status']);
                 if ($endpoint) {
                     $endpoint = str_replace('{id}', $pawnId, $endpoint);
                     $resp = $this->callBackendJson($backendCfg, $endpoint, []);
-                    
+
                     if ($resp['ok'] && !empty($resp['data'])) {
                         $p = $resp['data'];
                         $tpl = $templates['pawn_redeem_info'] ?? "ยอดไถ่ถอนทั้งหมด: {{redemption_amount}} บาท\n(เงินต้น {{principal}} + ดอกเบี้ยค้าง {{outstanding_interest}} บาท)\n\nโอนได้ที่:\nSCB: 1653014242 (บจก.เพชรวิบวับ)\nแล้วแจ้งมาได้เลยนะคะ เจ้าหน้าที่จะนัดวันรับของค่ะ 💎";
                         $reply = $this->renderTemplate($tpl, [
-                            'redemption_amount' => number_format((float)($p['redemption_amount'] ?? 0)),
-                            'principal' => number_format((float)($p['principal_amount'] ?? 0)),
-                            'outstanding_interest' => number_format((float)($p['outstanding_interest'] ?? 0))
+                            'redemption_amount' => number_format((float) ($p['redemption_amount'] ?? 0)),
+                            'principal' => number_format((float) ($p['principal_amount'] ?? 0)),
+                            'outstanding_interest' => number_format((float) ($p['outstanding_interest'] ?? 0))
                         ]);
                         return ['handled' => true, 'reply_text' => $reply, 'reason' => 'pawn_redeem_info', 'slots' => $slots];
                     }
                 }
-                
+
                 return ['handled' => false, 'reply_text' => 'ไม่พบข้อมูลจำนำค่ะ กรุณาติดต่อเจ้าหน้าที่ 🙏', 'reason' => 'pawn_not_found', 'slots' => $slots];
             }
-            
+
             // Handle pawn_inquiry
             if ($actionType === 'inquiry') {
-                $pawnId = trim((string)($slots['pawn_id'] ?? ''));
-                
+                $pawnId = trim((string) ($slots['pawn_id'] ?? ''));
+
                 if ($pawnId === '') {
                     $pawns = $this->db->queryAll(
                         "SELECT * FROM pawns WHERE channel_id = ? AND external_user_id = ? AND status IN ('active', 'overdue') ORDER BY next_interest_due ASC",
                         [$channelId, $externalUserId]
                     );
-                    
+
                     if (empty($pawns)) {
                         return ['handled' => true, 'reply_text' => 'ไม่มีรายการจำนำที่กำลังดำเนินการอยู่ค่ะ 📭', 'reason' => 'no_pawns', 'slots' => $slots];
                     }
-                    
+
                     if (count($pawns) === 1) {
                         $p = $pawns[0];
                         $tpl = $templates['pawn_status'] ?? "รายการจำนำ {{pawn_no}}\nสินค้า: {{item_description}}\nเงินต้น: {{principal}} บาท\nดอกเบี้ย: {{interest_rate}}%/เดือน\nครบกำหนดต่อดอก: {{next_due}} 📅";
                         $reply = $this->renderTemplate($tpl, [
                             'pawn_no' => $p['pawn_no'] ?? '',
                             'item_description' => $p['item_description'] ?? '',
-                            'principal' => number_format((float)($p['principal_amount'] ?? 0)),
+                            'principal' => number_format((float) ($p['principal_amount'] ?? 0)),
                             'interest_rate' => $p['interest_rate_percent'] ?? '2',
                             'next_due' => $p['next_interest_due'] ?? '-'
                         ]);
                         return ['handled' => true, 'reply_text' => $reply, 'reason' => 'pawn_inquiry_single', 'slots' => $slots];
                     }
-                    
+
                     $lines = [];
                     foreach ($pawns as $i => $p) {
-                        $lines[] = ($i + 1) . ") {$p['item_description']}: " . number_format((float)($p['principal_amount'] ?? 0)) . " บ. (ถึง: {$p['next_interest_due']})";
+                        $lines[] = ($i + 1) . ") {$p['item_description']}: " . number_format((float) ($p['principal_amount'] ?? 0)) . " บ. (ถึง: {$p['next_interest_due']})";
                     }
-                    
+
                     $reply = "รายการจำนำค่ะ 📋\n" . implode("\n", $lines);
                     return ['handled' => true, 'reply_text' => $reply, 'reason' => 'pawn_inquiry_multiple', 'slots' => $slots];
                 }
-                
+
                 $endpoint = $ep(['pawn_status']);
                 if ($endpoint) {
                     $endpoint = str_replace('{id}', $pawnId, $endpoint);
                     $resp = $this->callBackendJson($backendCfg, $endpoint, []);
-                    
+
                     if ($resp['ok'] && !empty($resp['data'])) {
                         $p = $resp['data'];
                         $tpl = $templates['pawn_status'] ?? "รายการจำนำ {{pawn_no}}\nสินค้า: {{item_description}}\nเงินต้น: {{principal}} บาท\nดอกเบี้ย: {{interest_rate}}%/เดือน\nครบกำหนดต่อดอก: {{next_due}} 📅";
                         $reply = $this->renderTemplate($tpl, [
                             'pawn_no' => $p['pawn_no'] ?? '',
                             'item_description' => $p['item_description'] ?? '',
-                            'principal' => number_format((float)($p['principal_amount'] ?? 0)),
+                            'principal' => number_format((float) ($p['principal_amount'] ?? 0)),
                             'interest_rate' => $p['interest_rate_percent'] ?? '2',
                             'next_due' => $p['next_interest_due'] ?? '-'
                         ]);
                         return ['handled' => true, 'reply_text' => $reply, 'reason' => 'backend_pawn_status', 'meta' => $resp, 'slots' => $slots];
                     }
                 }
-                
+
                 return ['handled' => false, 'reply_text' => 'ไม่พบข้อมูลจำนำค่ะ 😅', 'reason' => 'pawn_not_found', 'slots' => $slots];
             }
-            
+
             $tpl = $templates['pawn_choose_action'] ?? 'ต้องการ "จำนำใหม่ / ต่อดอก / ไถ่ถอน / เช็คสถานะ" แบบไหนคะ 😊';
             return ['handled' => false, 'reply_text' => $tpl, 'reason' => 'missing_pawn_action_type', 'slots' => $slots];
         }
@@ -2323,24 +2425,26 @@ class RouterV1Handler implements BotHandlerInterface
         // -------------------------
         if (in_array($intent, ['repair_new', 'repair_inquiry'])) {
             $actionType = null;
-            if ($intent === 'repair_new') $actionType = 'new';
-            elseif ($intent === 'repair_inquiry') $actionType = 'inquiry';
-            
+            if ($intent === 'repair_new')
+                $actionType = 'new';
+            elseif ($intent === 'repair_inquiry')
+                $actionType = 'inquiry';
+
             if (!empty($slots['action_type'])) {
                 $actionType = $slots['action_type'];
             }
-            
+
             $askRepairItem = $templates['ask_repair_item'] ?? 'ต้องการซ่อมสินค้าชิ้นไหนคะ? 🔧 บอกรายละเอียดอาการเสียได้เลยค่ะ';
-            
+
             // Handle repair_new
             if ($actionType === 'new') {
-                $itemDesc = trim((string)($slots['item_description'] ?? ($slots['product_name'] ?? '')));
-                $issueDesc = trim((string)($slots['issue_description'] ?? ''));
-                
+                $itemDesc = trim((string) ($slots['item_description'] ?? ($slots['product_name'] ?? '')));
+                $issueDesc = trim((string) ($slots['issue_description'] ?? ''));
+
                 if ($itemDesc === '' && $issueDesc === '') {
                     return ['handled' => false, 'reply_text' => $askRepairItem, 'reason' => 'missing_repair_item', 'slots' => $slots];
                 }
-                
+
                 $endpoint = $ep(['repair_create']);
                 if (!$endpoint) {
                     // Fallback: create case and handoff
@@ -2348,7 +2452,7 @@ class RouterV1Handler implements BotHandlerInterface
                         "INSERT INTO cases (channel_id, external_user_id, case_type, status, subject, description, priority) VALUES (?, ?, 'repair', 'open', ?, ?, 'medium')",
                         [$channelId, $externalUserId, "ลูกค้าต้องการซ่อม: {$itemDesc}", "{$itemDesc}\nอาการ: {$issueDesc}"]
                     );
-                    
+
                     $tpl = $templates['repair_handoff'] ?? "รับทราบค่ะ 🔧\nสินค้า: {{item_description}}\nอาการ: {{issue_description}}\n\nเจ้าหน้าที่จะติดต่อกลับเพื่อนัดรับของและประเมินราคาซ่อมค่ะ ✨";
                     $reply = $this->renderTemplate($tpl, [
                         'item_description' => $itemDesc ?: '-',
@@ -2356,7 +2460,7 @@ class RouterV1Handler implements BotHandlerInterface
                     ]);
                     return ['handled' => true, 'reply_text' => $reply, 'reason' => 'repair_case_created', 'handoff' => true, 'slots' => $slots];
                 }
-                
+
                 $payload = [
                     'channel_id' => $channelId,
                     'external_user_id' => $externalUserId,
@@ -2364,39 +2468,39 @@ class RouterV1Handler implements BotHandlerInterface
                     'item_description' => $itemDesc,
                     'issue_description' => $issueDesc
                 ];
-                
+
                 $resp = $this->callBackendJson($backendCfg, $endpoint, $payload);
                 if (!$resp['ok']) {
                     return ['handled' => false, 'reply_text' => $templates['fallback'] ?? 'ขออภัยค่ะ มีปัญหาในการสร้างรายการซ่อม', 'reason' => 'backend_error', 'meta' => $resp, 'slots' => $slots];
                 }
-                
+
                 $data = $resp['data'] ?? [];
                 $tpl = $templates['repair_created'] ?? "รับเรื่องซ่อมแล้วค่ะ 🔧\nรหัส: {{repair_no}}\nสินค้า: {{item_description}}\n\nเจ้าหน้าที่จะติดต่อกลับเพื่อนัดรับของค่ะ ✨";
                 $reply = $this->renderTemplate($tpl, [
                     'repair_no' => $data['repair_no'] ?? '',
                     'item_description' => $data['item_description'] ?? $itemDesc
                 ]);
-                
+
                 $slots['repair_id'] = $data['id'] ?? null;
                 $slots['repair_no'] = $data['repair_no'] ?? null;
-                
+
                 return ['handled' => true, 'reply_text' => $reply, 'reason' => 'backend_repair_created', 'meta' => $resp, 'slots' => $slots];
             }
-            
+
             // Handle repair_inquiry
             if ($actionType === 'inquiry') {
-                $repairId = trim((string)($slots['repair_id'] ?? ''));
-                
+                $repairId = trim((string) ($slots['repair_id'] ?? ''));
+
                 if ($repairId === '') {
                     $repairs = $this->db->queryAll(
                         "SELECT * FROM repairs WHERE channel_id = ? AND external_user_id = ? AND status NOT IN ('completed', 'cancelled') ORDER BY created_at DESC",
                         [$channelId, $externalUserId]
                     );
-                    
+
                     if (empty($repairs)) {
                         return ['handled' => true, 'reply_text' => 'ไม่มีรายการซ่อมที่กำลังดำเนินการอยู่ค่ะ 📭', 'reason' => 'no_repairs', 'slots' => $slots];
                     }
-                    
+
                     if (count($repairs) === 1) {
                         $r = $repairs[0];
                         $statusMap = [
@@ -2416,22 +2520,22 @@ class RouterV1Handler implements BotHandlerInterface
                         ]);
                         return ['handled' => true, 'reply_text' => $reply, 'reason' => 'repair_inquiry_single', 'slots' => $slots];
                     }
-                    
+
                     $lines = [];
                     $statusMap = ['pending' => 'รอรับของ', 'received' => 'รับแล้ว', 'diagnosing' => 'ตรวจสอบ', 'quoted' => 'รออนุมัติ', 'approved' => 'กำลังซ่อม', 'repairing' => 'กำลังซ่อม'];
                     foreach ($repairs as $i => $r) {
                         $lines[] = ($i + 1) . ") {$r['item_description']}: " . ($statusMap[$r['status']] ?? $r['status']);
                     }
-                    
+
                     $reply = "รายการซ่อมค่ะ 📋\n" . implode("\n", $lines);
                     return ['handled' => true, 'reply_text' => $reply, 'reason' => 'repair_inquiry_multiple', 'slots' => $slots];
                 }
-                
+
                 $endpoint = $ep(['repair_status']);
                 if ($endpoint) {
                     $endpoint = str_replace('{id}', $repairId, $endpoint);
                     $resp = $this->callBackendJson($backendCfg, $endpoint, []);
-                    
+
                     if ($resp['ok'] && !empty($resp['data'])) {
                         $r = $resp['data'];
                         $tpl = $templates['repair_status'] ?? "รายการซ่อม {{repair_no}}\nสินค้า: {{item_description}}\nสถานะ: {{status}} 🔧";
@@ -2443,10 +2547,10 @@ class RouterV1Handler implements BotHandlerInterface
                         return ['handled' => true, 'reply_text' => $reply, 'reason' => 'backend_repair_status', 'meta' => $resp, 'slots' => $slots];
                     }
                 }
-                
+
                 return ['handled' => false, 'reply_text' => 'ไม่พบข้อมูลรายการซ่อมค่ะ 😅', 'reason' => 'repair_not_found', 'slots' => $slots];
             }
-            
+
             $tpl = $templates['repair_choose_action'] ?? 'ต้องการ "ส่งซ่อม / เช็คสถานะ" แบบไหนคะ 😊';
             return ['handled' => false, 'reply_text' => $tpl, 'reason' => 'missing_repair_action_type', 'slots' => $slots];
         }
@@ -2509,7 +2613,7 @@ class RouterV1Handler implements BotHandlerInterface
     ): array {
         // ✅ FIX: Facebook sends URL in payload.url, LINE sends in url
         $attachment = $message['attachments'][0] ?? null;
-        $imageUrl = $attachment['url'] 
+        $imageUrl = $attachment['url']
             ?? ($attachment['payload']['url'] ?? null);
 
         $detectedRoute = 'image_generic';
@@ -2521,28 +2625,28 @@ class RouterV1Handler implements BotHandlerInterface
         // ✅ PRIORITY 1: Use Gemini Multimodal if LLM integration is Gemini
         // Gemini 2.5 Flash can analyze images natively without separate Vision API
         $usedGemini = false;
-        
+
         // Debug: Log conditions for Gemini Vision
         Logger::info("handleImageFlow - Gemini Vision check", [
             'has_llmIntegration' => !empty($llmIntegration),
             'has_imageUrl' => !empty($imageUrl),
             'imageUrl_preview' => $imageUrl ? substr($imageUrl, 0, 100) : null
         ]);
-        
+
         if ($llmIntegration && $imageUrl) {
             $llmConfig = $this->decodeJsonArray($llmIntegration['config'] ?? null);
             $llmEndpoint = $llmConfig['endpoint'] ?? '';
-            
+
             Logger::info("handleImageFlow - LLM config", [
                 'llmEndpoint' => $llmEndpoint,
                 'is_gemini' => stripos($llmEndpoint, 'generativelanguage.googleapis.com') !== false
             ]);
-            
+
             // Check if LLM is Gemini
             if (stripos($llmEndpoint, 'generativelanguage.googleapis.com') !== false) {
                 Logger::info("handleImageFlow - Calling analyzeImageWithGemini");
                 $geminiResult = $this->analyzeImageWithGemini($llmIntegration, $imageUrl, $config);
-                
+
                 if (empty($geminiResult['error'])) {
                     $usedGemini = true;
                     $detectedRoute = $geminiResult['route'] ?? 'image_generic';
@@ -2550,7 +2654,7 @@ class RouterV1Handler implements BotHandlerInterface
                     $labels = $visionMeta['labels'] ?? [];
                     $visionText = $geminiResult['description'] ?? '';
                     $geminiDetails = $geminiResult['details'] ?? [];
-                    
+
                     Logger::info("Image analyzed with Gemini Vision", [
                         'route' => $detectedRoute,
                         'confidence' => $geminiResult['confidence'] ?? 0,
@@ -2570,22 +2674,24 @@ class RouterV1Handler implements BotHandlerInterface
             $visionMeta = $visionResult['meta'] ?? null;
 
             $labels = $visionMeta['top_descriptions'] ?? [];
-            $visionText = (string)($visionMeta['text'] ?? '');
-            $labelTextLower = mb_strtolower(implode(' ', (array)$labels), 'UTF-8');
+            $visionText = (string) ($visionMeta['text'] ?? '');
+            $labelTextLower = mb_strtolower(implode(' ', (array) $labels), 'UTF-8');
             $visionTextLower = mb_strtolower($visionText, 'UTF-8');
 
             $vr = $config['vision_routing'] ?? [];
-            $productHints = $vr['product_hints_labels'] ?? ($vr['product_hints'] ?? ['watch','bag','shoe','ring','jewelry','phone']);
-            $payHintsTh = $vr['payment_hints_text_th'] ?? ($vr['payment_hints'] ?? ['receipt','bill','invoice','payment','slip']);
+            $productHints = $vr['product_hints_labels'] ?? ($vr['product_hints'] ?? ['watch', 'bag', 'shoe', 'ring', 'jewelry', 'phone']);
+            $payHintsTh = $vr['payment_hints_text_th'] ?? ($vr['payment_hints'] ?? ['receipt', 'bill', 'invoice', 'payment', 'slip']);
             $payHintsEn = $vr['payment_hints_text_en'] ?? [];
-            $useTextDetection = (bool)($vr['use_text_detection'] ?? true);
+            $useTextDetection = (bool) ($vr['use_text_detection'] ?? true);
 
             $isPayment = false;
             if ($useTextDetection) {
-                if ($this->containsAny($visionTextLower, $payHintsTh) || $this->containsAny($visionTextLower, $payHintsEn)) $isPayment = true;
+                if ($this->containsAny($visionTextLower, $payHintsTh) || $this->containsAny($visionTextLower, $payHintsEn))
+                    $isPayment = true;
             }
             if (!$isPayment) {
-                if ($this->containsAny($labelTextLower, array_merge($payHintsTh, $payHintsEn))) $isPayment = true;
+                if ($this->containsAny($labelTextLower, array_merge($payHintsTh, $payHintsEn)))
+                    $isPayment = true;
             }
 
             if ($isPayment) {
@@ -2636,12 +2742,17 @@ class RouterV1Handler implements BotHandlerInterface
             // ✅ Build informative reply with extracted data
             if ($slipAmount) {
                 $extractedInfo = "📋 ข้อมูลจากสลิป:\n";
-                if ($slipAmount) $extractedInfo .= "💰 จำนวนเงิน: {$slipAmount} บาท\n";
-                if ($slipBank) $extractedInfo .= "🏦 ธนาคาร: {$slipBank}\n";
-                if ($slipDate) $extractedInfo .= "📅 วันที่: {$slipDate}\n";
-                if ($slipRef) $extractedInfo .= "🔢 เลขอ้างอิง: {$slipRef}\n";
-                if ($slipSender) $extractedInfo .= "👤 ผู้โอน: {$slipSender}\n";
-                
+                if ($slipAmount)
+                    $extractedInfo .= "💰 จำนวนเงิน: {$slipAmount} บาท\n";
+                if ($slipBank)
+                    $extractedInfo .= "🏦 ธนาคาร: {$slipBank}\n";
+                if ($slipDate)
+                    $extractedInfo .= "📅 วันที่: {$slipDate}\n";
+                if ($slipRef)
+                    $extractedInfo .= "🔢 เลขอ้างอิง: {$slipRef}\n";
+                if ($slipSender)
+                    $extractedInfo .= "👤 ผู้โอน: {$slipSender}\n";
+
                 $reply = "ได้รับสลิปเรียบร้อยแล้วค่ะ 💳\n\n" . $extractedInfo . "\nกำลังตรวจสอบยอดให้นะคะ...";
             }
 
@@ -2650,38 +2761,38 @@ class RouterV1Handler implements BotHandlerInterface
             try {
                 require_once __DIR__ . '/../services/PaymentService.php';
                 $paymentService = new \Autobot\Services\PaymentService();
-                
+
                 $paymentResult = $paymentService->processSlipFromChatbot(
                     $geminiDetails, // OCR data from Gemini
                     $context,       // Chat context
                     $imageUrl       // Slip image URL
                 );
-                
+
                 Logger::info("PaymentService result", $paymentResult);
-                
+
                 if ($paymentResult['success']) {
                     $savedPaymentId = $paymentResult['payment_id'];
                     $paymentNo = $paymentResult['payment_no'];
                     $matchedOrderNo = $paymentResult['matched_order_no'] ?? null;
-                    
+
                     $meta['payment_saved'] = true;
                     $meta['payment_id'] = $savedPaymentId;
                     $meta['payment_no'] = $paymentNo;
                     $meta['matched_order_no'] = $matchedOrderNo;
                     $meta['reason'] = 'image_payment_saved';
-                    
+
                     // Build reply with payment info
                     if ($matchedOrderNo) {
-                        $reply = "ได้รับสลิปเรียบร้อยแล้วค่ะ 💳\n\n" . $extractedInfo 
+                        $reply = "ได้รับสลิปเรียบร้อยแล้วค่ะ 💳\n\n" . $extractedInfo
                             . "\n📝 เลขที่รายการ: {$paymentNo}"
                             . "\n🛒 ตรงกับออเดอร์: #{$matchedOrderNo}"
                             . "\nรอเจ้าหน้าที่ตรวจสอบนะคะ 😊";
                     } else {
-                        $reply = "ได้รับสลิปเรียบร้อยแล้วค่ะ 💳\n\n" . $extractedInfo 
+                        $reply = "ได้รับสลิปเรียบร้อยแล้วค่ะ 💳\n\n" . $extractedInfo
                             . "\n📝 เลขที่รายการ: {$paymentNo}"
                             . "\nรอเจ้าหน้าที่ตรวจสอบและ matching กับออเดอร์นะคะ 😊";
                     }
-                    
+
                 } elseif (!empty($paymentResult['is_duplicate'])) {
                     // Duplicate slip
                     $existingPaymentNo = $paymentResult['existing_payment_no'] ?? '';
@@ -2689,18 +2800,19 @@ class RouterV1Handler implements BotHandlerInterface
                     $meta['payment_duplicate'] = true;
                     $meta['existing_payment_id'] = $paymentResult['existing_payment_id'];
                     $reply = "สลิปนี้เคยส่งมาแล้วค่ะ 📋 (เลขอ้างอิง: {$existingPaymentNo})\nรอเจ้าหน้าที่ตรวจสอบนะคะ 😊";
-                    
-                    if ($sessionId && $reply !== '') $this->storeMessage($sessionId, 'assistant', $reply);
+
+                    if ($sessionId && $reply !== '')
+                        $this->storeMessage($sessionId, 'assistant', $reply);
                     $this->logBotReply($context, $reply, 'text');
                     return ['reply_text' => $reply, 'actions' => [], 'meta' => $meta];
-                    
+
                 } else {
                     // Error
                     $meta['payment_saved'] = false;
                     $meta['payment_error'] = $paymentResult['error'] ?? 'Unknown error';
                     Logger::error("PaymentService failed", $paymentResult);
                 }
-                
+
             } catch (\Exception $e) {
                 Logger::error("Failed to save payment via PaymentService", [
                     'error' => $e->getMessage(),
@@ -2730,7 +2842,7 @@ class RouterV1Handler implements BotHandlerInterface
                     );
 
                     if (!empty($handled['handled'])) {
-                        $reply = (string)($handled['reply_text'] ?? $reply);
+                        $reply = (string) ($handled['reply_text'] ?? $reply);
                         $meta['backend'] = $handled['meta'] ?? null;
                         $meta['reason'] = 'image_payment_backend';
                     } else {
@@ -2743,7 +2855,8 @@ class RouterV1Handler implements BotHandlerInterface
                 $meta['reason'] = 'image_payment_template';
             }
 
-            if ($sessionId && $reply !== '') $this->storeMessage($sessionId, 'assistant', $reply);
+            if ($sessionId && $reply !== '')
+                $this->storeMessage($sessionId, 'assistant', $reply);
             $this->logBotReply($context, $reply, 'text');
             return ['reply_text' => $reply, 'actions' => [], 'meta' => $meta];
         }
@@ -2760,14 +2873,17 @@ class RouterV1Handler implements BotHandlerInterface
             $productInfo = "";
             if ($productBrand || $productModel) {
                 $productInfo = "🔍 วิเคราะห์รูปได้:\n";
-                if ($productBrand) $productInfo .= "🏷️ แบรนด์: {$productBrand}\n";
-                if ($productModel) $productInfo .= "📋 รุ่น: {$productModel}\n";
-                if ($productCategory) $productInfo .= "📁 หมวด: {$productCategory}\n";
+                if ($productBrand)
+                    $productInfo .= "🏷️ แบรนด์: {$productBrand}\n";
+                if ($productModel)
+                    $productInfo .= "📋 รุ่น: {$productModel}\n";
+                if ($productCategory)
+                    $productInfo .= "📁 หมวด: {$productCategory}\n";
             }
 
             $reply = $templates['product_image']
                 ?? 'ได้รับรูปสินค้ามาแล้วค่ะ 😊 เดี๋ยวขออนุญาตนำรูปไปวิเคราะห์และเช็คในระบบให้นะคะ';
-            
+
             if ($productInfo) {
                 $reply = "ได้รับรูปสินค้าแล้วค่ะ 😊\n\n" . $productInfo . "\nกำลังค้นหาในระบบให้นะคะ...";
             }
@@ -2777,7 +2893,8 @@ class RouterV1Handler implements BotHandlerInterface
 
             if (!empty($backendCfg['enabled'])) {
                 $endpoint = $endpoints['image_search'] ?? ($endpoints['searchImage'] ?? null);
-                if (!$endpoint) $endpoint = '/api/searchImage';
+                if (!$endpoint)
+                    $endpoint = '/api/searchImage';
 
                 $payload = [
                     'channel_id' => $context['channel']['id'] ?? null,
@@ -2803,11 +2920,12 @@ class RouterV1Handler implements BotHandlerInterface
 
                 if ($resp['ok']) {
                     $products = $resp['data']['products'] ?? ($resp['data']['items'] ?? ($resp['data']['candidates'] ?? []));
-                    if (!is_array($products)) $products = [];
+                    if (!is_array($products))
+                        $products = [];
 
                     // ✅ renderProductsFromBackend returns {text, actions}
                     $rendered = $this->renderProductsFromBackend($products, $templates);
-                    $reply = (string)($rendered['text'] ?? $reply);
+                    $reply = (string) ($rendered['text'] ?? $reply);
                     $actionsOut = (isset($rendered['actions']) && is_array($rendered['actions'])) ? $rendered['actions'] : [];
 
                     $meta['reason'] = 'image_product_backend';
@@ -2818,7 +2936,8 @@ class RouterV1Handler implements BotHandlerInterface
                 }
             }
 
-            if ($sessionId && $reply !== '') $this->storeMessage($sessionId, 'assistant', $reply);
+            if ($sessionId && $reply !== '')
+                $this->storeMessage($sessionId, 'assistant', $reply);
             $this->logBotReply($context, $reply, 'text');
             return ['reply_text' => $reply, 'actions' => $actionsOut, 'meta' => $meta];
         }
@@ -2828,20 +2947,23 @@ class RouterV1Handler implements BotHandlerInterface
             ?? 'ได้รับรูปภาพแล้วค่ะ 🖼️ รบกวนบอกเพิ่มนิดนึงนะคะ ว่าอยากให้ช่วยดูเรื่องอะไรเกี่ยวกับรูปนี้ค่ะ';
 
         if ($llmIntegration && !empty($config['llm']['enabled'])) {
-            $prompt  = "ลูกค้าส่งรูปภาพมาแต่ไม่อธิบาย:\n";
+            $prompt = "ลูกค้าส่งรูปภาพมาแต่ไม่อธิบาย:\n";
             $prompt .= "URL รูปภาพ: {$imageUrl}\n";
-            if ($labels) $prompt .= "Vision: " . implode(', ', $labels) . "\n";
+            if ($labels)
+                $prompt .= "Vision: " . implode(', ', $labels) . "\n";
             $prompt .= "ช่วยตอบสุภาพ เป็นกันเอง และถามต่อให้ชัดว่าอยากให้เช็คสต็อก/ถามราคา/ส่งสลิป/สอบถามอื่น ๆ\n";
 
             $llm = $this->handleWithLlm($llmIntegration, $config, $context, $prompt);
-            if (!empty($llm['reply_text'])) $reply = (string)$llm['reply_text'];
+            if (!empty($llm['reply_text']))
+                $reply = (string) $llm['reply_text'];
             $meta['llm'] = $llm['meta'] ?? null;
             $meta['reason'] = 'image_generic_llm';
         } else {
             $meta['reason'] = 'image_generic_template';
         }
 
-        if ($sessionId && $reply !== '') $this->storeMessage($sessionId, 'assistant', $reply);
+        if ($sessionId && $reply !== '')
+            $this->storeMessage($sessionId, 'assistant', $reply);
         $this->logBotReply($context, $reply, 'text');
         return ['reply_text' => $reply, 'actions' => [], 'meta' => $meta];
     }
@@ -2850,11 +2972,11 @@ class RouterV1Handler implements BotHandlerInterface
     {
         $products = array_values($products);
         $actions = [];
-        
+
         Logger::info("[RENDER_PRODUCTS] Processing products", [
             'count' => count($products)
         ]);
-        
+
         if (count($products) <= 0) {
             return [
                 'text' => $templates['product_not_found'] ?? 'ตอนนี้ยังไม่เจอในระบบค่ะ 😅',
@@ -2871,7 +2993,7 @@ class RouterV1Handler implements BotHandlerInterface
                 'price' => $p['price'] ?? ($p['selling_price'] ?? ''),
                 'condition' => $p['condition'] ?? ($p['status'] ?? ''),
             ]);
-            
+
             // Add image if available
             if (!empty($p['image_url'])) {
                 $actions[] = [
@@ -2887,12 +3009,12 @@ class RouterV1Handler implements BotHandlerInterface
                     'product' => $p
                 ]);
             }
-            
+
             Logger::info("[RENDER_PRODUCTS] Returning result", [
                 'actions_count' => count($actions),
                 'has_images' => count($actions) > 0
             ]);
-            
+
             return ['text' => $text, 'actions' => $actions];
         }
 
@@ -2904,7 +3026,7 @@ class RouterV1Handler implements BotHandlerInterface
             $code = $p['sku'] ?? ($p['code'] ?? ($p['product_code'] ?? ''));
             $price = $p['price'] ?? ($p['selling_price'] ?? '');
             $lines[] = "{$i}) {$name}" . ($code ? " (รหัส {$code})" : "") . ($price !== '' ? " - {$price} บาท" : "");
-            
+
             // Add image for first 3 products only (to avoid too many images)
             if ($i <= 3 && !empty($p['image_url'])) {
                 $actions[] = [
@@ -2921,9 +3043,10 @@ class RouterV1Handler implements BotHandlerInterface
                     'sku' => $code
                 ]);
             }
-            
+
             $i++;
-            if ($i > 5) break;
+            if ($i > 5)
+                break;
         }
 
         $tpl = $templates['product_found_many'] ?? "พบหลายรายการ:\n{{list}}\nพิมพ์เลือกเลข 1-{{n}} ได้เลยค่ะ";
@@ -2931,23 +3054,28 @@ class RouterV1Handler implements BotHandlerInterface
             'list' => implode("\n", $lines),
             'n' => min(count($products), 5)
         ]);
-        
+
         Logger::info("[RENDER_PRODUCTS] ✅ Final result", [
             'total_products' => count($products),
             'actions_count' => count($actions),
-            'image_urls' => array_map(function($a) { return $a['url'] ?? 'N/A'; }, $actions)
+            'image_urls' => array_map(function ($a) {
+                return $a['url'] ?? 'N/A'; }, $actions)
         ]);
-        
+
         return ['text' => $text, 'actions' => $actions];
     }
 
     protected function detectInstallmentActionTypeFromText(string $text): ?string
     {
         $t = mb_strtolower($text, 'UTF-8');
-        if (mb_strpos($t, 'ปิดยอด', 0, 'UTF-8') !== false) return 'close_check';
-        if (mb_strpos($t, 'ต่อดอก', 0, 'UTF-8') !== false || mb_strpos($t, 'ต่อ', 0, 'UTF-8') !== false) return 'extend_interest';
-        if (mb_strpos($t, 'ชำระ', 0, 'UTF-8') !== false || mb_strpos($t, 'ส่งงวด', 0, 'UTF-8') !== false || mb_strpos($t, 'งวด', 0, 'UTF-8') !== false) return 'pay';
-        if (mb_strpos($t, 'เช็ค', 0, 'UTF-8') !== false || mb_strpos($t, 'สรุป', 0, 'UTF-8') !== false) return 'summary';
+        if (mb_strpos($t, 'ปิดยอด', 0, 'UTF-8') !== false)
+            return 'close_check';
+        if (mb_strpos($t, 'ต่อดอก', 0, 'UTF-8') !== false || mb_strpos($t, 'ต่อ', 0, 'UTF-8') !== false)
+            return 'extend_interest';
+        if (mb_strpos($t, 'ชำระ', 0, 'UTF-8') !== false || mb_strpos($t, 'ส่งงวด', 0, 'UTF-8') !== false || mb_strpos($t, 'งวด', 0, 'UTF-8') !== false)
+            return 'pay';
+        if (mb_strpos($t, 'เช็ค', 0, 'UTF-8') !== false || mb_strpos($t, 'สรุป', 0, 'UTF-8') !== false)
+            return 'summary';
         return null;
     }
 
@@ -2957,63 +3085,79 @@ class RouterV1Handler implements BotHandlerInterface
     protected function detectCaseTypeFromKeyword(string $keyword): string
     {
         $k = mb_strtolower(trim($keyword), 'UTF-8');
-        
+
         // Purchase/Buy intent
-        if (mb_strpos($k, 'ซื้อ', 0, 'UTF-8') !== false || 
-            mb_strpos($k, 'สนใจ', 0, 'UTF-8') !== false) {
+        if (
+            mb_strpos($k, 'ซื้อ', 0, 'UTF-8') !== false ||
+            mb_strpos($k, 'สนใจ', 0, 'UTF-8') !== false
+        ) {
             return 'product_inquiry';
         }
-        
+
         // Deposit/Reserve intent  
-        if (mb_strpos($k, 'มัดจำ', 0, 'UTF-8') !== false || 
-            mb_strpos($k, 'จอง', 0, 'UTF-8') !== false) {
+        if (
+            mb_strpos($k, 'มัดจำ', 0, 'UTF-8') !== false ||
+            mb_strpos($k, 'จอง', 0, 'UTF-8') !== false
+        ) {
             return 'deposit';
         }
-        
+
         // Installment intent
         if (mb_strpos($k, 'ผ่อน', 0, 'UTF-8') !== false) {
             return 'payment_installment';
         }
-        
+
         // Pawn intent
-        if (mb_strpos($k, 'จำนำ', 0, 'UTF-8') !== false || 
+        if (
+            mb_strpos($k, 'จำนำ', 0, 'UTF-8') !== false ||
             mb_strpos($k, 'ต่อดอก', 0, 'UTF-8') !== false ||
-            mb_strpos($k, 'ไถ่ถอน', 0, 'UTF-8') !== false) {
+            mb_strpos($k, 'ไถ่ถอน', 0, 'UTF-8') !== false
+        ) {
             return 'pawn';
         }
-        
+
         // Repair intent
-        if (mb_strpos($k, 'ซ่อม', 0, 'UTF-8') !== false || 
-            mb_strpos($k, 'เซอร์วิส', 0, 'UTF-8') !== false) {
+        if (
+            mb_strpos($k, 'ซ่อม', 0, 'UTF-8') !== false ||
+            mb_strpos($k, 'เซอร์วิส', 0, 'UTF-8') !== false
+        ) {
             return 'repair';
         }
-        
+
         // Return/Exchange intent
-        if (mb_strpos($k, 'เปลี่ยน', 0, 'UTF-8') !== false || 
-            mb_strpos($k, 'คืน', 0, 'UTF-8') !== false) {
+        if (
+            mb_strpos($k, 'เปลี่ยน', 0, 'UTF-8') !== false ||
+            mb_strpos($k, 'คืน', 0, 'UTF-8') !== false
+        ) {
             return 'return_exchange';
         }
-        
+
         // Price negotiation / discount
-        if (mb_strpos($k, 'ลด', 0, 'UTF-8') !== false || 
+        if (
+            mb_strpos($k, 'ลด', 0, 'UTF-8') !== false ||
             mb_strpos($k, 'ต่อรอง', 0, 'UTF-8') !== false ||
-            mb_strpos($k, 'ส่วนลด', 0, 'UTF-8') !== false) {
+            mb_strpos($k, 'ส่วนลด', 0, 'UTF-8') !== false
+        ) {
             return 'product_inquiry';
         }
-        
+
         // Video call / appointment
-        if (mb_strpos($k, 'call', 0, 'UTF-8') !== false || 
+        if (
+            mb_strpos($k, 'call', 0, 'UTF-8') !== false ||
             mb_strpos($k, 'นัด', 0, 'UTF-8') !== false ||
-            mb_strpos($k, 'ดูของ', 0, 'UTF-8') !== false) {
+            mb_strpos($k, 'ดูของ', 0, 'UTF-8') !== false
+        ) {
             return 'product_inquiry';
         }
-        
+
         // Bank account request
-        if (mb_strpos($k, 'เลขบัญชี', 0, 'UTF-8') !== false || 
-            mb_strpos($k, 'โอน', 0, 'UTF-8') !== false) {
+        if (
+            mb_strpos($k, 'เลขบัญชี', 0, 'UTF-8') !== false ||
+            mb_strpos($k, 'โอน', 0, 'UTF-8') !== false
+        ) {
             return 'payment_full';
         }
-        
+
         // Default
         return 'general_inquiry';
     }
@@ -3023,15 +3167,15 @@ class RouterV1Handler implements BotHandlerInterface
     // =========================================================
     protected function callBackendJson(array $backendCfg, string $endpointOrUrl, array $payload): array
     {
-        $base = rtrim((string)($backendCfg['base_url'] ?? ''), '/');
-        $timeout = (int)($backendCfg['timeout_seconds'] ?? 8);
+        $base = rtrim((string) ($backendCfg['base_url'] ?? ''), '/');
+        $timeout = (int) ($backendCfg['timeout_seconds'] ?? 8);
         $timeout = max(3, min(30, $timeout));
 
         $url = $endpointOrUrl;
         if (!preg_match('~^https?://~i', $url)) {
             $url = $base . '/' . ltrim($endpointOrUrl, '/');
         }
-        
+
         // Ensure trailing slash for directory endpoints (avoid 404 redirects)
         // Only add slash if: 1) no file extension, 2) no query string, 3) doesn't already end with /
         if (!preg_match('~\.\w+$|\?|/$~', $url)) {
@@ -3056,7 +3200,7 @@ class RouterV1Handler implements BotHandlerInterface
 
         $startTime = microtime(true);
         $raw = curl_exec($ch);
-        $responseTime = (int)((microtime(true) - $startTime) * 1000); // milliseconds
+        $responseTime = (int) ((microtime(true) - $startTime) * 1000); // milliseconds
         $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $err = curl_error($ch);
         curl_close($ch);
@@ -3088,7 +3232,7 @@ class RouterV1Handler implements BotHandlerInterface
             // Return: {"ok": <from API>, "data": <from API>, "status": <http>, "url": <url>}
             return ['ok' => $isOk, 'data' => $data['data'], 'status' => $status, 'url' => $url];
         }
-        
+
         // Legacy format: API returns data directly
         return ['ok' => true, 'status' => $status, 'data' => $data, 'url' => $url];
     }
@@ -3100,7 +3244,8 @@ class RouterV1Handler implements BotHandlerInterface
     {
         try {
             $channelId = $payload['channel_id'] ?? null;
-            if (!$channelId) return; // Skip if no channel context
+            if (!$channelId)
+                return; // Skip if no channel context
 
             $this->db->execute(
                 "INSERT INTO api_usage_logs 
@@ -3124,22 +3269,26 @@ class RouterV1Handler implements BotHandlerInterface
     // =========================================================
     protected function detectMessageType(array $message): string
     {
-        $t = (string)($message['message_type'] ?? ($message['type'] ?? ''));
+        $t = (string) ($message['message_type'] ?? ($message['type'] ?? ''));
         $t = trim($t);
-        if ($t !== '') return $t;
+        if ($t !== '')
+            return $t;
 
         $atts = $message['attachments'] ?? [];
         if (is_array($atts)) {
             foreach ($atts as $a) {
-                $atype = (string)($a['type'] ?? '');
-                $url   = (string)($a['url'] ?? ($a['payload']['url'] ?? ''));
-                $mime  = (string)($a['mime_type'] ?? '');
+                $atype = (string) ($a['type'] ?? '');
+                $url = (string) ($a['url'] ?? ($a['payload']['url'] ?? ''));
+                $mime = (string) ($a['mime_type'] ?? '');
 
-                if ($atype === 'image') return 'image';
-                if ($mime !== '' && stripos($mime, 'image/') === 0) return 'image';
+                if ($atype === 'image')
+                    return 'image';
+                if ($mime !== '' && stripos($mime, 'image/') === 0)
+                    return 'image';
 
                 if ($url !== '') {
-                    if (preg_match('/\.(jpg|jpeg|png|gif|webp)(\?.*)?$/i', $url)) return 'image';
+                    if (preg_match('/\.(jpg|jpeg|png|gif|webp)(\?.*)?$/i', $url))
+                        return 'image';
                 }
             }
         }
@@ -3149,24 +3298,31 @@ class RouterV1Handler implements BotHandlerInterface
     protected function extractFirstImageUrl(array $message): ?string
     {
         $atts = $message['attachments'] ?? [];
-        if (!is_array($atts) || empty($atts)) return null;
+        if (!is_array($atts) || empty($atts))
+            return null;
 
         foreach ($atts as $a) {
             $url = $a['url'] ?? ($a['payload']['url'] ?? null);
-            if ($url && is_string($url)) return $url;
+            if ($url && is_string($url))
+                return $url;
         }
         return null;
     }
 
     protected function isAdminContext(array $context, array $message): bool
     {
-        if (!empty($context['is_admin'])) return true;
-        if (!empty($context['user']['is_admin'])) return true;
-        if (!empty($context['sender_role']) && $context['sender_role'] === 'admin') return true;
-        if (!empty($message['meta']['is_admin'])) return true;
+        if (!empty($context['is_admin']))
+            return true;
+        if (!empty($context['user']['is_admin']))
+            return true;
+        if (!empty($context['sender_role']) && $context['sender_role'] === 'admin')
+            return true;
+        if (!empty($message['meta']['is_admin']))
+            return true;
 
         // New: allow webhook metadata to carry sender_role
-        if (!empty($message['meta']['sender_role']) && $message['meta']['sender_role'] === 'admin') return true;
+        if (!empty($message['meta']['sender_role']) && $message['meta']['sender_role'] === 'admin')
+            return true;
 
         return false;
     }
@@ -3180,7 +3336,8 @@ class RouterV1Handler implements BotHandlerInterface
             'SELECT * FROM chat_sessions WHERE channel_id = ? AND external_user_id = ? LIMIT 1',
             [$channelId, $externalUserId]
         );
-        if ($row) return $row;
+        if ($row)
+            return $row;
 
         try {
             $this->db->execute(
@@ -3209,8 +3366,9 @@ class RouterV1Handler implements BotHandlerInterface
 
     protected function storeMessage(int $sessionId, string $role, string $text): void
     {
-        $text = trim((string)$text);
-        if ($text === '') return;
+        $text = trim((string) $text);
+        if ($text === '')
+            return;
 
         $text = mb_substr($text, 0, 2000, 'UTF-8');
 
@@ -3226,7 +3384,8 @@ class RouterV1Handler implements BotHandlerInterface
      */
     protected function logBotReply(array $context, string $replyText, string $messageType = 'text'): void
     {
-        if (trim($replyText) === '') return;
+        if (trim($replyText) === '')
+            return;
 
         try {
             $channel = $context['channel'] ?? [];
@@ -3234,7 +3393,8 @@ class RouterV1Handler implements BotHandlerInterface
             // ✅ FIX: Fallback to context['user']['external_user_id'] for LINE compatibility
             $externalUserId = $context['external_user_id'] ?? ($context['user']['external_user_id'] ?? null);
 
-            if (!$channelId) return; // Skip if no channel context
+            if (!$channelId)
+                return; // Skip if no channel context
 
             $this->db->execute(
                 "INSERT INTO bot_chat_logs 
@@ -3261,7 +3421,8 @@ class RouterV1Handler implements BotHandlerInterface
         $oldSlots = [];
         if (!empty($existing['last_slots_json'])) {
             $tmp = json_decode($existing['last_slots_json'], true);
-            if (is_array($tmp)) $oldSlots = $tmp;
+            if (is_array($tmp))
+                $oldSlots = $tmp;
         }
 
         $merged = $this->mergeSlots($oldSlots, $slots ?: []);
@@ -3282,7 +3443,7 @@ class RouterV1Handler implements BotHandlerInterface
 
     protected function getConversationHistory(int $sessionId, int $limit = 10): array
     {
-        $limit = max(1, min(50, (int)$limit));
+        $limit = max(1, min(50, (int) $limit));
         $sql = "SELECT role, text, created_at
                 FROM chat_messages
                 WHERE session_id = ?
@@ -3322,11 +3483,13 @@ class RouterV1Handler implements BotHandlerInterface
 
         $rows = $this->db->query($sql, [$sessionId]);
 
-        if (count($rows) < $limit) return false;
+        if (count($rows) < $limit)
+            return false;
 
         foreach ($rows as $r) {
-            $t = $this->normalizeTextForRepeat((string)($r['text'] ?? ''));
-            if ($t !== $normalizedText) return false;
+            $t = $this->normalizeTextForRepeat((string) ($r['text'] ?? ''));
+            if ($t !== $normalizedText)
+                return false;
         }
         return true;
     }
@@ -3339,7 +3502,8 @@ class RouterV1Handler implements BotHandlerInterface
         $existingSlots = $existingSlots ?: [];
         $newSlots = $newSlots ?: [];
         foreach ($newSlots as $k => $v) {
-            if ($v !== null && $v !== '') $existingSlots[$k] = $v;
+            if ($v !== null && $v !== '')
+                $existingSlots[$k] = $v;
         }
         return $existingSlots;
     }
@@ -3359,7 +3523,7 @@ class RouterV1Handler implements BotHandlerInterface
     // =========================================================
     // Vision / NLP / LLM
     // =========================================================
-    
+
     /**
      * Split reply text into multiple messages for human-like conversation
      * @param string $text Reply text from LLM (may contain ||SPLIT|| delimiter)
@@ -3371,32 +3535,33 @@ class RouterV1Handler implements BotHandlerInterface
         if ($text === '') {
             return [];
         }
-        
+
         // If no delimiter found, return single message
         if (strpos($text, '||SPLIT||') === false) {
             return [$text];
         }
-        
+
         // Split by delimiter and clean up
         $messages = explode('||SPLIT||', $text);
         $cleaned = [];
-        
+
         foreach ($messages as $msg) {
             $msg = trim($msg);
             if ($msg !== '') {
                 $cleaned[] = $msg;
             }
         }
-        
+
         // If split resulted in empty array, return original
         return empty($cleaned) ? [$text] : $cleaned;
     }
-    
+
     protected function containsAny(string $haystackLower, array $needles): bool
     {
         foreach ($needles as $n) {
-            $n = mb_strtolower(trim((string)$n), 'UTF-8');
-            if ($n !== '' && mb_stripos($haystackLower, $n, 0, 'UTF-8') !== false) return true;
+            $n = mb_strtolower(trim((string) $n), 'UTF-8');
+            if ($n !== '' && mb_stripos($haystackLower, $n, 0, 'UTF-8') !== false)
+                return true;
         }
         return false;
     }
@@ -3536,7 +3701,7 @@ class RouterV1Handler implements BotHandlerInterface
         }
 
         $imageType = $parsed['image_type'] ?? 'image_generic';
-        $confidence = (float)($parsed['confidence'] ?? 0.5);
+        $confidence = (float) ($parsed['confidence'] ?? 0.5);
         $details = $parsed['details'] ?? [];
         $description = $parsed['description'] ?? '';
 
@@ -3599,7 +3764,7 @@ class RouterV1Handler implements BotHandlerInterface
             ['type' => 'WEB_DETECTION', 'maxResults' => 3],
         ];
 
-        $payload = ['requests' => [[ 'image' => $imagePayload, 'features' => $features ]]];
+        $payload = ['requests' => [['image' => $imagePayload, 'features' => $features]]];
 
         $url = $endpoint . '?key=' . urlencode($apiKey);
         $ch = curl_init($url);
@@ -3611,7 +3776,7 @@ class RouterV1Handler implements BotHandlerInterface
         ]);
 
         $resp = curl_exec($ch);
-        $err  = curl_error($ch);
+        $err = curl_error($ch);
         $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
 
@@ -3625,9 +3790,18 @@ class RouterV1Handler implements BotHandlerInterface
         $suggestedRoute = null;
         foreach ($entities as $ent) {
             $name = $ent['description'] ?? ($ent['name'] ?? '');
-            if (mb_stripos($name, 'ผ่อน', 0, 'UTF-8') !== false) { $suggestedRoute = 'installment_flow'; break; }
-            if (mb_stripos($name, 'คิว', 0, 'UTF-8') !== false) { $suggestedRoute = 'booking'; break; }
-            if (mb_stripos($name, 'ราคา', 0, 'UTF-8') !== false || mb_stripos($name, 'มีไหม', 0, 'UTF-8') !== false) { $suggestedRoute = 'product_availability'; break; }
+            if (mb_stripos($name, 'ผ่อน', 0, 'UTF-8') !== false) {
+                $suggestedRoute = 'installment_flow';
+                break;
+            }
+            if (mb_stripos($name, 'คิว', 0, 'UTF-8') !== false) {
+                $suggestedRoute = 'booking';
+                break;
+            }
+            if (mb_stripos($name, 'ราคา', 0, 'UTF-8') !== false || mb_stripos($name, 'มีไหม', 0, 'UTF-8') !== false) {
+                $suggestedRoute = 'product_availability';
+                break;
+            }
         }
 
         return ['reply' => null, 'meta' => ['entities' => $entities, 'suggested_route' => $suggestedRoute]];
@@ -3642,15 +3816,15 @@ class RouterV1Handler implements BotHandlerInterface
             return ['reply_text' => null, 'intent' => null, 'meta' => ['error' => 'missing_api_key']];
         }
 
-        $llmCfg  = $botConfig['llm'] ?? [];
+        $llmCfg = $botConfig['llm'] ?? [];
         $endpoint = $cfg['endpoint'] ?? 'https://api.openai.com/v1/chat/completions';
-        $model    = $cfg['model'] ?? ($llmCfg['model'] ?? 'gpt-4.1-mini');
+        $model = $cfg['model'] ?? ($llmCfg['model'] ?? 'gpt-4.1-mini');
 
         $isGemini = (stripos($endpoint, 'generativelanguage.googleapis.com') !== false);
 
         // Use system_prompt from config (with all the detailed rules)
-        $systemPrompt = trim((string)($llmCfg['system_prompt'] ?? ''));
-        
+        $systemPrompt = trim((string) ($llmCfg['system_prompt'] ?? ''));
+
         // Only use fallback if config is truly empty
         if ($systemPrompt === '') {
             $systemPrompt = 'คุณคือแอดมินร้านค้าที่ตอบลูกค้าด้วยน้ำเสียงสุภาพ เป็นกันเอง กระชับ และช่วยปิดการขายอย่างสุภาพ ตอบเป็นภาษาไทยเท่านั้น';
@@ -3661,30 +3835,34 @@ class RouterV1Handler implements BotHandlerInterface
             // Only append persona if not already in system_prompt
             if (stripos($systemPrompt, 'บุคลิก') === false && stripos($systemPrompt, 'persona') === false) {
                 $personaParts = [];
-                if (!empty($persona['tone'])) $personaParts[] = 'โทนการพูด: ' . $persona['tone'];
-                if (!empty($persona['language'])) $personaParts[] = 'ภาษาในการตอบหลัก: ' . $persona['language'];
-                if (!empty($persona['max_chars'])) $personaParts[] = 'จำกัดความยาวข้อความตอบไม่เกินประมาณ ' . (int)$persona['max_chars'] . ' ตัวอักษร';
-                if ($personaParts) $systemPrompt .= "\n\nข้อกำหนดบุคลิก:\n- " . implode("\n- ", $personaParts);
+                if (!empty($persona['tone']))
+                    $personaParts[] = 'โทนการพูด: ' . $persona['tone'];
+                if (!empty($persona['language']))
+                    $personaParts[] = 'ภาษาในการตอบหลัก: ' . $persona['language'];
+                if (!empty($persona['max_chars']))
+                    $personaParts[] = 'จำกัดความยาวข้อความตอบไม่เกินประมาณ ' . (int) $persona['max_chars'] . ' ตัวอักษร';
+                if ($personaParts)
+                    $systemPrompt .= "\n\nข้อกำหนดบุคลิก:\n- " . implode("\n- ", $personaParts);
             }
         }
 
         // CRITICAL: Add conversation history awareness if not already in prompt
-        $hasHistoryRule = (stripos($systemPrompt, 'conversation history') !== false) 
-                       || (stripos($systemPrompt, 'ถามซ้ำ') !== false)
-                       || (stripos($systemPrompt, 'HISTORY') !== false);
-        
+        $hasHistoryRule = (stripos($systemPrompt, 'conversation history') !== false)
+            || (stripos($systemPrompt, 'ถามซ้ำ') !== false)
+            || (stripos($systemPrompt, 'HISTORY') !== false);
+
         $system = $systemPrompt;
-        
+
         if (!$hasHistoryRule) {
             // Add explicit history awareness rules
             $system .= "\n\n⚠️ CRITICAL RULES:"
                 . "\n1. READ conversation history BEFORE responding"
                 . "\n2. NEVER ask about business_type if user already mentioned their business"
-                . "\n3. NEVER ask about goal if user already stated what they want"  
+                . "\n3. NEVER ask about goal if user already stated what they want"
                 . "\n4. NEVER repeat questions - check history first"
                 . "\n5. If user complains about repeat questions, acknowledge and move forward";
         }
-        
+
         // ✅ NEW: Add message splitting instructions for human-like multi-message responses
         if (stripos($systemPrompt, 'SPLIT') === false && stripos($systemPrompt, 'แบ่งข้อความ') === false) {
             $system .= "\n\n📨 MESSAGE SPLITTING RULES (ตอบแบบคนจริง):"
@@ -3699,7 +3877,7 @@ class RouterV1Handler implements BotHandlerInterface
                 . "\n\nตัวอย่างยาว (3 ข้อความ):"
                 . "\n\"เรามีบริการออกแบบกล่อง 3 ประเภทหลักครับ||SPLIT||1. กล่องลูกฟูก เหมาะสำหรับสินค้าทั่วไป ราคาประหยัด\n2. กล่องแข็ง เหมาะกับสินค้าพรีเมียม\n3. กล่องสกรีน สำหรับแบรนด์ที่ต้องการดีไซน์พิเศษ||SPLIT||ลูกค้าสนใจแบบไหนครับ? หรืออยากให้แนะนำเพิ่มเติมไหมครับ?\"";
         }
-        
+
         // Add intent/slots instructions if not already present
         if (stripos($systemPrompt, 'intent') === false) {
             $system .= "\n\nหน้าที่ของคุณ: สรุป intent+slots จากข้อความลูกค้า (อย่ามั่วข้อมูลจากความรู้ทั่วไป)"
@@ -3715,10 +3893,10 @@ class RouterV1Handler implements BotHandlerInterface
         if ($sessionId) {
             $historyCfg = $botConfig['conversation_history'] ?? [];
             $historyEnabled = $historyCfg['enabled'] ?? true;
-            $maxMessages = (int)($historyCfg['max_messages'] ?? 10);
+            $maxMessages = (int) ($historyCfg['max_messages'] ?? 10);
 
             if ($historyEnabled) {
-                $history = $this->getConversationHistory((int)$sessionId, $maxMessages);
+                $history = $this->getConversationHistory((int) $sessionId, $maxMessages);
                 foreach ($history as $msg) {
                     $messages[] = [
                         'role' => ($msg['role'] === 'user') ? 'user' : 'assistant',
@@ -3761,8 +3939,8 @@ class RouterV1Handler implements BotHandlerInterface
             $payload = [
                 'model' => $model,
                 'messages' => $openaiMessages,
-                'temperature' => (float)($llmCfg['temperature'] ?? 0.6),
-                'max_tokens'  => (int)($llmCfg['max_tokens'] ?? 256),
+                'temperature' => (float) ($llmCfg['temperature'] ?? 0.6),
+                'max_tokens' => (int) ($llmCfg['max_tokens'] ?? 256),
             ];
 
             $headers = [
@@ -3785,7 +3963,7 @@ class RouterV1Handler implements BotHandlerInterface
             CURLOPT_POST => true,
             CURLOPT_HTTPHEADER => $headers,
             CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE),
-            CURLOPT_TIMEOUT => (int)($llmCfg['timeout_seconds'] ?? 10),
+            CURLOPT_TIMEOUT => (int) ($llmCfg['timeout_seconds'] ?? 10),
         ]);
         $raw = curl_exec($ch);
         $err = curl_error($ch);
@@ -3853,13 +4031,15 @@ class RouterV1Handler implements BotHandlerInterface
     // =========================================================
     protected function searchKnowledgeBase(array $context, string $query): array
     {
-        if ($query === '') return [];
+        if ($query === '')
+            return [];
 
         $tenantUserId = $this->resolveTenantUserId($context);
-        if (!$tenantUserId) return [];
+        if (!$tenantUserId)
+            return [];
 
         $customerId = $context['customer']['id'] ?? null;
-        $channelId  = $context['channel']['id'] ?? null;
+        $channelId = $context['channel']['id'] ?? null;
         Logger::info("KB Search using tenant_user_id={$tenantUserId}, customer_id=" . ($customerId ?? 'null') . ", channel_id=" . ($channelId ?? 'null'));
 
         try {
@@ -3889,9 +4069,10 @@ class RouterV1Handler implements BotHandlerInterface
         $originalQuery = $originalQuery ?? $enhancedQuery;
 
         $queryNorm = $this->normalizeTextForKb($enhancedQuery);
-        $origNorm  = $this->normalizeTextForKb($originalQuery);
+        $origNorm = $this->normalizeTextForKb($originalQuery);
 
-        if ($queryNorm === '' && $origNorm === '') return [];
+        if ($queryNorm === '' && $origNorm === '')
+            return [];
 
         Logger::debug("KB Search: query='$enhancedQuery', normalized='$queryNorm', user_id=$userId");
 
@@ -3906,7 +4087,8 @@ class RouterV1Handler implements BotHandlerInterface
 
         foreach ($allEntries as $row) {
             $keywords = json_decode($row['keywords'] ?? '[]', true);
-            if (!is_array($keywords)) $keywords = [];
+            if (!is_array($keywords))
+                $keywords = [];
 
             $isAdvanced = isset($keywords['mode']) && $keywords['mode'] === 'advanced';
 
@@ -3929,12 +4111,14 @@ class RouterV1Handler implements BotHandlerInterface
                 }
             } else {
                 foreach ($keywords as $keyword) {
-                    $kwNorm = $this->normalizeTextForKb((string)$keyword);
-                    if ($kwNorm === '') continue;
-                    if (mb_strlen($kwNorm, 'UTF-8') < 4) continue;
+                    $kwNorm = $this->normalizeTextForKb((string) $keyword);
+                    if ($kwNorm === '')
+                        continue;
+                    if (mb_strlen($kwNorm, 'UTF-8') < 4)
+                        continue;
 
                     $foundEnhanced = mb_strpos($queryNorm, $kwNorm, 0, 'UTF-8') !== false;
-                    $foundOriginal = mb_strpos($origNorm,  $kwNorm, 0, 'UTF-8') !== false;
+                    $foundOriginal = mb_strpos($origNorm, $kwNorm, 0, 'UTF-8') !== false;
 
                     if ($foundEnhanced || $foundOriginal) {
                         $row['keywords'] = $keywords;
@@ -3949,7 +4133,8 @@ class RouterV1Handler implements BotHandlerInterface
                 }
             }
 
-            if (count($results) >= 5) break;
+            if (count($results) >= 5)
+                break;
         }
 
         Logger::debug("KB Search: Total matches found: " . count($results));
@@ -3969,7 +4154,8 @@ class RouterV1Handler implements BotHandlerInterface
 
                 foreach ($partial as $row) {
                     $kw = json_decode($row['keywords'] ?? '[]', true);
-                    if (!is_array($kw)) $kw = [];
+                    if (!is_array($kw))
+                        $kw = [];
 
                     $isAdvanced = isset($kw['mode']) && $kw['mode'] === 'advanced';
                     if ($isAdvanced) {
@@ -3986,7 +4172,8 @@ class RouterV1Handler implements BotHandlerInterface
                     $row['match_type'] = 'partial';
                     $results[] = $row;
 
-                    if (count($results) >= 5) break;
+                    if (count($results) >= 5)
+                        break;
                 }
             }
         }
@@ -3997,17 +4184,20 @@ class RouterV1Handler implements BotHandlerInterface
     protected function matchAdvancedKeywords(string $queryNorm, array $rules): bool
     {
         $toList = function ($v): array {
-            if ($v === null) return [];
+            if ($v === null)
+                return [];
             if (is_string($v)) {
                 $v = trim($v);
                 return $v === '' ? [] : [$v];
             }
-            if (!is_array($v)) return [];
+            if (!is_array($v))
+                return [];
             $out = [];
             foreach ($v as $item) {
                 if (is_string($item)) {
                     $item = trim($item);
-                    if ($item !== '') $out[] = $item;
+                    if ($item !== '')
+                        $out[] = $item;
                 }
             }
             return $out;
@@ -4020,12 +4210,14 @@ class RouterV1Handler implements BotHandlerInterface
         $hasRequireAll = count($requireAll) > 0;
         $hasRequireAny = count($requireAny) > 0;
 
-        if (!$hasRequireAll && !$hasRequireAny) return false;
+        if (!$hasRequireAll && !$hasRequireAny)
+            return false;
 
         if (isset($rules['min_query_len'])) {
-            $minLen = (int)$rules['min_query_len'];
+            $minLen = (int) $rules['min_query_len'];
             $actualLen = mb_strlen($queryNorm, 'UTF-8');
-            if ($actualLen < $minLen) return false;
+            if ($actualLen < $minLen)
+                return false;
         }
 
         foreach ($excludeAny as $exclude) {
@@ -4038,7 +4230,8 @@ class RouterV1Handler implements BotHandlerInterface
         foreach ($requireAll as $required) {
             $requiredNorm = $this->normalizeTextForKb($required);
             $found = ($requiredNorm !== '' && mb_strpos($queryNorm, $requiredNorm, 0, 'UTF-8') !== false);
-            if ($requiredNorm !== '' && !$found) return false;
+            if ($requiredNorm !== '' && !$found)
+                return false;
         }
 
         if ($hasRequireAny) {
@@ -4046,9 +4239,13 @@ class RouterV1Handler implements BotHandlerInterface
             foreach ($requireAny as $anyKeyword) {
                 $anyNorm = $this->normalizeTextForKb($anyKeyword);
                 $found = ($anyNorm !== '' && mb_strpos($queryNorm, $anyNorm, 0, 'UTF-8') !== false);
-                if ($found) { $foundAny = true; break; }
+                if ($found) {
+                    $foundAny = true;
+                    break;
+                }
             }
-            if (!$foundAny) return false;
+            if (!$foundAny)
+                return false;
         }
 
         return true;
@@ -4058,17 +4255,20 @@ class RouterV1Handler implements BotHandlerInterface
     protected function isAdvancedPendingMatch(string $queryNorm, array $rules): bool
     {
         $toList = function ($v): array {
-            if ($v === null) return [];
+            if ($v === null)
+                return [];
             if (is_string($v)) {
                 $v = trim($v);
                 return $v === '' ? [] : [$v];
             }
-            if (!is_array($v)) return [];
+            if (!is_array($v))
+                return [];
             $out = [];
             foreach ($v as $item) {
                 if (is_string($item)) {
                     $item = trim($item);
-                    if ($item !== '') $out[] = $item;
+                    if ($item !== '')
+                        $out[] = $item;
                 }
             }
             return $out;
@@ -4077,7 +4277,8 @@ class RouterV1Handler implements BotHandlerInterface
         $requireAll = $toList($rules['require_all'] ?? null);
         $excludeAny = $toList($rules['exclude_any'] ?? null);
 
-        if (empty($requireAll)) return false;
+        if (empty($requireAll))
+            return false;
 
         foreach ($excludeAny as $ex) {
             $exNorm = $this->normalizeTextForKb($ex);
@@ -4094,7 +4295,7 @@ class RouterV1Handler implements BotHandlerInterface
         }
 
         if (isset($rules['min_query_len'])) {
-            $minLen = (int)$rules['min_query_len'];
+            $minLen = (int) $rules['min_query_len'];
             $actual = mb_strlen($queryNorm, 'UTF-8');
             return $actual < $minLen;
         }
@@ -4105,10 +4306,12 @@ class RouterV1Handler implements BotHandlerInterface
     protected function hasAdvancedKbPending(array $context, string $query): bool
     {
         $tenantUserId = $this->resolveTenantUserId($context);
-        if (!$tenantUserId) return false;
+        if (!$tenantUserId)
+            return false;
 
         $qNorm = $this->normalizeTextForKb($query);
-        if ($qNorm === '') return false;
+        if ($qNorm === '')
+            return false;
 
         $sql = "SELECT id, keywords
             FROM customer_knowledge_base
@@ -4120,12 +4323,15 @@ class RouterV1Handler implements BotHandlerInterface
 
         foreach ($rows as $row) {
             $kw = json_decode($row['keywords'] ?? '[]', true);
-            if (!is_array($kw)) continue;
+            if (!is_array($kw))
+                continue;
 
             $isAdvanced = isset($kw['mode']) && $kw['mode'] === 'advanced';
-            if (!$isAdvanced) continue;
+            if (!$isAdvanced)
+                continue;
 
-            if ($this->matchAdvancedKeywords($qNorm, $kw)) continue;
+            if ($this->matchAdvancedKeywords($qNorm, $kw))
+                continue;
 
             if ($this->isAdvancedPendingMatch($qNorm, $kw)) {
                 Logger::info("KB Pending: advanced entry #{$row['id']} waiting for more text");
@@ -4141,13 +4347,14 @@ class RouterV1Handler implements BotHandlerInterface
     // =========================================================
     protected function buildKbBufferedText(int $sessionId, string $currentText, array $bufferingCfg): string
     {
-        $enabled = (bool)($bufferingCfg['kb_enabled'] ?? true);
-        if (!$enabled) return $currentText;
+        $enabled = (bool) ($bufferingCfg['kb_enabled'] ?? true);
+        if (!$enabled)
+            return $currentText;
 
-        $windowSec   = (int)($bufferingCfg['kb_window_seconds'] ?? 25);
-        $maxMessages = (int)($bufferingCfg['kb_max_messages'] ?? 2);
+        $windowSec = (int) ($bufferingCfg['kb_window_seconds'] ?? 25);
+        $maxMessages = (int) ($bufferingCfg['kb_max_messages'] ?? 2);
 
-        $windowSec   = max(5, min(300, $windowSec));
+        $windowSec = max(5, min(300, $windowSec));
         $maxMessages = max(2, min(10, $maxMessages));
 
         $limit = $maxMessages * 4;
@@ -4163,11 +4370,13 @@ class RouterV1Handler implements BotHandlerInterface
         $countUser = 0;
 
         foreach ($rows as $r) {
-            $role = (string)($r['role'] ?? '');
-            $t = trim((string)($r['text'] ?? ''));
+            $role = (string) ($r['role'] ?? '');
+            $t = trim((string) ($r['text'] ?? ''));
 
-            if ($t === '') continue;
-            if (stripos($t, '[image]') === 0) continue;
+            if ($t === '')
+                continue;
+            if (stripos($t, '[image]') === 0)
+                continue;
 
             if ($role === 'assistant') {
                 if (mb_stripos($t, '[kb_pending]') === 0) {
@@ -4177,11 +4386,13 @@ class RouterV1Handler implements BotHandlerInterface
             }
 
             if ($role === 'user') {
-                if ($t === $currentText) continue;
+                if ($t === $currentText)
+                    continue;
 
                 $collected[] = $t;
                 $countUser++;
-                if ($countUser >= ($maxMessages - 1)) break;
+                if ($countUser >= ($maxMessages - 1))
+                    break;
             }
         }
 
@@ -4198,7 +4409,7 @@ class RouterV1Handler implements BotHandlerInterface
     protected function resolveTenantUserId(array $context): ?int
     {
         $botProfile = $context['bot_profile'] ?? [];
-        $channel    = $context['channel'] ?? [];
+        $channel = $context['channel'] ?? [];
 
         $uid =
             ($botProfile['user_id'] ?? null)
@@ -4206,13 +4417,15 @@ class RouterV1Handler implements BotHandlerInterface
             ?: ($context['tenant_user_id'] ?? null)
             ?: ($context['user_id'] ?? null);
 
-        if (!$uid) return null;
-        return (int)$uid;
+        if (!$uid)
+            return null;
+        return (int) $uid;
     }
 
     protected function decodeJsonArray(?string $json): array
     {
-        if (!$json) return [];
+        if (!$json)
+            return [];
         $tmp = json_decode($json, true);
         return is_array($tmp) ? $tmp : [];
     }
@@ -4220,7 +4433,7 @@ class RouterV1Handler implements BotHandlerInterface
     protected function extractJsonObject(string $content): ?array
     {
         $trimmed = trim($content);
-        
+
         // ✅ Strip markdown code block (```json ... ```) - use DOTALL modifier
         // Handle both real newlines and escaped \n
         $trimmed = str_replace('\\n', "\n", $trimmed); // Convert escaped \n to real newlines
@@ -4231,9 +4444,9 @@ class RouterV1Handler implements BotHandlerInterface
                 'first_100_chars' => substr($trimmed, 0, 100)
             ]);
         }
-        
+
         $jsonStart = strpos($trimmed, '{');
-        $jsonEnd   = strrpos($trimmed, '}');
+        $jsonEnd = strrpos($trimmed, '}');
         if ($jsonStart === false || $jsonEnd === false || $jsonEnd <= $jsonStart) {
             Logger::warning("extractJsonObject - no valid JSON braces found", [
                 'jsonStart' => $jsonStart,
@@ -4244,7 +4457,7 @@ class RouterV1Handler implements BotHandlerInterface
 
         $jsonString = substr($trimmed, $jsonStart, $jsonEnd - $jsonStart + 1);
         $parsed = json_decode($jsonString, true);
-        
+
         if (!is_array($parsed)) {
             Logger::warning("extractJsonObject - json_decode failed", [
                 'json_error' => json_last_error_msg(),
@@ -4252,7 +4465,7 @@ class RouterV1Handler implements BotHandlerInterface
                 'first_100_chars' => substr($jsonString, 0, 100)
             ]);
         }
-        
+
         return is_array($parsed) ? $parsed : null;
     }
 
@@ -4260,7 +4473,7 @@ class RouterV1Handler implements BotHandlerInterface
     {
         $out = $tpl;
         foreach ($vars as $k => $v) {
-            $val = is_scalar($v) ? (string)$v : json_encode($v, JSON_UNESCAPED_UNICODE);
+            $val = is_scalar($v) ? (string) $v : json_encode($v, JSON_UNESCAPED_UNICODE);
             $out = str_replace('{{' . $k . '}}', $val, $out);
         }
         return $out;
@@ -4283,7 +4496,7 @@ class RouterV1Handler implements BotHandlerInterface
             // Only replace string/number values, skip arrays/objects
             if (is_scalar($value) && $value !== null && $value !== '') {
                 $placeholder = '{' . $key . '}';
-                $result = str_replace($placeholder, (string)$value, $result);
+                $result = str_replace($placeholder, (string) $value, $result);
             }
         }
 
@@ -4293,7 +4506,8 @@ class RouterV1Handler implements BotHandlerInterface
     protected function normalizePhone(string $s): string
     {
         $s = preg_replace('/[^\d]/', '', $s);
-        if (!$s) return '';
+        if (!$s)
+            return '';
         if (strpos($s, '66') === 0 && strlen($s) >= 11) {
             $s = '0' . substr($s, 2, 9);
         }
@@ -4311,7 +4525,7 @@ class RouterV1Handler implements BotHandlerInterface
     // =========================================================
     // Policy-based guardrails
     // =========================================================
-    
+
     /**
      * Get policy configuration from store.policies or top-level policies
      */
@@ -4333,10 +4547,11 @@ class RouterV1Handler implements BotHandlerInterface
     {
         $t = mb_strtolower($text, 'UTF-8');
         $keywords = $policy['out_of_scope_keywords'] ?? [];
-        if (!is_array($keywords)) return false;
+        if (!is_array($keywords))
+            return false;
 
         foreach ($keywords as $kw) {
-            $kw = mb_strtolower(trim((string)$kw), 'UTF-8');
+            $kw = mb_strtolower(trim((string) $kw), 'UTF-8');
             if ($kw !== '' && mb_strpos($t, $kw) !== false) {
                 Logger::info("Policy: Out-of-scope keyword matched: '{$kw}' in query: '{$text}'");
                 return true;
@@ -4359,11 +4574,15 @@ class RouterV1Handler implements BotHandlerInterface
         if (!empty($pricingPolicy['strict_pricing']) && !empty($pricingPolicy['enabled'])) {
             // Define ONLY allowed pricing numbers from templates
             $allowedPrices = [
-                '15,900', '15900', '3,900', '3900',  // Plan 1
-                '79,000', '79000',  // Plan 2
+                '15,900',
+                '15900',
+                '3,900',
+                '3900',  // Plan 1
+                '79,000',
+                '79000',  // Plan 2
                 // Plan 3 is "ตามโปรเจกต์" no specific number
             ];
-            
+
             // Detect if reply contains pricing information
             $hasPricingKeywords = (
                 mb_stripos($reply, 'ราคา') !== false ||
@@ -4372,18 +4591,19 @@ class RouterV1Handler implements BotHandlerInterface
                 mb_stripos($reply, 'plan') !== false ||
                 mb_stripos($reply, 'แพลน') !== false
             );
-            
+
             if ($hasPricingKeywords) {
                 // Extract all numbers from reply (including Thai number format with commas)
                 preg_match_all('/[\d,]+/', $reply, $matches);
                 $foundNumbers = $matches[0] ?? [];
-                
+
                 $hasUnauthorizedPrice = false;
                 foreach ($foundNumbers as $num) {
                     // Skip small numbers (likely not prices)
                     $cleanNum = str_replace(',', '', $num);
-                    if ($cleanNum < 100) continue;
-                    
+                    if ($cleanNum < 100)
+                        continue;
+
                     // Check if this number is NOT in allowed list
                     if (!in_array($num, $allowedPrices) && !in_array($cleanNum, $allowedPrices)) {
                         $hasUnauthorizedPrice = true;
@@ -4391,27 +4611,27 @@ class RouterV1Handler implements BotHandlerInterface
                         break;
                     }
                 }
-                
+
                 // If unauthorized pricing detected, replace with appropriate template
                 if ($hasUnauthorizedPrice) {
                     // Determine which template to use based on context
                     $useTemplate = 'pricing_only';  // Default
-                    
+
                     // If reply mentions business/summary, use full template
                     if (mb_stripos($reply, 'สรุป') !== false || mb_stripos($reply, 'ธุรกิจ') !== false) {
                         $useTemplate = 'summary_with_all_plans';
                     }
-                    
+
                     $guardedReply = $templates[$useTemplate] ?? $templates['fallback'] ?? $reply;
-                    
+
                     // ✅ Replace placeholders like {summary}, {business_type}
                     $guardedReply = $this->replaceTe​mplatePlaceholders($guardedReply, $slots);
-                    
+
                     Logger::info("Pricing Policy: Blocked hallucinated pricing - using template '{$useTemplate}'", [
                         'original_reply_preview' => mb_substr($reply, 0, 100),
                         'unauthorized_numbers' => $foundNumbers,
                     ]);
-                    
+
                     return $guardedReply;
                 }
             }
@@ -4420,7 +4640,7 @@ class RouterV1Handler implements BotHandlerInterface
         // 1) Hard gate: ถ้า intent ต้องใช้ backend แต่ backend ปิด/ไม่พร้อม => ตอบด้วย template ที่กำหนด
         $require = $policy['require_backend_for_intents'] ?? [];
         if (is_array($require) && $intent && in_array($intent, $require, true) && !$backendEnabled) {
-            $k = (string)($policy['no_backend_reply_template_key'] ?? 'no_backend_product_check');
+            $k = (string) ($policy['no_backend_reply_template_key'] ?? 'no_backend_product_check');
             $guardedReply = $templates[$k] ?? ($templates['fallback'] ?? $reply);
             $guardedReply = $this->replaceTe​mplatePlaceholders($guardedReply, $slots);
             Logger::info("Policy: Intent '{$intent}' requires backend but backend disabled - using template '{$k}'");
@@ -4433,9 +4653,9 @@ class RouterV1Handler implements BotHandlerInterface
             $blocks = $policy['hallucination_block_phrases'] ?? [];
             if (is_array($blocks)) {
                 foreach ($blocks as $p) {
-                    $p = trim((string)$p);
+                    $p = trim((string) $p);
                     if ($p !== '' && mb_strpos($reply, $p) !== false) {
-                        $k = (string)($policy['no_backend_reply_template_key'] ?? 'no_backend_product_check');
+                        $k = (string) ($policy['no_backend_reply_template_key'] ?? 'no_backend_product_check');
                         $guardedReply = $templates[$k] ?? ($templates['fallback'] ?? $reply);
                         $guardedReply = $this->replaceTe​mplatePlaceholders($guardedReply, $slots);
                         Logger::info("Policy: Blocked hallucination phrase '{$p}' in reply - using template '{$k}'");
@@ -4455,12 +4675,23 @@ class RouterV1Handler implements BotHandlerInterface
     {
         $t = mb_strtolower($text, 'UTF-8');
         $keys = [
-            'ร้านชื่ออะไร','ชื่อร้าน','ชื่อร้านอะไร','ขอรายละเอียดร้าน','รายละเอียดร้าน',
-            'ร้านนี้ขายอะไร','ขายอะไร','ร้านทำอะไร','ข้อมูลร้าน','ขอข้อมูลร้าน',
-            'contact','ติดต่อร้าน','ช่องทางติดต่อ'
+            'ร้านชื่ออะไร',
+            'ชื่อร้าน',
+            'ชื่อร้านอะไร',
+            'ขอรายละเอียดร้าน',
+            'รายละเอียดร้าน',
+            'ร้านนี้ขายอะไร',
+            'ขายอะไร',
+            'ร้านทำอะไร',
+            'ข้อมูลร้าน',
+            'ขอข้อมูลร้าน',
+            'contact',
+            'ติดต่อร้าน',
+            'ช่องทางติดต่อ'
         ];
         foreach ($keys as $k) {
-            if (mb_stripos($t, $k, 0, 'UTF-8') !== false) return true;
+            if (mb_stripos($t, $k, 0, 'UTF-8') !== false)
+                return true;
         }
         return false;
     }
@@ -4473,13 +4704,13 @@ class RouterV1Handler implements BotHandlerInterface
         if (empty($platform) || empty($externalUserId)) {
             return null;
         }
-        
+
         try {
             $result = $this->db->queryOne(
                 "SELECT id FROM customer_profiles WHERE platform = ? AND platform_user_id = ? LIMIT 1",
                 [$platform, $externalUserId]
             );
-            return $result ? (int)$result['id'] : null;
+            return $result ? (int) $result['id'] : null;
         } catch (Throwable $e) {
             Logger::warning('[ROUTER_V1] Failed to get customer profile: ' . $e->getMessage());
             return null;
@@ -4493,14 +4724,14 @@ class RouterV1Handler implements BotHandlerInterface
     {
         try {
             $interestService = new CustomerInterestService();
-            
+
             $productData = [
                 'product_ref_id' => $slots['product_ref_id'] ?? null,
                 'product_name' => $slots['product_name'] ?? null,
                 'product_category' => $slots['product_category'] ?? null,
                 'product_price' => $slots['product_price'] ?? null,
             ];
-            
+
             $interestOptions = [
                 'channel_id' => $options['channel_id'] ?? null,
                 'case_id' => $options['case_id'] ?? null,
@@ -4512,9 +4743,9 @@ class RouterV1Handler implements BotHandlerInterface
                     'slots' => $slots,
                 ],
             ];
-            
+
             $interestService->trackProductInterest($customerProfileId, $productData, $interestOptions);
-            
+
         } catch (Throwable $e) {
             Logger::warning('[ROUTER_V1] Failed to track product interest: ' . $e->getMessage());
         }
