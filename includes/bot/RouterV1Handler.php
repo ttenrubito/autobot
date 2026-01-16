@@ -736,6 +736,70 @@ class RouterV1Handler implements BotHandlerInterface
             }
 
             // =========================================================
+            // ✅ Product code pattern detection (BEFORE routing rules)
+            // Matches patterns like ROL-SUB-002, DIA-RNG-001, GUC-MAR-001
+            // =========================================================
+            $productCodePattern = '/\b([A-Z]{2,4}[-_][A-Z]{2,4}[-_]\d{2,4})\b/i';
+            if (preg_match($productCodePattern, $text, $codeMatch)) {
+                $detectedCode = strtoupper($codeMatch[1]);
+                $matchedRoute = 'product_lookup_by_code';
+                $meta['detected_product_code'] = $detectedCode;
+                $meta['route'] = $matchedRoute;
+
+                Logger::info('[ROUTER_V1] Product code detected by regex', [
+                    'code' => $detectedCode,
+                    'text' => $text,
+                    'trace_id' => $traceId ?? null
+                ]);
+
+                // Skip keyword matching, go directly to intent handling
+                $intent = 'product_lookup_by_code';
+                $slots = $this->mergeSlots($lastSlots, ['product_code' => $detectedCode]);
+
+                // =========================================================
+                // ✅ Direct call to ProductSearchService
+                // =========================================================
+                try {
+                    $products = ProductSearchService::searchByProductCode($detectedCode);
+
+                    if (!empty($products)) {
+                        $replyText = ProductSearchService::formatMultipleForChat($products, 3);
+                        $imageUrl = $products[0]['thumbnail_url'] ?? null;
+
+                        // Create case for product inquiry
+                        try {
+                            $caseEngine = new CaseEngine($config, $context);
+                            $caseSlots = [
+                                'product_code' => $detectedCode,
+                                'product_name' => $products[0]['title'] ?? $products[0]['name'] ?? null,
+                                'product_price' => $products[0]['price'] ?? null,
+                                'product_ref_id' => $products[0]['ref_id'] ?? null,
+                            ];
+                            $case = $caseEngine->getOrCreateCase(CaseEngine::CASE_PRODUCT_INQUIRY, $caseSlots);
+                            $meta['case'] = ['id' => $case['id'] ?? null, 'case_no' => $case['case_no'] ?? null];
+                        } catch (Exception $caseErr) {
+                            Logger::error('[ROUTER_V1] Failed to create case: ' . $caseErr->getMessage());
+                        }
+
+                        if ($sessionId) {
+                            $this->updateSessionState($sessionId, $intent, $slots);
+                            $this->storeMessage($sessionId, 'assistant', $replyText);
+                        }
+                        $this->logBotReply($context, $replyText, 'text');
+
+                        return [
+                            'reply_text' => $replyText,
+                            'image_url' => $imageUrl,
+                            'actions' => [],
+                            'meta' => $meta,
+                        ];
+                    }
+                } catch (Exception $e) {
+                    Logger::error('[ROUTER_V1] ProductSearchService error: ' . $e->getMessage());
+                }
+            }
+
+            // =========================================================
             // Routing rules (text only) - after KB
             // =========================================================
             $matchedRoute = null;
