@@ -552,6 +552,15 @@ try {
         require __DIR__ . '/webhook/push-notify.php';
     }
 
+    // =====================================================
+    // Admin Utility Endpoints
+    // =====================================================
+    elseif ($path === '/admin/run-migrations' && $method === 'GET') {
+        require __DIR__ . '/admin/run-migrations.php';
+    } elseif ($path === '/admin/fix-order-status' && $method === 'GET') {
+        require __DIR__ . '/admin/fix-order-status.php';
+    }
+
     // 404 Not Found
     else {
         // Route not found
