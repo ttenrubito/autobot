@@ -1663,15 +1663,25 @@ class RouterV1Handler implements BotHandlerInterface
             $searchKeyword = '';
             $searchByCode = false;
 
-            // HIGHEST PRIORITY: If LLM extracted product_code, search by code directly
-            // This handles cases like "เอาตัว 34000" where user selects from displayed list
+            // HIGHEST PRIORITY: If LLM extracted product_code AND it appears in current message
+            // This handles cases like "เอาตัว GLD-NCK-002" where user explicitly mentions code
+            // ⚠️ IMPORTANT: Only use product_code if it appears in current text to avoid session caching issue
             if ($productCode !== '' && preg_match('/^[A-Z]{2,4}-[A-Z]{2,4}-\d{3}$/i', $productCode)) {
-                $searchKeyword = $productCode;
-                $searchByCode = true;
-                Logger::info('[ROUTER_V1] Product search - using product_code', [
-                    'product_code' => $productCode,
-                    'incoming_text' => $incomingText
-                ]);
+                // Check if product_code appears in current text - if not, it's from session cache
+                if (mb_stripos($incomingText, $productCode) !== false) {
+                    $searchKeyword = $productCode;
+                    $searchByCode = true;
+                    Logger::info('[ROUTER_V1] Product search - using product_code from text', [
+                        'product_code' => $productCode,
+                        'incoming_text' => $incomingText
+                    ]);
+                } else {
+                    // Product code is from session cache, ignore it for new search
+                    Logger::info('[ROUTER_V1] Product search - ignoring cached product_code', [
+                        'cached_code' => $productCode,
+                        'incoming_text' => $incomingText
+                    ]);
+                }
             }
 
             // If no product_code, check if user mentions price from previous list
