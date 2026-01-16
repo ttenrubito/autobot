@@ -1505,6 +1505,9 @@ class RouterV1Handler implements BotHandlerInterface
         $channelId = $context['channel']['id'] ?? null;
         $externalUserId = $context['external_user_id'] ?? ($context['user']['external_user_id'] ?? null);
 
+        // ✅ Define fallback message for error cases
+        $fallback = $templates['fallback'] ?? $templates['product_search_error'] ?? 'ขออภัยค่ะ เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้งค่ะ 🙏';
+
         // Normalize some slots
         if (!empty($slots['customer_phone']))
             $slots['customer_phone'] = $this->normalizePhone((string) $slots['customer_phone']);
@@ -1650,24 +1653,51 @@ class RouterV1Handler implements BotHandlerInterface
             // Initialize fallback for error cases
             $fallback = $templates['product_search_error'] ?? $templates['fallback'] ?? 'ขออภัยค่ะ ระบบค้นหาสินค้าขัดข้อง กรุณาลองใหม่อีกครั้งค่ะ 🙏';
 
-            // Determine search keyword - prefer product_type for category searches, then product_name
+            // Determine search keyword - prefer product_code (user selected specific item)
+            $productCode = trim((string) ($slots['product_code'] ?? ''));
             $productType = trim((string) ($slots['product_type'] ?? ''));
             $productName = trim((string) ($slots['product_name'] ?? ''));
             $incomingText = trim((string) ($context['message']['text'] ?? ''));
+            $priceSlot = trim((string) ($slots['price'] ?? ''));
+
+            $searchKeyword = '';
+            $searchByCode = false;
+
+            // HIGHEST PRIORITY: If LLM extracted product_code, search by code directly
+            // This handles cases like "เอาตัว 34000" where user selects from displayed list
+            if ($productCode !== '' && preg_match('/^[A-Z]{2,4}-[A-Z]{2,4}-\d{3}$/i', $productCode)) {
+                $searchKeyword = $productCode;
+                $searchByCode = true;
+                Logger::info('[ROUTER_V1] Product search - using product_code', [
+                    'product_code' => $productCode,
+                    'incoming_text' => $incomingText
+                ]);
+            }
+
+            // If no product_code, check if user mentions price from previous list
+            // This helps match "เอาตัวราคา 34000" to a specific product
+            if ($searchKeyword === '' && $priceSlot !== '') {
+                // Check if we have this price in slot history - defer to product_name search
+                Logger::info('[ROUTER_V1] Product search - user mentioned price', [
+                    'price' => $priceSlot,
+                    'product_name' => $productName
+                ]);
+            }
 
             // If incoming text mentions product types (สร้อย, แหวน, กำไล, etc.), use that for search
             $categoryKeywords = ['สร้อย', 'แหวน', 'กำไล', 'ต่างหู', 'จี้', 'เพชร', 'ทอง', 'สายสร้อย', 'กำไล', 'พระ', 'นาฬิกา'];
-            $searchKeyword = '';
 
-            // First priority: Check if incoming text contains category keywords
-            foreach ($categoryKeywords as $cat) {
-                if (mb_strpos($incomingText, $cat) !== false) {
-                    $searchKeyword = $cat;
-                    Logger::info('[ROUTER_V1] Product search - using category from text', [
-                        'category' => $cat,
-                        'incoming_text' => $incomingText
-                    ]);
-                    break;
+            // Check category keywords only if no product_code
+            if ($searchKeyword === '') {
+                foreach ($categoryKeywords as $cat) {
+                    if (mb_strpos($incomingText, $cat) !== false) {
+                        $searchKeyword = $cat;
+                        Logger::info('[ROUTER_V1] Product search - using category from text', [
+                            'category' => $cat,
+                            'incoming_text' => $incomingText
+                        ]);
+                        break;
+                    }
                 }
             }
 
@@ -1699,17 +1729,27 @@ class RouterV1Handler implements BotHandlerInterface
             if (!$endpoint)
                 return ['handled' => false, 'reason' => 'missing_endpoint_product_search'];
 
-            // Build payload with search keyword
+            // Build payload - use product_code if searching by code, otherwise use keyword
             $payload = [
-                'q' => $searchKeyword,
-                'keyword' => $searchKeyword,
-                'product_name' => $searchKeyword,
                 'channel_id' => $channelId,
                 'external_user_id' => $externalUserId,
             ];
 
+            if ($searchByCode) {
+                // Search by product code - should return exact match
+                $payload['product_code'] = $searchKeyword;
+                $payload['keyword'] = $searchKeyword;
+            } else {
+                // Search by keyword
+                $payload['q'] = $searchKeyword;
+                $payload['keyword'] = $searchKeyword;
+                $payload['product_name'] = $searchKeyword;
+            }
+
             Logger::info('[ROUTER_V1] Product search payload', [
                 'search_keyword' => $searchKeyword,
+                'search_by_code' => $searchByCode,
+                'product_code_slot' => $productCode,
                 'original_product_name' => $productName,
                 'original_product_type' => $productType,
                 'incoming_text' => $incomingText
@@ -1757,12 +1797,30 @@ class RouterV1Handler implements BotHandlerInterface
 
             $resp = $this->callBackendJson($backendCfg, $endpoint, $payload);
             if (!$resp['ok']) {
+                Logger::warning('[ROUTER_V1] Product search backend error', [
+                    'search_keyword' => $searchKeyword,
+                    'resp' => $resp
+                ]);
                 return ['handled' => false, 'reply_text' => $fallback, 'reason' => 'backend_error', 'meta' => $resp, 'slots' => $slots];
             }
 
-            $products = $resp['data']['products'] ?? ($resp['data']['items'] ?? ($resp['data']['candidates'] ?? []));
+            // API returns {"data": [...products...]} directly, or {"data": {"products": [...]}}
+            $respData = $resp['data'] ?? [];
+            if (is_array($respData) && isset($respData[0])) {
+                // Direct array of products
+                $products = $respData;
+            } else {
+                // Wrapped in products/items/candidates key
+                $products = $respData['products'] ?? ($respData['items'] ?? ($respData['candidates'] ?? []));
+            }
             if (!is_array($products))
                 $products = [];
+
+            Logger::info('[ROUTER_V1] Product search result', [
+                'search_keyword' => $searchKeyword,
+                'product_count' => count($products),
+                'first_product' => $products[0]['title'] ?? null
+            ]);
 
             $rendered = $this->renderProductsFromBackend($products, $templates);
 
@@ -3355,12 +3413,19 @@ class RouterV1Handler implements BotHandlerInterface
 
         // Merge API response directly (API already has 'ok'/'success' and 'data' keys)
         // Don't double-wrap it
-        // Support both 'ok' and 'success' keys
-        $isOk = $data['ok'] ?? $data['success'] ?? false;
+        // Support both 'ok' and 'success' keys, or data array directly
+        $isOk = $data['ok'] ?? $data['success'] ?? null;
+
+        // If API returns {"data": [...]} without explicit ok/success, treat as successful
+        if ($isOk === null && isset($data['data'])) {
+            $isOk = true;
+        }
+
         if (isset($data['data'])) {
             // API response format: {"ok": true, "data": {...}} or {"success": true, "data": {...}}
+            // Or just: {"data": [...]} which we treat as success
             // Return: {"ok": <from API>, "data": <from API>, "status": <http>, "url": <url>}
-            return ['ok' => $isOk, 'data' => $data['data'], 'status' => $status, 'url' => $url];
+            return ['ok' => (bool) $isOk, 'data' => $data['data'], 'status' => $status, 'url' => $url];
         }
 
         // Legacy format: API returns data directly
