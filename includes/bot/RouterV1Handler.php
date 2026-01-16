@@ -1225,11 +1225,22 @@ class RouterV1Handler implements BotHandlerInterface
                         $slots['action_type'] = 'new';
                         Logger::info("[INTENT_FALLBACK] Keyword match: savings_new", ['text' => $text]);
                     }
-                    // Installment keywords  
+                    // Installment keywords - SMART DETECTION
+                    // Distinguish: Promotion inquiry vs Actual payment
                     elseif (preg_match('/ผ่อน|งวด|ผ่อนชำระ/u', $textLower)) {
-                        $intent = 'installment_flow';
-                        $slots['action_type'] = 'new';
-                        Logger::info("[INTENT_FALLBACK] Keyword match: installment_flow", ['text' => $text]);
+                        // Check if this is PAYMENT context (จ่าย/โอน/ชำระ + งวด)
+                        $isPaymentContext = preg_match('/จ่าย.*(งวด|ผ่อน)|โอน.*(งวด|ผ่อน)|ชำระ.*(งวด|ผ่อน)|งวดที่|ต่อดอก|ปิดยอด/u', $textLower);
+
+                        if ($isPaymentContext) {
+                            // Customer is making a payment
+                            $intent = 'installment_flow';
+                            $slots['action_type'] = 'pay';
+                            Logger::info("[INTENT_FALLBACK] Keyword match: installment_flow (payment)", ['text' => $text]);
+                        } else {
+                            // Customer is asking about promotion/terms
+                            $intent = 'interest_rate_inquiry';
+                            Logger::info("[INTENT_FALLBACK] Keyword match: interest_rate_inquiry (promotion question)", ['text' => $text]);
+                        }
                     }
                     // Pawn keywords
                     elseif (preg_match('/จำนำ|ฝากจำนำ|ต่อดอก|ไถ่ถอน/u', $textLower)) {

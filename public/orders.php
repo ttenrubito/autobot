@@ -193,6 +193,8 @@ include('../includes/customer/sidebar.php');
                     
                     <!-- Hidden field for selected customer -->
                     <input type="hidden" id="selectedCustomerId" name="customer_id">
+                    <input type="hidden" id="externalUserId" name="external_user_id">
+                    <input type="hidden" id="fromCaseId" name="from_case_id">
                     
                     <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 1rem 0;">
                     
@@ -232,6 +234,13 @@ include('../includes/customer/sidebar.php');
                                 <span class="payment-type-label">จ่ายเต็ม</span>
                             </span>
                         </label>
+                        <label class="payment-type-option" onclick="handlePaymentTypeClick(event, 'deposit')">
+                            <input type="radio" name="payment_type" value="deposit">
+                            <span class="payment-type-card">
+                                <span class="payment-type-icon">💎</span>
+                                <span class="payment-type-label">มัดจำ</span>
+                            </span>
+                        </label>
                         <label class="payment-type-option" onclick="handlePaymentTypeClick(event, 'installment')">
                             <input type="radio" name="payment_type" value="installment">
                             <span class="payment-type-card">
@@ -248,22 +257,74 @@ include('../includes/customer/sidebar.php');
                         </label>
                     </div>
                     
+                    <!-- Deposit Fields (hidden by default) -->
+                    <div id="depositFields" class="deposit-fields" style="display:none;">
+                        <div class="detail-grid" style="margin-top: 1rem;">
+                            <div class="form-group">
+                                <label for="depositAmount">ยอดมัดจำ (บาท) <span class="required">*</span></label>
+                                <input type="number" id="depositAmount" name="deposit_amount" class="form-input" step="0.01"
+                                       placeholder="เช่น 5000">
+                                <small class="form-hint">ขั้นต่ำ 10% ของราคาสินค้า</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="depositExpiry">กันสินค้าถึงวันที่</label>
+                                <input type="date" id="depositExpiry" name="deposit_expiry" class="form-input">
+                                <small class="form-hint">ปกติ 14 วัน</small>
+                            </div>
+                        </div>
+                    </div>
+                    
                     <!-- Installment Fields (hidden by default) -->
                     <div id="installmentFields" class="installment-fields" style="display:none;">
                         <div class="detail-grid" style="margin-top: 1rem;">
                             <div class="form-group">
                                 <label for="installmentMonths">จำนวนงวด</label>
                                 <select id="installmentMonths" name="installment_months" class="form-input">
-                                    <option value="3">3 งวด</option>
-                                    <option value="6">6 งวด</option>
-                                    <option value="10">10 งวด</option>
-                                    <option value="12">12 งวด</option>
+                                    <option value="3">3 งวด (ดอกเบี้ย 3%)</option>
                                 </select>
+                                <small class="form-hint">ผ่อนสูงสุด 3 งวด ดอกเบี้ย 3% ต่อเดือน</small>
                             </div>
                             <div class="form-group">
-                                <label for="downPayment">เงินดาวน์</label>
+                                <label for="downPayment">เงินดาวน์ (บาท) <span class="required">*</span></label>
                                 <input type="number" id="downPayment" name="down_payment" class="form-input" step="0.01"
                                        placeholder="เช่น 50000">
+                                <small class="form-hint">ขั้นต่ำ 30% ของราคาสินค้า</small>
+                            </div>
+                        </div>
+                        <div id="installmentSummary" class="installment-summary" style="margin-top: 1rem; padding: 1rem; background: #f8f9fa; border-radius: 8px; display: none;">
+                            <h5 style="margin: 0 0 0.5rem;">📊 สรุปยอดผ่อน:</h5>
+                            <div id="installmentCalc"></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Shipping Method Section -->
+                <div class="detail-section">
+                    <h4 class="detail-section-title">🚚 วิธีจัดส่ง</h4>
+                    <div class="form-group">
+                        <select id="shippingMethod" name="shipping_method" class="form-input" onchange="toggleShippingFields()">
+                            <option value="pickup">🏪 รับหน้าร้าน</option>
+                            <option value="post">📮 ส่งไปรษณีย์ (EMS/Kerry)</option>
+                            <option value="grab">🏍️ Grab/Lalamove</option>
+                        </select>
+                    </div>
+                    <div id="shippingAddressFields" style="display: none; margin-top: 1rem;">
+                        <div class="form-group">
+                            <label for="shippingAddress">ที่อยู่จัดส่ง <span class="required">*</span></label>
+                            <textarea id="shippingAddress" name="shipping_address" class="form-input" rows="3" 
+                                      placeholder="ชื่อ-สกุล, ที่อยู่, เบอร์โทร..."></textarea>
+                        </div>
+                        <div class="detail-grid">
+                            <div class="form-group">
+                                <label for="shippingFee">ค่าจัดส่ง (บาท)</label>
+                                <input type="number" id="shippingFee" name="shipping_fee" class="form-input" step="0.01"
+                                       value="0" placeholder="0">
+                                <small class="form-hint">ถ้าฟรี ใส่ 0</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="trackingNumber">เลขพัสดุ (ใส่ภายหลังได้)</label>
+                                <input type="text" id="trackingNumber" name="tracking_number" class="form-input"
+                                       placeholder="เช่น TH12345678">
                             </div>
                         </div>
                     </div>

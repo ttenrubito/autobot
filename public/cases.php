@@ -934,8 +934,15 @@ async function viewCase(id) {
                 <button class="btn btn-outline" style="flex: 1;" onclick="closeViewCaseModal()">
                     <i class="fas fa-times"></i> ปิด
                 </button>
+                <button class="btn btn-warning" style="flex: 1;" onclick="createOrderFromCase()">
+                    <i class="fas fa-shopping-cart"></i> สร้าง Order
+                </button>
             </div>
         `;
+        
+        // Store case data for creating order
+        window.currentCaseData = c;
+        
     } catch (e) {
         console.error('viewCase error:', e);
         document.getElementById('viewCaseBody').innerHTML = `
@@ -977,6 +984,75 @@ function formatDateTime(dateStr) {
     } catch (e) {
         return dateStr;
     }
+}
+
+/**
+ * Create Order from current Case data
+ */
+function createOrderFromCase() {
+    const c = window.currentCaseData;
+    if (!c) {
+        alert('ไม่พบข้อมูล Case');
+        return;
+    }
+    
+    // Parse slots from case
+    const slots = c.slots ? (typeof c.slots === 'string' ? JSON.parse(c.slots) : c.slots) : {};
+    
+    // Parse products_interested for additional data
+    let productInfo = {};
+    if (c.products_interested) {
+        try {
+            const products = typeof c.products_interested === 'string' 
+                ? JSON.parse(c.products_interested) 
+                : c.products_interested;
+            if (Array.isArray(products) && products.length > 0) {
+                productInfo = products[0]; // Use first product
+            }
+        } catch(e) {}
+    }
+    
+    // Build query params from case slots
+    const params = new URLSearchParams();
+    params.set('from_case', c.id);
+    
+    // Product info from slots or products_interested
+    const productName = slots.product_name || productInfo.product_name || '';
+    const productCode = slots.product_ref_id || slots.product_code || productInfo.product_ref_id || c.product_ref_id || '';
+    const productPrice = slots.product_price || productInfo.product_price || slots.deposit_amount || '';
+    
+    if (productName) params.set('product_name', productName);
+    if (productCode) params.set('product_code', productCode);
+    if (productPrice) params.set('total_amount', productPrice);
+    if (slots.down_payment_amount) params.set('down_payment', slots.down_payment_amount);
+    
+    // Customer info
+    const customerName = slots.customer_name || c.customer_name || '';
+    const customerPhone = slots.customer_phone || '';
+    
+    if (customerName) params.set('customer_name', customerName);
+    if (customerPhone) params.set('customer_phone', customerPhone);
+    if (c.customer_id) params.set('customer_id', c.customer_id);
+    
+    // Platform/source
+    if (c.platform) params.set('source', c.platform);
+    if (c.external_user_id) params.set('external_user_id', c.external_user_id);
+    
+    // Payment type from case_type
+    if (c.case_type === 'payment_installment') {
+        params.set('payment_type', 'installment');
+    } else if (c.case_type === 'payment_savings') {
+        params.set('payment_type', 'savings');
+    } else {
+        params.set('payment_type', 'full');
+    }
+    
+    // Notes with case reference
+    const notes = `จากเคส #${c.id} - ${c.case_type || ''}`;
+    params.set('notes', notes);
+    
+    // Redirect to orders page with prefilled data
+    window.location.href = PATH.page('orders.php') + '?create=1&' + params.toString();
 }
 
 // Load on page ready

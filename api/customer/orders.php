@@ -480,6 +480,20 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
     $customerPhone = trim($input['customer_phone'] ?? '');
     $note = trim($input['note'] ?? ($input['notes'] ?? ''));
     $unitPrice = $totalAmount / $quantity;
+    
+    // Deposit-specific fields
+    $depositAmount = floatval($input['deposit_amount'] ?? 0);
+    $depositExpiry = $input['deposit_expiry'] ?? null;
+    
+    // Installment-specific fields  
+    $downPayment = floatval($input['down_payment'] ?? 0);
+    $installmentMonths = intval($input['installment_months'] ?? 3);
+    
+    // Shipping fields
+    $shippingMethod = trim($input['shipping_method'] ?? 'pickup');
+    $shippingAddress = trim($input['shipping_address'] ?? '');
+    $shippingFee = floatval($input['shipping_fee'] ?? 0);
+    $trackingNumber = trim($input['tracking_number'] ?? '');
 
     // Determine if we have order_type (new) or payment_type (old)
     $hasOrderTypeCol = isset($columns['order_type']);
@@ -491,12 +505,37 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
             $orderType = 'full_payment';
         if ($orderType === 'savings')
             $orderType = 'savings_completion';
+        // Keep deposit and installment as-is
     } else {
         // Has payment_type column - use old values  
         if ($orderType === 'full_payment')
             $orderType = 'full';
         if ($orderType === 'savings_completion')
             $orderType = 'full';
+        // Keep deposit and installment as-is
+    }
+    
+    // Determine initial status based on order type
+    $initialStatus = 'pending';
+    $paidAmount = 0;
+    $paymentStatus = 'unpaid';
+    
+    if ($orderType === 'deposit') {
+        // Deposit order: partially paid, waiting for balance
+        $initialStatus = 'pending_balance';
+        $paidAmount = $depositAmount;
+        $paymentStatus = $depositAmount > 0 ? 'partial' : 'unpaid';
+        // Append deposit info to notes
+        $depositInfo = "\n\n--- มัดจำ ---\nยอดมัดจำ: " . number_format($depositAmount, 2) . " บาท";
+        if ($depositExpiry) {
+            $depositInfo .= "\nกันสินค้าถึง: " . $depositExpiry;
+        }
+        $note .= $depositInfo;
+    } elseif ($orderType === 'installment') {
+        // Installment order: down payment received, waiting for installments
+        $initialStatus = 'pending_installment';
+        $paidAmount = $downPayment;
+        $paymentStatus = $downPayment > 0 ? 'partial' : 'unpaid';
     }
 
     try {
@@ -512,7 +551,7 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
                 'status'
             ];
             $insertVals = ['?', '?', '?', '?', '?'];
-            $insertParams = [$orderNumber, $user_id, $orderType, $totalAmount, 'pending'];
+            $insertParams = [$orderNumber, $user_id, $orderType, $totalAmount, $initialStatus];
 
             // Add optional columns if they exist
             if (isset($columns['subtotal'])) {
@@ -522,11 +561,13 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
             }
             if (isset($columns['paid_amount'])) {
                 $insertCols[] = 'paid_amount';
-                $insertVals[] = '0';
+                $insertVals[] = '?';
+                $insertParams[] = $paidAmount;
             }
             if (isset($columns['payment_status'])) {
                 $insertCols[] = 'payment_status';
-                $insertVals[] = "'unpaid'";
+                $insertVals[] = '?';
+                $insertParams[] = $paymentStatus;
             }
             if (isset($columns['customer_name'])) {
                 $insertCols[] = 'customer_name';
@@ -537,6 +578,38 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
                 $insertCols[] = 'customer_phone';
                 $insertVals[] = '?';
                 $insertParams[] = $customerPhone ?: null;
+            }
+            // Installment-specific columns
+            if (isset($columns['installment_months']) && $orderType === 'installment') {
+                $insertCols[] = 'installment_months';
+                $insertVals[] = '?';
+                $insertParams[] = $installmentMonths;
+            }
+            if (isset($columns['down_payment']) && $orderType === 'installment') {
+                $insertCols[] = 'down_payment';
+                $insertVals[] = '?';
+                $insertParams[] = $downPayment;
+            }
+            // Shipping-specific columns
+            if (isset($columns['shipping_method'])) {
+                $insertCols[] = 'shipping_method';
+                $insertVals[] = '?';
+                $insertParams[] = $shippingMethod;
+            }
+            if (isset($columns['shipping_address']) && $shippingMethod !== 'pickup') {
+                $insertCols[] = 'shipping_address';
+                $insertVals[] = '?';
+                $insertParams[] = $shippingAddress ?: null;
+            }
+            if (isset($columns['shipping_fee']) && $shippingFee > 0) {
+                $insertCols[] = 'shipping_fee';
+                $insertVals[] = '?';
+                $insertParams[] = $shippingFee;
+            }
+            if (isset($columns['tracking_number']) && !empty($trackingNumber)) {
+                $insertCols[] = 'tracking_number';
+                $insertVals[] = '?';
+                $insertParams[] = $trackingNumber;
             }
             $insertCols[] = $noteCol;
             $insertVals[] = '?';
@@ -604,6 +677,93 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
             $stmt->execute($insertParams);
 
             $orderId = $pdo->lastInsertId();
+        }
+        
+        // =========================================================================
+        // Create Installment Records (if installment order)
+        // 3 งวด, ดอกเบี้ย 3% ต่อเดือน
+        // =========================================================================
+        $installmentId = null;
+        if ($orderType === 'installment' && $orderId) {
+            try {
+                // Check if installments table exists
+                $hasInstallments = false;
+                try {
+                    $stmtCheck = $pdo->query("SHOW TABLES LIKE 'installments'");
+                    $hasInstallments = $stmtCheck->rowCount() > 0;
+                } catch (Exception $e) {}
+                
+                if ($hasInstallments) {
+                    $remaining = $totalAmount - $downPayment;
+                    $interestRate = 0.03; // 3% per month
+                    $months = 3;
+                    $monthlyPrincipal = $remaining / $months;
+                    $monthlyInterest = $remaining * $interestRate;
+                    $monthlyPayment = $monthlyPrincipal + $monthlyInterest;
+                    $totalInterest = $monthlyInterest * $months;
+                    $grandTotal = $totalAmount + $totalInterest;
+                    
+                    // Generate installment number
+                    $installmentNo = 'INS-' . date('Ymd') . '-' . strtoupper(substr(bin2hex(random_bytes(3)), 0, 5));
+                    
+                    // Insert main installment record
+                    $stmt = $pdo->prepare("
+                        INSERT INTO installments (
+                            installment_no, order_id, customer_id, tenant_id,
+                            product_name, product_code, total_amount, down_payment,
+                            remaining_amount, total_terms, interest_rate,
+                            monthly_payment, total_interest, grand_total,
+                            status, created_at, updated_at
+                        ) VALUES (?, ?, ?, 'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NOW(), NOW())
+                    ");
+                    $stmt->execute([
+                        $installmentNo,
+                        $orderId,
+                        $user_id,
+                        $productName,
+                        $productCode ?: null,
+                        $totalAmount,
+                        $downPayment,
+                        $remaining,
+                        $months,
+                        $interestRate * 100, // Store as percentage
+                        $monthlyPayment,
+                        $totalInterest,
+                        $grandTotal
+                    ]);
+                    
+                    $installmentId = $pdo->lastInsertId();
+                    
+                    // Check if installment_payments table exists for payment schedule
+                    $hasPayments = false;
+                    try {
+                        $stmtCheck = $pdo->query("SHOW TABLES LIKE 'installment_payments'");
+                        $hasPayments = $stmtCheck->rowCount() > 0;
+                    } catch (Exception $e) {}
+                    
+                    if ($hasPayments) {
+                        // Create 3 payment schedule records
+                        for ($i = 1; $i <= $months; $i++) {
+                            $dueDate = date('Y-m-d', strtotime("+{$i} month"));
+                            $stmt = $pdo->prepare("
+                                INSERT INTO installment_payments (
+                                    installment_id, term_number, amount, due_date, status, created_at
+                                ) VALUES (?, ?, ?, ?, 'pending', NOW())
+                            ");
+                            $stmt->execute([$installmentId, $i, $monthlyPayment, $dueDate]);
+                        }
+                    }
+                    
+                    // Update order with installment_id
+                    if (isset($columns['installment_id'])) {
+                        $stmt = $pdo->prepare("UPDATE orders SET installment_id = ? WHERE id = ?");
+                        $stmt->execute([$installmentId, $orderId]);
+                    }
+                }
+            } catch (Exception $instEx) {
+                error_log("Installment creation error for order {$orderNumber}: " . $instEx->getMessage());
+                // Don't fail the order if installment creation fails
+            }
         }
 
         $pdo->commit();

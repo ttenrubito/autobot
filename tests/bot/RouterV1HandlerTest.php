@@ -140,6 +140,9 @@ class RouterV1HandlerTest extends TestCase
             'message' => ['text' => 'มีสินค้าไหม', 'message_type' => 'text'],
             'bot_profile' => [
                 'config' => json_encode([
+                    'session_policy' => [
+                        'dedupe_enabled' => false
+                    ],
                     'anti_spam' => [
                         'enabled' => true,
                         'repeat_threshold' => 2,
@@ -187,28 +190,36 @@ class RouterV1HandlerTest extends TestCase
             'bot_profile' => [
                 'config' => json_encode([
                     'response_templates' => ['greeting' => 'สวัสดี'],
-                    'llm' => ['enabled' => false]
+                    'llm' => ['enabled' => false],
+                    'admin_handoff' => ['timeout_seconds' => 600] // 10 min timeout
                 ])
             ]
         ]);
 
-        // Mock session with recent admin message (within 1 hour)
-        $this->mockDb->setMockData('queryOne', null);
+        // Admin sent message 2 minutes ago (within 10 minute timeout)
+        $recentAdminTime = date('Y-m-d H:i:s', strtotime('-2 minutes'));
         
-        // First call: session lookup
+        // Session data with recent admin message
         $sessionData = [
             'id' => 1,
             'channel_id' => 1,
             'external_user_id' => 'user123',
-            'last_admin_message_at' => date('Y-m-d H:i:s', strtotime('-30 minutes')) // 30 min ago
+            'last_admin_message_at' => $recentAdminTime,
+            'last_intent' => null,
+            'last_slots_json' => null
+        ];
+        
+        // Row for admin timeout check
+        $adminCheckRow = [
+            'last_admin_message_at' => $recentAdminTime
         ];
 
         // Mock multiple queryOne calls
         $mockDb = $this->createMock(Database::class);
         $mockDb->method('queryOne')
             ->willReturnOnConsecutiveCalls(
-                $sessionData, // session lookup
-                ['last_admin_message_at' => date('Y-m-d H:i:s', strtotime('-30 minutes'))] // admin timeout check
+                $sessionData, // 1st: findOrCreateSession lookup
+                $adminCheckRow // 2nd: admin handoff check query
             );
         $mockDb->method('execute')->willReturn(true);
 

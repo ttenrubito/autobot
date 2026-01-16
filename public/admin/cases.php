@@ -155,6 +155,9 @@ include('../../includes/admin/sidebar.php');
             <button class="btn btn-success" id="btnTakeOver" onclick="takeOverCase()">
                 <i class="fas fa-hand-paper"></i> รับเคส
             </button>
+            <button class="btn btn-warning" id="btnCreateOrder" onclick="createOrderFromCase()">
+                <i class="fas fa-shopping-cart"></i> สร้าง Order
+            </button>
             <button class="btn btn-primary" id="btnReplyChat" onclick="openReplyBox()">
                 <i class="fas fa-reply"></i> ตอบกลับ
             </button>
@@ -270,6 +273,7 @@ include('../../includes/admin/sidebar.php');
 
 <script>
 let currentCaseId = null;
+let currentCaseData = null;
 let searchTimeout = null;
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -482,11 +486,66 @@ function renderCaseDetail(caseData) {
     
     // Show/hide buttons based on status
     document.getElementById('btnTakeOver').style.display = (c.status === 'pending_admin') ? 'inline-block' : 'none';
+    
+    // Store case data for creating order
+    currentCaseData = c;
+    
+    // Show Create Order button for open/pending cases (not closed)
+    const canCreateOrder = c.status !== 'closed';
+    document.getElementById('btnCreateOrder').style.display = canCreateOrder ? 'inline-block' : 'none';
 }
 
 function closeCaseModal() {
     document.getElementById('caseDetailModal').classList.remove('active');
     currentCaseId = null;
+    currentCaseData = null;
+}
+
+function createOrderFromCase() {
+    if (!currentCaseData) {
+        showToast('ไม่พบข้อมูลเคส', 'error');
+        return;
+    }
+    
+    const c = currentCaseData;
+    const slots = c.slots ? (typeof c.slots === 'string' ? JSON.parse(c.slots) : c.slots) : {};
+    
+    // Build query params from case slots
+    const params = new URLSearchParams();
+    params.set('from_case', c.id);
+    
+    // Product info
+    if (slots.product_name) params.set('product_name', slots.product_name);
+    if (slots.product_ref_id) params.set('product_code', slots.product_ref_id);
+    if (slots.product_code) params.set('product_code', slots.product_code);
+    if (slots.product_price) params.set('total_amount', slots.product_price);
+    if (slots.deposit_amount) params.set('total_amount', slots.deposit_amount);
+    if (slots.down_payment_amount) params.set('down_payment', slots.down_payment_amount);
+    
+    // Customer info
+    if (slots.customer_name) params.set('customer_name', slots.customer_name);
+    if (slots.customer_phone) params.set('customer_phone', slots.customer_phone);
+    if (c.customer_id) params.set('customer_id', c.customer_id);
+    
+    // Platform/source
+    if (c.platform) params.set('source', c.platform);
+    if (c.external_user_id) params.set('external_user_id', c.external_user_id);
+    
+    // Payment type from intent
+    if (c.case_type === 'payment_installment') {
+        params.set('payment_type', 'installment');
+    } else if (c.case_type === 'payment_savings') {
+        params.set('payment_type', 'savings');
+    } else {
+        params.set('payment_type', 'full');
+    }
+    
+    // Notes with case reference
+    const notes = `จากเคส #${c.id} - ${c.case_type || ''}`;
+    params.set('notes', notes);
+    
+    // Redirect to orders page with prefilled data
+    window.location.href = '../orders.php?create=1&' + params.toString();
 }
 
 async function takeOverCase() {
