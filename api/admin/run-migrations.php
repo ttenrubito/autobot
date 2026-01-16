@@ -76,11 +76,10 @@ try {
     // Migration 3: Add payment notification templates
     // =====================================================
     $results[] = runMigration($pdo, 'Insert payment_verified template', "
-        INSERT INTO notification_templates (template_key, template_name, description, line_template, facebook_template, is_active)
+        INSERT INTO notification_templates (template_key, template_name, line_template, facebook_template, is_active)
         VALUES (
             'payment_verified', 
-            'Payment Verified', 
-            'Sent when payment is approved',
+            'Payment Verified',
             '✅ การชำระเงินได้รับการอนุมัติแล้ว\n\n📋 เลขที่: {{payment_no}}\n💰 จำนวน: ฿{{amount}}\n📅 วันที่: {{payment_date}}\n\nขอบคุณที่ใช้บริการค่ะ 🙏',
             '✅ การชำระเงินได้รับการอนุมัติแล้ว\n\n📋 เลขที่: {{payment_no}}\n💰 จำนวน: ฿{{amount}}\n\nขอบคุณที่ใช้บริการค่ะ 🙏',
             1
@@ -89,11 +88,10 @@ try {
     ");
 
     $results[] = runMigration($pdo, 'Insert payment_rejected template', "
-        INSERT INTO notification_templates (template_key, template_name, description, line_template, facebook_template, is_active)
+        INSERT INTO notification_templates (template_key, template_name, line_template, facebook_template, is_active)
         VALUES (
             'payment_rejected', 
-            'Payment Rejected', 
-            'Sent when payment is rejected',
+            'Payment Rejected',
             '❌ การชำระเงินถูกปฏิเสธ\n\n📋 เลขที่: {{payment_no}}\n💰 จำนวน: ฿{{amount}}\n📅 วันที่: {{payment_date}}\n\n❗ เหตุผล: {{reason}}\n\nกรุณาติดต่อร้านค้าหากมีข้อสงสัยค่ะ',
             '❌ การชำระเงินถูกปฏิเสธ\n\n📋 เลขที่: {{payment_no}}\n💰 จำนวน: ฿{{amount}}\n\n❗ เหตุผล: {{reason}}\n\nกรุณาติดต่อร้านค้าหากมีข้อสงสัยค่ะ',
             1
@@ -117,9 +115,9 @@ try {
     );
 
     // Count results
-    $success = count(array_filter($results, fn($r) => $r['success']));
-    $failed = count(array_filter($results, fn($r) => !$r['success'] && !$r['skipped']));
-    $skipped = count(array_filter($results, fn($r) => $r['skipped'] ?? false));
+    $success = count(array_filter($results, fn($r) => $r['success'] && empty($r['skipped'])));
+    $failed = count(array_filter($results, fn($r) => !$r['success']));
+    $skipped = count(array_filter($results, fn($r) => !empty($r['skipped'])));
 
     echo json_encode([
         'success' => true,
