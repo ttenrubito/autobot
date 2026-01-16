@@ -502,7 +502,7 @@
       "image_search": "/api/searchImage",
       "receipt_get": "/api/getReceipt",
       "installment_payment_upsert": "/api/installment/payment",
-      "product_search": "/api/products/search",
+      "product_search": "/api/v1/products/search",
       "order_status": "/api/orders/status",
       "npd_search": "/api/products/npd-search",
       "case_create": "/api/bot/cases",
