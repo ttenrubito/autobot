@@ -28,7 +28,7 @@ class RouterV2BoxDesignHandler extends RouterV1Handler
      */
     public function handleMessage(array $context): array
     {
-        $traceId = (string)($context['trace_id'] ?? '');
+        $traceId = (string) ($context['trace_id'] ?? '');
         if ($traceId === '') {
             $traceId = bin2hex(random_bytes(8));
             $context['trace_id'] = $traceId;
@@ -66,7 +66,7 @@ class RouterV2BoxDesignHandler extends RouterV1Handler
 
             // Get message
             $message = $context['message'] ?? [];
-            $text = trim((string)($message['text'] ?? ''));
+            $text = trim((string) ($message['text'] ?? ''));
             $messageType = $message['message_type'] ?? 'text';
 
             // ✅ DEBUG: Log incoming text for admin command detection
@@ -86,10 +86,10 @@ class RouterV2BoxDesignHandler extends RouterV1Handler
             $session = null;
             $sessionId = null;
             if ($channelId && $externalUserId) {
-                $session = $this->findOrCreateSession((int)$channelId, (string)$externalUserId);
+                $session = $this->findOrCreateSession((int) $channelId, (string) $externalUserId);
                 $sessionId = $session['id'] ?? null;
                 if ($sessionId) {
-                    $context['session_id'] = (int)$sessionId;
+                    $context['session_id'] = (int) $sessionId;
                 }
             }
 
@@ -108,7 +108,7 @@ class RouterV2BoxDesignHandler extends RouterV1Handler
 
             $lastQuestionKey = null;
             if (is_array($lastSlots) && isset($lastSlots['last_question_key'])) {
-                $lastQuestionKey = (string)$lastSlots['last_question_key'];
+                $lastQuestionKey = (string) $lastSlots['last_question_key'];
             }
 
             // =========================================================
@@ -147,7 +147,7 @@ class RouterV2BoxDesignHandler extends RouterV1Handler
                     ]);
                 }
             }
-            
+
             if ($adminCmdMatched && $sessionId) {
                 Logger::info('[V2_BOXDESIGN] Manual admin command detected', [
                     'trace_id' => $traceId,
@@ -194,22 +194,24 @@ class RouterV2BoxDesignHandler extends RouterV1Handler
                     'channel_id' => $channelId,
                     'text_preview' => substr($text, 0, 50),
                 ]);
-                
+
                 // Let parent handle admin message (will update last_admin_message_at and return null)
                 return parent::handleMessage($context);
             }
 
-            // ✅ Check if bot should pause due to recent admin activity (1 hour)
+            // ✅ Check if bot should pause due to recent admin activity (configurable timeout)
             if ($sessionId) {
-                $pauseMinutes = 60; // 1 hour pause
-                $pauseUntil = date('Y-m-d H:i:s', strtotime("-{$pauseMinutes} minutes"));
-                
+                $handoffCfg = $config['handoff'] ?? [];
+                $pauseSeconds = (int) ($handoffCfg['timeout_seconds'] ?? 300); // Default 5 min
+                $pauseMinutes = ceil($pauseSeconds / 60);
+                $pauseUntil = date('Y-m-d H:i:s', time() - $pauseSeconds);
+
                 $adminRecent = $this->db->queryOne(
                     "SELECT last_admin_message_at FROM chat_sessions 
                      WHERE id = ? AND last_admin_message_at IS NOT NULL AND last_admin_message_at >= ?",
                     [$sessionId, $pauseUntil]
                 );
-                
+
                 if ($adminRecent) {
                     Logger::info('[V2_BOXDESIGN] Bot paused - admin handoff active', [
                         'trace_id' => $traceId,
@@ -217,14 +219,14 @@ class RouterV2BoxDesignHandler extends RouterV1Handler
                         'last_admin_at' => $adminRecent['last_admin_message_at'] ?? null,
                         'pause_until' => $pauseUntil,
                     ]);
-                    
-                    $elapsedMs = (int)round((microtime(true) - $t0) * 1000);
+
+                    $elapsedMs = (int) round((microtime(true) - $t0) * 1000);
                     Logger::info('[V2_BOXDESIGN_END]', [
                         'trace_id' => $traceId,
                         'elapsed_ms' => $elapsedMs,
                         'reason' => 'admin_handoff_bot_paused',
                     ]);
-                    
+
                     return [
                         'reply_text' => null,
                         'actions' => [],
@@ -258,7 +260,7 @@ class RouterV2BoxDesignHandler extends RouterV1Handler
                 }
                 $this->logBotReply($context, $greeting, 'text');
 
-                $elapsedMs = (int)round((microtime(true) - $t0) * 1000);
+                $elapsedMs = (int) round((microtime(true) - $t0) * 1000);
                 Logger::info('[V2_BOXDESIGN_END]', [
                     'trace_id' => $traceId,
                     'elapsed_ms' => $elapsedMs,
@@ -278,11 +280,16 @@ class RouterV2BoxDesignHandler extends RouterV1Handler
             // User asks "ทำอะไรได้บ้าง" → immediate answer
             // =========================================================
             $tLower = mb_strtolower($text, 'UTF-8');
-            $lastBotQuestion = is_array($lastSlots) ? (string)($lastSlots['last_bot_question'] ?? '') : '';
+            $lastBotQuestion = is_array($lastSlots) ? (string) ($lastSlots['last_bot_question'] ?? '') : '';
 
             $isCapabilitiesQ = $this->containsAny($tLower, [
-                'ทำอะไรได้บ้าง', 'ช่วยอะไรได้บ้าง', 'มีอะไรบ้าง', 'แนะนำ',
-                'ทำได้ไหม', 'ทำอะไรได้', 'ทำงานอะไรได้'
+                'ทำอะไรได้บ้าง',
+                'ช่วยอะไรได้บ้าง',
+                'มีอะไรบ้าง',
+                'แนะนำ',
+                'ทำได้ไหม',
+                'ทำอะไรได้',
+                'ทำงานอะไรได้'
             ]);
 
             if ($isCapabilitiesQ && !empty($templates['capabilities_general'])) {
@@ -293,12 +300,12 @@ class RouterV2BoxDesignHandler extends RouterV1Handler
                     'trace_id' => $traceId,
                 ]);
 
-                $reply = (string)$templates['capabilities_general'];
+                $reply = (string) $templates['capabilities_general'];
 
                 // Record to prevent loops
                 $lastSlots['last_bot_question'] = 'capabilities_general';
                 $lastSlots['last_question_key'] = 'capabilities';
-                $this->updateSessionState((int)$sessionId, $lastIntent ?: null, $lastSlots);
+                $this->updateSessionState((int) $sessionId, $lastIntent ?: null, $lastSlots);
 
                 $meta['reason'] = 'boxdesign_answer_first_capabilities';
                 if ($reply !== '') {
@@ -306,7 +313,7 @@ class RouterV2BoxDesignHandler extends RouterV1Handler
                 }
                 $this->logBotReply($context, $reply, 'text');
 
-                $elapsedMs = (int)round((microtime(true) - $t0) * 1000);
+                $elapsedMs = (int) round((microtime(true) - $t0) * 1000);
                 Logger::info('[V2_BOXDESIGN_END]', [
                     'trace_id' => $traceId,
                     'elapsed_ms' => $elapsedMs,
@@ -321,7 +328,12 @@ class RouterV2BoxDesignHandler extends RouterV1Handler
             // Detect pricing questions and provide context-aware answers
             // =========================================================
             $isPriceQ = $this->containsAny($tLower, [
-                'ราคา', 'คิดราคายังไง', 'งบ', 'เท่าไหร่', 'คิดเงิน', 'ค่าบริการ'
+                'ราคา',
+                'คิดราคายังไง',
+                'งบ',
+                'เท่าไหร่',
+                'คิดเงิน',
+                'ค่าบริการ'
             ]);
 
             if ($isPriceQ) {
@@ -339,11 +351,11 @@ class RouterV2BoxDesignHandler extends RouterV1Handler
                     'trace_id' => $traceId,
                 ]);
 
-                $reply = (string)($templates[$tplKey] ?? '');
+                $reply = (string) ($templates[$tplKey] ?? '');
                 if ($reply !== '') {
                     $lastSlots['last_bot_question'] = $tplKey;
                     $lastSlots['last_question_key'] = 'pricing';
-                    $this->updateSessionState((int)$sessionId, $lastIntent ?: null, $lastSlots);
+                    $this->updateSessionState((int) $sessionId, $lastIntent ?: null, $lastSlots);
 
                     $meta['reason'] = 'boxdesign_answer_first_pricing';
                     if ($sessionId) {
@@ -351,7 +363,7 @@ class RouterV2BoxDesignHandler extends RouterV1Handler
                     }
                     $this->logBotReply($context, $reply, 'text');
 
-                    $elapsedMs = (int)round((microtime(true) - $t0) * 1000);
+                    $elapsedMs = (int) round((microtime(true) - $t0) * 1000);
                     Logger::info('[V2_BOXDESIGN_END]', [
                         'trace_id' => $traceId,
                         'elapsed_ms' => $elapsedMs,
@@ -374,9 +386,9 @@ class RouterV2BoxDesignHandler extends RouterV1Handler
                         'trace_id' => $traceId,
                     ]);
 
-                    $reply = (string)$templates['capabilities_general'];
+                    $reply = (string) $templates['capabilities_general'];
                     $lastSlots['last_bot_question'] = 'capabilities_general';
-                    $this->updateSessionState((int)$sessionId, $lastIntent ?: null, $lastSlots);
+                    $this->updateSessionState((int) $sessionId, $lastIntent ?: null, $lastSlots);
 
                     $meta['reason'] = 'boxdesign_break_repeat_question';
                     if ($sessionId) {
@@ -384,7 +396,7 @@ class RouterV2BoxDesignHandler extends RouterV1Handler
                     }
                     $this->logBotReply($context, $reply, 'text');
 
-                    $elapsedMs = (int)round((microtime(true) - $t0) * 1000);
+                    $elapsedMs = (int) round((microtime(true) - $t0) * 1000);
                     Logger::info('[V2_BOXDESIGN_END]', [
                         'trace_id' => $traceId,
                         'elapsed_ms' => $elapsedMs,
@@ -416,7 +428,7 @@ class RouterV2BoxDesignHandler extends RouterV1Handler
                     $lastSlots['business_type'] = $answer;
                     $lastSlots['last_question_key'] = null;
 
-                    $this->updateSessionState((int)$sessionId, $lastIntent ?: null, $lastSlots);
+                    $this->updateSessionState((int) $sessionId, $lastIntent ?: null, $lastSlots);
                 }
             }
 
@@ -436,7 +448,7 @@ class RouterV2BoxDesignHandler extends RouterV1Handler
                 $result['meta']['handler'] = 'router_v2_boxdesign';
             }
 
-            $elapsedMs = (int)round((microtime(true) - $t0) * 1000);
+            $elapsedMs = (int) round((microtime(true) - $t0) * 1000);
             Logger::info('[V2_BOXDESIGN_END]', [
                 'trace_id' => $traceId,
                 'elapsed_ms' => $elapsedMs,

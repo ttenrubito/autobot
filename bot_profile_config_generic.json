@@ -11,7 +11,10 @@
     "description": "จิวเวลรี่เพชรแท้ & นาฬิกาแบรนด์เนมมือสอง ประสบการณ์ 25+ ปี",
     "address": "ซอยละลายทรัพย์ สีลม5 ตึกทรินิตี้มอลล์1 ห้อง 41-42",
     "hours": "จันทร์-เสาร์ 10:00-16:00 น. (หยุดอาทิตย์)",
-    "phones": ["085-196-5466", "085-445-5516"],
+    "phones": [
+      "085-196-5466",
+      "085-445-5516"
+    ],
     "facebook": "fb.com/henghengshoporiginal",
     "google_maps": "https://maps.app.goo.gl/YyRLT4TS2XPjB5oo9",
     "transport": "BTS สถานีช่องนนทรี ประตู 4 / ขับรถเข้าซอยนราธิวาส3 จอดตึก Trinity Complex",
@@ -27,8 +30,23 @@
         "number": "8000029282"
       }
     ],
-    "product_categories": ["watch", "ring", "necklace", "bracelet", "earring", "pendant", "brooch", "amulet", "set", "keychain"],
-    "brands": ["Rolex", "Tag Heuer", "Omega"]
+    "product_categories": [
+      "watch",
+      "ring",
+      "necklace",
+      "bracelet",
+      "earring",
+      "pendant",
+      "brooch",
+      "amulet",
+      "set",
+      "keychain"
+    ],
+    "brands": [
+      "Rolex",
+      "Tag Heuer",
+      "Omega"
+    ]
   },
   "routing_policy": {
     "default_router": "llm_intent"
@@ -36,15 +54,36 @@
   "case_management": {
     "enabled": true,
     "auto_create_case": true,
-    "case_types": ["product_inquiry", "payment_full", "payment_installment", "payment_savings", "deposit", "pawn", "repair", "return_exchange"],
+    "case_types": [
+      "product_inquiry",
+      "payment_full",
+      "payment_installment",
+      "payment_savings",
+      "deposit",
+      "pawn",
+      "repair",
+      "return_exchange"
+    ],
     "admin_handoff_triggers": [
       "ขอส่วนลด",
       "ต่อรองราคา",
+      "ขอลดราคา",
+      "ลดได้ไหม",
       "call ดูสินค้า",
+      "video call",
+      "วิดีโอคอล",
       "นัดดูสินค้า",
+      "นัดดูของ",
       "ต้องการซื้อ",
       "สนใจซื้อ",
+      "จะซื้อ",
+      "ซื้อเลย",
+      "เอาเลย",
       "มัดจำ",
+      "จอง",
+      "จองไว้",
+      "ผ่อน",
+      "ผ่อนได้ไหม",
       "จำนำ",
       "ฝากจำนำ",
       "ต่อดอก",
@@ -53,8 +92,17 @@
       "เซอร์วิส",
       "เปลี่ยนสินค้า",
       "คืนสินค้า",
-      "ขอคืนเงิน"
+      "ขอคืนเงิน",
+      "ขอเลขบัญชี",
+      "เลขบัญชี",
+      "โอนเงิน",
+      "จะโอน",
+      "โอนได้เลย"
     ]
+  },
+  "handoff": {
+    "timeout_seconds": 300,
+    "message_on_resume": "AI กลับมาให้บริการแล้วค่ะ 🤖"
   },
   "response_templates": {
     "greeting": "สวัสดีค่ะ 😊 ยินดีต้อนรับค่ะ สนใจสินค้าอะไรดีคะ?",
@@ -98,19 +146,34 @@
       "slots": []
     },
     "product_lookup_by_code": {
-      "slots": ["product_code"]
+      "slots": [
+        "product_code"
+      ]
     },
     "product_lookup_by_image": {
-      "slots": ["image_url"]
+      "slots": [
+        "image_url"
+      ]
     },
     "product_availability": {
-      "slots": ["product_name"]
+      "slots": [
+        "product_name"
+      ]
     },
     "price_inquiry": {
-      "slots": ["product_name"]
+      "slots": [
+        "product_name"
+      ]
     },
     "payment_slip_verify": {
-      "slots": ["amount", "time", "sender_name", "payment_ref", "slip_image_url", "product_ref_id"]
+      "slots": [
+        "amount",
+        "time",
+        "sender_name",
+        "payment_ref",
+        "slip_image_url",
+        "product_ref_id"
+      ]
     },
     "installment_flow": {
       "slots": [
@@ -124,55 +187,126 @@
       ]
     },
     "installment_new": {
-      "slots": ["product_ref_id", "product_name", "customer_name", "customer_phone", "down_payment_amount"]
+      "slots": [
+        "product_ref_id",
+        "product_name",
+        "customer_name",
+        "customer_phone",
+        "down_payment_amount"
+      ]
     },
     "installment_pay": {
-      "slots": ["installment_id", "period_number", "amount", "slip_image_url"]
+      "slots": [
+        "installment_id",
+        "period_number",
+        "amount",
+        "slip_image_url"
+      ]
     },
     "installment_extend": {
-      "slots": ["installment_id", "extend_months", "interest_amount", "slip_image_url"]
+      "slots": [
+        "installment_id",
+        "extend_months",
+        "interest_amount",
+        "slip_image_url"
+      ]
     },
     "installment_inquiry": {
-      "slots": ["installment_id", "customer_phone"]
+      "slots": [
+        "installment_id",
+        "customer_phone"
+      ]
     },
     "savings_new": {
-      "slots": ["product_ref_id", "product_name", "target_amount", "customer_name", "customer_phone"]
+      "slots": [
+        "product_ref_id",
+        "product_name",
+        "target_amount",
+        "customer_name",
+        "customer_phone"
+      ]
     },
     "savings_deposit": {
-      "slots": ["savings_id", "amount", "slip_image_url"]
+      "slots": [
+        "savings_id",
+        "amount",
+        "slip_image_url"
+      ]
     },
     "savings_inquiry": {
-      "slots": ["savings_id", "customer_phone"]
+      "slots": [
+        "savings_id",
+        "customer_phone"
+      ]
     },
     "order_status": {
-      "slots": ["order_id", "customer_phone"]
+      "slots": [
+        "order_id",
+        "customer_phone"
+      ]
     },
     "deposit_new": {
-      "slots": ["product_ref_id", "product_name", "product_price", "deposit_amount", "customer_name", "customer_phone"]
+      "slots": [
+        "product_ref_id",
+        "product_name",
+        "product_price",
+        "deposit_amount",
+        "customer_name",
+        "customer_phone"
+      ]
     },
     "deposit_payment": {
-      "slots": ["deposit_id", "slip_image_url"]
+      "slots": [
+        "deposit_id",
+        "slip_image_url"
+      ]
     },
     "deposit_inquiry": {
-      "slots": ["deposit_id", "customer_phone"]
+      "slots": [
+        "deposit_id",
+        "customer_phone"
+      ]
     },
     "pawn_new": {
-      "slots": ["product_name", "appraisal_value", "customer_name", "customer_phone"]
+      "slots": [
+        "product_name",
+        "appraisal_value",
+        "customer_name",
+        "customer_phone"
+      ]
     },
     "pawn_pay_interest": {
-      "slots": ["pawn_id", "slip_image_url"]
+      "slots": [
+        "pawn_id",
+        "slip_image_url"
+      ]
     },
     "pawn_redeem": {
-      "slots": ["pawn_id", "slip_image_url"]
+      "slots": [
+        "pawn_id",
+        "slip_image_url"
+      ]
     },
     "pawn_inquiry": {
-      "slots": ["pawn_id", "customer_phone"]
+      "slots": [
+        "pawn_id",
+        "customer_phone"
+      ]
     },
     "repair_new": {
-      "slots": ["product_name", "product_brand", "issue_description", "customer_name", "customer_phone"]
+      "slots": [
+        "product_name",
+        "product_brand",
+        "issue_description",
+        "customer_name",
+        "customer_phone"
+      ]
     },
     "repair_inquiry": {
-      "slots": ["repair_id", "customer_phone"]
+      "slots": [
+        "repair_id",
+        "customer_phone"
+      ]
     }
   },
   "slot_questions": {
@@ -192,67 +326,170 @@
   },
   "case_flows": {
     "product_inquiry": {
-      "trigger_intents": ["product_lookup_by_code", "product_lookup_by_image", "product_availability", "price_inquiry"],
-      "required_slots": ["product_ref_id"],
-      "optional_slots": ["customer_name", "customer_phone"],
-      "handoff_triggers": ["ขอส่วนลด", "ต่อรอง", "สนใจซื้อ", "มัดจำ", "call ดู", "นัดดู"],
+      "trigger_intents": [
+        "product_lookup_by_code",
+        "product_lookup_by_image",
+        "product_availability",
+        "price_inquiry"
+      ],
+      "required_slots": [
+        "product_ref_id"
+      ],
+      "optional_slots": [
+        "customer_name",
+        "customer_phone"
+      ],
+      "handoff_triggers": [
+        "ขอส่วนลด",
+        "ต่อรอง",
+        "สนใจซื้อ",
+        "มัดจำ",
+        "call ดู",
+        "นัดดู"
+      ],
       "next_action": "show_product_or_handoff"
     },
     "payment_full": {
-      "trigger_intents": ["payment_slip_verify"],
-      "required_slots": ["slip_image_url"],
-      "optional_slots": ["amount", "product_ref_id", "order_id"],
-      "auto_actions": ["ocr_slip", "create_draft_order_if_no_order"],
+      "trigger_intents": [
+        "payment_slip_verify"
+      ],
+      "required_slots": [
+        "slip_image_url"
+      ],
+      "optional_slots": [
+        "amount",
+        "product_ref_id",
+        "order_id"
+      ],
+      "auto_actions": [
+        "ocr_slip",
+        "create_draft_order_if_no_order"
+      ],
       "next_action": "pending_admin_verify"
     },
     "payment_installment": {
-      "trigger_intents": ["installment_flow", "installment_new", "installment_pay", "installment_extend", "installment_inquiry"],
-      "required_slots": ["action_type"],
+      "trigger_intents": [
+        "installment_flow",
+        "installment_new",
+        "installment_pay",
+        "installment_extend",
+        "installment_inquiry"
+      ],
+      "required_slots": [
+        "action_type"
+      ],
       "conditional_slots": {
-        "new": ["product_ref_id", "down_payment_amount"],
-        "pay": ["installment_id", "slip_image_url"],
-        "extend": ["installment_id", "slip_image_url"],
-        "inquiry": ["installment_id"]
+        "new": [
+          "product_ref_id",
+          "down_payment_amount"
+        ],
+        "pay": [
+          "installment_id",
+          "slip_image_url"
+        ],
+        "extend": [
+          "installment_id",
+          "slip_image_url"
+        ],
+        "inquiry": [
+          "installment_id"
+        ]
       },
       "next_action": "route_by_action_type"
     },
     "payment_savings": {
-      "trigger_intents": ["savings_new", "savings_deposit", "savings_inquiry"],
-      "required_slots": ["action_type"],
+      "trigger_intents": [
+        "savings_new",
+        "savings_deposit",
+        "savings_inquiry"
+      ],
+      "required_slots": [
+        "action_type"
+      ],
       "conditional_slots": {
-        "new": ["product_ref_id"],
-        "deposit": ["savings_id", "slip_image_url"],
-        "inquiry": ["savings_id"]
+        "new": [
+          "product_ref_id"
+        ],
+        "deposit": [
+          "savings_id",
+          "slip_image_url"
+        ],
+        "inquiry": [
+          "savings_id"
+        ]
       },
       "next_action": "route_by_action_type"
     },
     "deposit": {
-      "trigger_intents": ["deposit_new", "deposit_payment", "deposit_inquiry"],
-      "required_slots": ["action_type"],
+      "trigger_intents": [
+        "deposit_new",
+        "deposit_payment",
+        "deposit_inquiry"
+      ],
+      "required_slots": [
+        "action_type"
+      ],
       "conditional_slots": {
-        "new": ["product_ref_id", "product_name", "product_price"],
-        "pay": ["deposit_id", "slip_image_url"],
-        "inquiry": ["deposit_id"]
+        "new": [
+          "product_ref_id",
+          "product_name",
+          "product_price"
+        ],
+        "pay": [
+          "deposit_id",
+          "slip_image_url"
+        ],
+        "inquiry": [
+          "deposit_id"
+        ]
       },
       "next_action": "route_by_action_type"
     },
     "pawn": {
-      "trigger_intents": ["pawn_new", "pawn_pay_interest", "pawn_redeem", "pawn_inquiry"],
-      "required_slots": ["action_type"],
+      "trigger_intents": [
+        "pawn_new",
+        "pawn_pay_interest",
+        "pawn_redeem",
+        "pawn_inquiry"
+      ],
+      "required_slots": [
+        "action_type"
+      ],
       "conditional_slots": {
-        "new": ["product_name", "appraisal_value"],
-        "pay_interest": ["pawn_id", "slip_image_url"],
-        "redeem": ["pawn_id", "slip_image_url"],
-        "inquiry": ["pawn_id"]
+        "new": [
+          "product_name",
+          "appraisal_value"
+        ],
+        "pay_interest": [
+          "pawn_id",
+          "slip_image_url"
+        ],
+        "redeem": [
+          "pawn_id",
+          "slip_image_url"
+        ],
+        "inquiry": [
+          "pawn_id"
+        ]
       },
       "next_action": "route_by_action_type"
     },
     "repair": {
-      "trigger_intents": ["repair_new", "repair_inquiry"],
-      "required_slots": ["action_type"],
+      "trigger_intents": [
+        "repair_new",
+        "repair_inquiry"
+      ],
+      "required_slots": [
+        "action_type"
+      ],
       "conditional_slots": {
-        "new": ["product_name", "issue_description"],
-        "inquiry": ["repair_id"]
+        "new": [
+          "product_name",
+          "issue_description"
+        ],
+        "inquiry": [
+          "repair_id"
+        ]
       },
       "next_action": "route_by_action_type"
     }
@@ -300,8 +537,26 @@
     "prefer_backend_over_llm": true
   },
   "vision_routing": {
-    "payment_hints_text_th": ["บาท", "ยอดเงิน", "โอนเงิน", "พร้อมเพย์", "รายการสำเร็จ", "สแกน", "โอนสำเร็จ", "เงินเข้า"],
-    "payment_hints_text_en": ["THB", "Transfer", "Amount", "Successful", "QR", "Fee", "Baht", "Payment"],
+    "payment_hints_text_th": [
+      "บาท",
+      "ยอดเงิน",
+      "โอนเงิน",
+      "พร้อมเพย์",
+      "รายการสำเร็จ",
+      "สแกน",
+      "โอนสำเร็จ",
+      "เงินเข้า"
+    ],
+    "payment_hints_text_en": [
+      "THB",
+      "Transfer",
+      "Amount",
+      "Successful",
+      "QR",
+      "Fee",
+      "Baht",
+      "Payment"
+    ],
     "product_hints_labels": [
       "watch",
       "bag",

@@ -287,7 +287,8 @@ class RouterV1Handler implements BotHandlerInterface
                 $lastAdminMsg = $row['last_admin_message_at'] ?? null;
 
                 if ($lastAdminMsg !== null) {
-                    $adminActiveThreshold = 3600; // 1 hour in seconds
+                    // ✅ Use configurable timeout (default 5 minutes = 300 seconds)
+                    $adminActiveThreshold = (int)($handoffCfg['timeout_seconds'] ?? 300);
                     $lastAdminTime = strtotime((string)$lastAdminMsg);
                     $currentTime = time();
                     $timeSinceAdmin = $currentTime - $lastAdminTime;
@@ -608,6 +609,103 @@ class RouterV1Handler implements BotHandlerInterface
                     $this->logBotReply($context, $pendingReply, 'text');
 
                     return ['reply_text' => $pendingReply, 'actions' => [], 'meta' => $meta];
+                }
+            }
+
+            // =========================================================
+            // ✅ KEYWORD-BASED HANDOFF TRIGGERS (auto handoff to admin)
+            // =========================================================
+            $caseManagement = $config['case_management'] ?? [];
+            $handoffTriggers = $caseManagement['admin_handoff_triggers'] ?? [];
+            $matchedHandoffKeyword = null;
+            
+            if (!$isAdmin && !empty($handoffTriggers)) {
+                foreach ($handoffTriggers as $keyword) {
+                    $keyword = trim((string)$keyword);
+                    if ($keyword !== '' && mb_stripos($text, $keyword, 0, 'UTF-8') !== false) {
+                        $matchedHandoffKeyword = $keyword;
+                        break;
+                    }
+                }
+                
+                if ($matchedHandoffKeyword) {
+                    Logger::info('[HANDOFF_TRIGGER] Keyword matched', [
+                        'trace_id' => $traceId,
+                        'keyword' => $matchedHandoffKeyword,
+                        'text_preview' => mb_substr($text, 0, 50, 'UTF-8'),
+                    ]);
+                    
+                    // Get slots from LLM if available
+                    $handoffSlots = $lastSlots;
+                    if ($llmIntegration && !empty($config['llm']['enabled'])) {
+                        $llmForSlots = $this->handleWithLlmIntent($llmIntegration, $config, $context, $text);
+                        if (is_array($llmForSlots['slots'] ?? null)) {
+                            $handoffSlots = $this->mergeSlots($lastSlots, $llmForSlots['slots']);
+                        }
+                    }
+                    
+                    // Detect case type from keyword
+                    $handoffCaseType = $this->detectCaseTypeFromKeyword($matchedHandoffKeyword);
+                    
+                    // Create case via API with pending_admin status
+                    $backendCfg = $config['backend_api'] ?? [];
+                    if (!empty($caseManagement['enabled']) && !empty($backendCfg['enabled'])) {
+                        try {
+                            $caseEndpoint = $backendCfg['endpoints']['case_create'] ?? '/api/bot/cases';
+                            $casePayload = [
+                                'platform' => $context['platform'] ?? ($context['channel']['platform'] ?? 'unknown'),
+                                'channel_id' => $channelId,
+                                'external_user_id' => $externalUserId,
+                                'case_type' => $handoffCaseType,
+                                'status' => 'pending_admin',
+                                'slots' => $handoffSlots,
+                                'intent' => 'handoff_request',
+                                'message' => $text,
+                                'handoff_trigger' => $matchedHandoffKeyword,
+                            ];
+                            
+                            $caseResp = $this->callBackendJson($backendCfg, $caseEndpoint, $casePayload);
+                            
+                            if ($caseResp['ok'] && !empty($caseResp['data'])) {
+                                $meta['case'] = [
+                                    'id' => $caseResp['data']['id'] ?? null,
+                                    'case_no' => $caseResp['data']['case_no'] ?? null,
+                                    'case_type' => $handoffCaseType,
+                                    'is_new' => $caseResp['data']['is_new'] ?? true,
+                                    'handoff_trigger' => $matchedHandoffKeyword,
+                                ];
+                                Logger::info('[HANDOFF_TRIGGER] Case created with pending_admin', [
+                                    'trace_id' => $traceId,
+                                    'case_id' => $caseResp['data']['id'] ?? null,
+                                ]);
+                            }
+                        } catch (Throwable $e) {
+                            Logger::error('[HANDOFF_TRIGGER] Failed to create case', [
+                                'trace_id' => $traceId,
+                                'error' => $e->getMessage(),
+                            ]);
+                        }
+                    }
+                    
+                    // Add handoff action
+                    $meta['actions'][] = ['type' => 'handoff_to_admin', 'reason' => 'keyword_trigger', 'keyword' => $matchedHandoffKeyword];
+                    $meta['handoff_trigger'] = $matchedHandoffKeyword;
+                    
+                    // Reply with handoff message
+                    $handoffReply = $templates['handoff_to_admin'] ?? 'ขอส่งต่อให้เจ้าหน้าที่ดูแลต่อนะคะ 👩‍💼 สักครู่ค่ะ';
+                    $meta['reason'] = 'handoff_keyword_trigger';
+                    
+                    if ($sessionId) {
+                        $this->updateSessionState($sessionId, 'handoff_request', $handoffSlots);
+                        $this->storeMessage($sessionId, 'assistant', $handoffReply);
+                    }
+                    $this->logBotReply($context, $handoffReply, 'text');
+                    
+                    return [
+                        'reply_text' => $handoffReply,
+                        'actions' => $meta['actions'],
+                        'meta' => $meta,
+                    ];
                 }
             }
 
@@ -2851,6 +2949,73 @@ class RouterV1Handler implements BotHandlerInterface
         if (mb_strpos($t, 'ชำระ', 0, 'UTF-8') !== false || mb_strpos($t, 'ส่งงวด', 0, 'UTF-8') !== false || mb_strpos($t, 'งวด', 0, 'UTF-8') !== false) return 'pay';
         if (mb_strpos($t, 'เช็ค', 0, 'UTF-8') !== false || mb_strpos($t, 'สรุป', 0, 'UTF-8') !== false) return 'summary';
         return null;
+    }
+
+    /**
+     * Detect case type from handoff keyword
+     */
+    protected function detectCaseTypeFromKeyword(string $keyword): string
+    {
+        $k = mb_strtolower(trim($keyword), 'UTF-8');
+        
+        // Purchase/Buy intent
+        if (mb_strpos($k, 'ซื้อ', 0, 'UTF-8') !== false || 
+            mb_strpos($k, 'สนใจ', 0, 'UTF-8') !== false) {
+            return 'product_inquiry';
+        }
+        
+        // Deposit/Reserve intent  
+        if (mb_strpos($k, 'มัดจำ', 0, 'UTF-8') !== false || 
+            mb_strpos($k, 'จอง', 0, 'UTF-8') !== false) {
+            return 'deposit';
+        }
+        
+        // Installment intent
+        if (mb_strpos($k, 'ผ่อน', 0, 'UTF-8') !== false) {
+            return 'payment_installment';
+        }
+        
+        // Pawn intent
+        if (mb_strpos($k, 'จำนำ', 0, 'UTF-8') !== false || 
+            mb_strpos($k, 'ต่อดอก', 0, 'UTF-8') !== false ||
+            mb_strpos($k, 'ไถ่ถอน', 0, 'UTF-8') !== false) {
+            return 'pawn';
+        }
+        
+        // Repair intent
+        if (mb_strpos($k, 'ซ่อม', 0, 'UTF-8') !== false || 
+            mb_strpos($k, 'เซอร์วิส', 0, 'UTF-8') !== false) {
+            return 'repair';
+        }
+        
+        // Return/Exchange intent
+        if (mb_strpos($k, 'เปลี่ยน', 0, 'UTF-8') !== false || 
+            mb_strpos($k, 'คืน', 0, 'UTF-8') !== false) {
+            return 'return_exchange';
+        }
+        
+        // Price negotiation / discount
+        if (mb_strpos($k, 'ลด', 0, 'UTF-8') !== false || 
+            mb_strpos($k, 'ต่อรอง', 0, 'UTF-8') !== false ||
+            mb_strpos($k, 'ส่วนลด', 0, 'UTF-8') !== false) {
+            return 'product_inquiry';
+        }
+        
+        // Video call / appointment
+        if (mb_strpos($k, 'call', 0, 'UTF-8') !== false || 
+            mb_strpos($k, 'นัด', 0, 'UTF-8') !== false ||
+            mb_strpos($k, 'ดูของ', 0, 'UTF-8') !== false) {
+            return 'product_inquiry';
+        }
+        
+        // Bank account request
+        if (mb_strpos($k, 'เลขบัญชี', 0, 'UTF-8') !== false || 
+            mb_strpos($k, 'โอน', 0, 'UTF-8') !== false) {
+            return 'payment_full';
+        }
+        
+        // Default
+        return 'general_inquiry';
     }
 
     // =========================================================
