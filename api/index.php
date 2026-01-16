@@ -146,7 +146,12 @@ try {
         require __DIR__ . '/webhooks/omise.php';
     }
 
-    // Products routes (public - mock API for chatbot)
+    // Products routes (v1 API - spec-compliant mock)
+    elseif ($path === '/v1/products/search' && $method === 'POST') {
+        require __DIR__ . '/v1/products/search.php';
+    }
+
+    // Products routes (legacy - mock API for chatbot)
     elseif ($path === '/products/search' && $method === 'POST') {
         require __DIR__ . '/products/search.php';
     } elseif ($path === '/products/get' && $method === 'POST') {
