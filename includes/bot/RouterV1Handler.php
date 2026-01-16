@@ -774,11 +774,27 @@ class RouterV1Handler implements BotHandlerInterface
             $matchedHandoffKeyword = null;
 
             if (!$isAdmin && !empty($handoffTriggers)) {
+                $textLen = mb_strlen($text, 'UTF-8');
+                $shortConfirmations = ['สนใจ', 'ใช่', 'รับเลย', 'ตกลง', 'เอา', 'รับ', 'โอเค', 'ok'];
+
                 foreach ($handoffTriggers as $keyword) {
                     $keyword = trim((string) $keyword);
-                    if ($keyword !== '' && mb_stripos($text, $keyword, 0, 'UTF-8') !== false) {
-                        $matchedHandoffKeyword = $keyword;
-                        break;
+                    if ($keyword === '')
+                        continue;
+
+                    // For short confirmations, only trigger if message is SHORT (< 15 chars)
+                    // This prevents "สนใจ rolex" from triggering handoff
+                    if (in_array(mb_strtolower($keyword, 'UTF-8'), $shortConfirmations)) {
+                        if ($textLen < 15 && mb_stripos($text, $keyword, 0, 'UTF-8') !== false) {
+                            $matchedHandoffKeyword = $keyword;
+                            break;
+                        }
+                    } else {
+                        // Other keywords (ซื้อเลย, มัดจำ, etc.) work normally
+                        if (mb_stripos($text, $keyword, 0, 'UTF-8') !== false) {
+                            $matchedHandoffKeyword = $keyword;
+                            break;
+                        }
                     }
                 }
 
