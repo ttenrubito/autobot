@@ -650,6 +650,37 @@ function clearSelectedProduct() {
 }
 
 /**
+ * Handle payment type click - prevents scroll issues
+ * @param {Event} event - Click event
+ * @param {string} value - Payment type value
+ */
+function handlePaymentTypeClick(event, value) {
+    // Prevent default label behavior that causes scroll
+    event.preventDefault();
+    event.stopPropagation();
+    
+    // Save current scroll position of modal body
+    const modalBody = document.querySelector('#createOrderModal .order-modal-body');
+    const scrollTop = modalBody ? modalBody.scrollTop : 0;
+    
+    // Check the radio button
+    const radio = document.querySelector(`input[name="payment_type"][value="${value}"]`);
+    if (radio) {
+        radio.checked = true;
+    }
+    
+    // Toggle installment fields
+    toggleInstallmentFields();
+    
+    // Restore scroll position after a short delay
+    if (modalBody) {
+        requestAnimationFrame(() => {
+            modalBody.scrollTop = scrollTop;
+        });
+    }
+}
+
+/**
  * Toggle installment fields visibility
  */
 function toggleInstallmentFields() {
@@ -659,6 +690,43 @@ function toggleInstallmentFields() {
     if (installmentFields) {
         installmentFields.style.display = paymentType === 'installment' ? 'block' : 'none';
     }
+}
+
+/**
+ * Update message template when bank account is selected
+ */
+function updateMessageTemplate() {
+    const select = document.getElementById('bankAccount');
+    const textarea = document.getElementById('customerMessage');
+    const customerName = document.getElementById('customerName')?.value?.trim() || 'ลูกค้า';
+    const totalAmount = document.getElementById('totalAmount')?.value || '0';
+    const productName = document.getElementById('productName')?.value?.trim() || 'สินค้า';
+    
+    if (!select || !textarea) return;
+    
+    const selectedOption = select.options[select.selectedIndex];
+    if (!selectedOption || !selectedOption.value) {
+        textarea.value = '';
+        return;
+    }
+    
+    const bankName = selectedOption.dataset.bank || '';
+    const accountName = selectedOption.dataset.name || '';
+    const accountNumber = selectedOption.dataset.number || '';
+    
+    const template = `ขอบพระคุณค่ะ คุณ${customerName} 
+ที่ไว้วางใจเลือกซื้อ ${productName} จากร้าน ฮ.เฮง เฮง 💎
+
+💰 ยอดชำระ: ${formatNumber(parseFloat(totalAmount) || 0)} บาท
+
+🏦 ข้อมูลการโอนเงิน
+ธนาคาร: ${bankName}
+ชื่อบัญชี: ${accountName}
+เลขบัญชี: ${accountNumber}
+
+หากคุณ${customerName} ชำระแล้วแจ้งสลิปให้แอดมินได้เลยนะคะ ขอบพระคุณค่ะ 🙏`;
+    
+    textarea.value = template;
 }
 
 /**
@@ -707,7 +775,11 @@ async function submitCreateOrder(event) {
             customer_name: document.getElementById('customerName').value.trim() || null,
             customer_phone: document.getElementById('customerPhone').value.trim() || null,
             customer_id: document.getElementById('selectedCustomerId').value || null,
-            notes: document.getElementById('orderNotes').value.trim() || null
+            notes: document.getElementById('orderNotes').value.trim() || null,
+            // Push message fields
+            bank_account: document.getElementById('bankAccount')?.value || null,
+            customer_message: document.getElementById('customerMessage')?.value?.trim() || null,
+            send_message: document.getElementById('sendMessageCheckbox')?.checked || false
         };
 
         // Add installment fields if applicable
@@ -727,7 +799,13 @@ async function submitCreateOrder(event) {
         });
 
         if (result && result.success) {
-            showToast('✅ สร้างคำสั่งซื้อเรียบร้อย', 'success');
+            // Show different message based on whether push message was sent
+            const messageSent = result.data?.message_sent;
+            if (messageSent) {
+                showToast('✅ สร้างคำสั่งซื้อ & ส่งข้อความแจ้งลูกค้าแล้ว', 'success');
+            } else {
+                showToast('✅ สร้างคำสั่งซื้อเรียบร้อย', 'success');
+            }
             closeCreateOrderModal();
 
             // Reload orders list
@@ -748,7 +826,7 @@ async function submitCreateOrder(event) {
     } finally {
         // Re-enable submit button
         submitBtn.disabled = false;
-        submitBtn.innerHTML = '<i class="fas fa-save"></i> บันทึกคำสั่งซื้อ';
+        submitBtn.innerHTML = '<i class="fas fa-save"></i> บันทึก & ส่งข้อความ';
     }
 
     return false;

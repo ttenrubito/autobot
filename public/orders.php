@@ -225,22 +225,22 @@ include('../includes/customer/sidebar.php');
                 <div class="detail-section">
                     <h4 class="detail-section-title">💳 ประเภทการชำระ</h4>
                     <div class="payment-type-options">
-                        <label class="payment-type-option">
-                            <input type="radio" name="payment_type" value="full" checked onchange="toggleInstallmentFields()">
+                        <label class="payment-type-option" onclick="handlePaymentTypeClick(event, 'full')">
+                            <input type="radio" name="payment_type" value="full" checked>
                             <span class="payment-type-card">
                                 <span class="payment-type-icon">💳</span>
                                 <span class="payment-type-label">จ่ายเต็ม</span>
                             </span>
                         </label>
-                        <label class="payment-type-option">
-                            <input type="radio" name="payment_type" value="installment" onchange="toggleInstallmentFields()">
+                        <label class="payment-type-option" onclick="handlePaymentTypeClick(event, 'installment')">
+                            <input type="radio" name="payment_type" value="installment">
                             <span class="payment-type-card">
                                 <span class="payment-type-icon">📅</span>
                                 <span class="payment-type-label">ผ่อนชำระ</span>
                             </span>
                         </label>
-                        <label class="payment-type-option">
-                            <input type="radio" name="payment_type" value="savings" onchange="toggleInstallmentFields()">
+                        <label class="payment-type-option" onclick="handlePaymentTypeClick(event, 'savings')">
+                            <input type="radio" name="payment_type" value="savings">
                             <span class="payment-type-card">
                                 <span class="payment-type-icon">🐷</span>
                                 <span class="payment-type-label">ออมก่อน</span>
@@ -278,11 +278,37 @@ include('../includes/customer/sidebar.php');
                     </div>
                 </div>
                 
+                <!-- Bank Account & Push Message Section -->
+                <div class="detail-section" id="pushMessageSection">
+                    <h4 class="detail-section-title">💬 แจ้งลูกค้า</h4>
+                    <div class="form-group">
+                        <label for="bankAccount">บัญชีรับโอน</label>
+                        <select id="bankAccount" name="bank_account" class="form-input" onchange="updateMessageTemplate()">
+                            <option value="">-- เลือกบัญชี --</option>
+                            <option value="scb_1" data-bank="ไทยพาณิชย์" data-name="บจก เพชรวิบวับ" data-number="1653014242">ไทยพาณิชย์ - 1653014242 (≤50K)</option>
+                            <option value="kbank_1" data-bank="กสิกรไทย" data-name="บจก.เฮงเฮงโฮลดิ้ง" data-number="8000029282">กสิกรไทย - 8000029282</option>
+                            <option value="bay_1" data-bank="กรุงศรี" data-name="บจก.เฮงเฮงโฮลดิ้ง" data-number="8000029282">กรุงศรี - 8000029282</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="customerMessage">ข้อความแจ้งลูกค้า</label>
+                        <textarea id="customerMessage" name="customer_message" class="form-input" rows="6" 
+                                  placeholder="ข้อความที่จะส่งให้ลูกค้า..."></textarea>
+                        <small class="form-hint">💡 เลือกบัญชีเพื่อ auto-fill ข้อความ หรือพิมพ์เอง</small>
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" name="send_message" id="sendMessageCheckbox" checked>
+                            <span>📤 ส่งข้อความแจ้งลูกค้าทันที</span>
+                        </label>
+                    </div>
+                </div>
+                
                 <!-- Submit Button -->
                 <div class="form-actions">
                     <button type="button" class="btn btn-outline" onclick="closeCreateOrderModal()">ยกเลิก</button>
                     <button type="submit" class="btn btn-primary" id="submitOrderBtn">
-                        <i class="fas fa-save"></i> บันทึกคำสั่งซื้อ
+                        <i class="fas fa-save"></i> บันทึก & ส่งข้อความ
                     </button>
                 </div>
             </form>
@@ -956,6 +982,22 @@ include('../includes/customer/sidebar.php');
     padding: 1rem;
     border-radius: 8px;
     margin-top: 1rem;
+}
+
+/* Checkbox Label */
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+    font-weight: 500;
+    color: #374151;
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--color-primary);
 }
 
 /* Form Actions */

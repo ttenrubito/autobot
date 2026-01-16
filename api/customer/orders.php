@@ -607,15 +607,61 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
         }
 
         $pdo->commit();
+        
+        // =========================================================================
+        // Push Message to Customer (if requested)
+        // =========================================================================
+        $messageSent = false;
+        $sendMessage = !empty($input['send_message']);
+        $customerMessage = trim($input['customer_message'] ?? '');
+        $customerId = $input['customer_id'] ?? null;
+        
+        if ($sendMessage && !empty($customerMessage) && $customerId) {
+            try {
+                // Get customer's platform info
+                $stmt = $pdo->prepare("SELECT platform, platform_user_id FROM customer_profiles WHERE id = ?");
+                $stmt->execute([(int)$customerId]);
+                $customer = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                if ($customer && !empty($customer['platform_user_id'])) {
+                    // Get user's channel_id
+                    $stmt = $pdo->prepare("SELECT id FROM customer_channels WHERE user_id = ? LIMIT 1");
+                    $stmt->execute([$user_id]);
+                    $channel = $stmt->fetch(PDO::FETCH_ASSOC);
+                    
+                    if ($channel) {
+                        require_once __DIR__ . '/../../includes/services/PushMessageService.php';
+                        $pushService = new \App\Services\PushMessageService($pdo);
+                        
+                        $result = $pushService->send(
+                            $customer['platform'],
+                            $customer['platform_user_id'],
+                            $customerMessage,
+                            (int)$channel['id']
+                        );
+                        
+                        $messageSent = $result['success'] ?? false;
+                        
+                        if (!$messageSent) {
+                            error_log("Push message failed for order {$orderNumber}: " . ($result['error'] ?? 'Unknown error'));
+                        }
+                    }
+                }
+            } catch (Exception $pushEx) {
+                // Don't fail the order if push fails
+                error_log("Push message error for order {$orderNumber}: " . $pushEx->getMessage());
+            }
+        }
 
         // Return success (with order_no alias for frontend compatibility)
         echo json_encode([
             'success' => true,
-            'message' => 'สร้างคำสั่งซื้อเรียบร้อย',
+            'message' => $messageSent ? 'สร้างคำสั่งซื้อและส่งข้อความแจ้งลูกค้าแล้ว' : 'สร้างคำสั่งซื้อเรียบร้อย',
             'data' => [
                 'id' => $orderId,
                 'order_number' => $orderNumber,
-                'order_no' => $orderNumber
+                'order_no' => $orderNumber,
+                'message_sent' => $messageSent
             ]
         ]);
 
