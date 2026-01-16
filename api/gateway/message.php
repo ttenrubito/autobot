@@ -65,7 +65,7 @@ try {
         Response::error('Invalid or inactive API key', 401);
     }
 
-    $userId = (int)$channel['user_id'];
+    $userId = (int) $channel['user_id'];
 
     // ✅ Enhanced subscription validation
     $subscription = $db->queryOne(
@@ -78,7 +78,7 @@ try {
         ",
         [$userId]
     );
-    
+
     if (!$subscription) {
         // Check if expired or just inactive
         $expiredSub = $db->queryOne(
@@ -86,7 +86,7 @@ try {
              WHERE user_id = ? AND current_period_end < CURDATE()",
             [$userId]
         );
-        
+
         if ($expiredSub) {
             Response::error('Subscription expired. Please renew to continue using the service.', 402);
         } else {
@@ -105,7 +105,7 @@ try {
          LIMIT 1",
         [$userId]
     );
-    
+
     if ($unpaidInvoice) {
         Logger::warning('API access blocked - overdue invoice', [
             'user_id' => $userId,
@@ -246,7 +246,7 @@ try {
     //   direction='outgoing' and metadata JSON containing {"source":"admin"}
     // Fallback: if a system marker exists in chat_messages, also respect it.
     // ---------------------------------------------------------------------
-    $handoffMinutes = (int)(getenv('HUMAN_HANDOFF_MINUTES') ?: 10);
+    $handoffMinutes = (int) (getenv('HUMAN_HANDOFF_MINUTES') ?: 10);
     $externalUserIdForHandoff = $incoming['external_user_id'] ?? null;
     if (!empty($externalUserIdForHandoff)) {
         $handoffCutoff = date('Y-m-d H:i:s', strtotime('-' . $handoffMinutes . ' minutes'));
@@ -392,8 +392,8 @@ try {
         'bot_profile_id' => $botProfile['id'] ?? null,
         'bot_profile_name' => $botProfile['name'] ?? null,
         'has_bot_config' => !empty($botConfig),
-        'incoming_text_len' => isset($incoming['text']) ? mb_strlen((string)$incoming['text'], 'UTF-8') : null,
-        'incoming_text_preview' => isset($incoming['text']) ? mb_substr((string)$incoming['text'], 0, 120, 'UTF-8') : null,
+        'incoming_text_len' => isset($incoming['text']) ? mb_strlen((string) $incoming['text'], 'UTF-8') : null,
+        'incoming_text_preview' => isset($incoming['text']) ? mb_substr((string) $incoming['text'], 0, 120, 'UTF-8') : null,
         'incoming_metadata_keys' => isset($incoming['metadata']) && is_array($incoming['metadata']) ? array_keys($incoming['metadata']) : null,
     ]);
 
@@ -403,7 +403,7 @@ try {
 
     $t0 = microtime(true);
     $result = $handler->handleMessage($context);
-    $elapsedMs = (int)round((microtime(true) - $t0) * 1000);
+    $elapsedMs = (int) round((microtime(true) - $t0) * 1000);
 
     Logger::info('[GATEWAY] handler_result', [
         'trace_id' => $traceId,
@@ -411,7 +411,7 @@ try {
         'result_type' => gettype($result),
         'has_reply_text_key' => is_array($result) ? array_key_exists('reply_text', $result) : false,
         'reply_text_len' => (is_array($result) && isset($result['reply_text']) && $result['reply_text'] !== null)
-            ? mb_strlen((string)$result['reply_text'], 'UTF-8')
+            ? mb_strlen((string) $result['reply_text'], 'UTF-8')
             : null,
         'actions_count' => (is_array($result) && isset($result['actions']) && is_array($result['actions']))
             ? count($result['actions'])
@@ -426,7 +426,7 @@ try {
     // without modifying every return point in handlers
     $replyText = $result['reply_text'] ?? null;
     $replyTexts = [];
-    
+
     if ($replyText !== null && $replyText !== '') {
         // Check if response contains split delimiter
         if (strpos($replyText, '||SPLIT||') !== false) {
@@ -438,7 +438,7 @@ try {
                     $replyTexts[] = $msg;
                 }
             }
-            
+
             Logger::info('[GATEWAY] Multi-message detected', [
                 'trace_id' => $traceId,
                 'original_len' => mb_strlen($replyText, 'UTF-8'),
@@ -456,6 +456,18 @@ try {
         'actions' => $result['actions'] ?? [],
         'meta' => $result['meta'] ?? [],
     ];
+
+    // ✅ NEW: Add image_url from handler result to actions for LINE/Facebook
+    if (!empty($result['image_url'])) {
+        $payload['actions'][] = [
+            'type' => 'image',
+            'url' => $result['image_url']
+        ];
+        Logger::info('[GATEWAY] Added product image to actions', [
+            'trace_id' => $traceId,
+            'image_url' => $result['image_url']
+        ]);
+    }
 
     // Always include trace_id in final response meta for cross-service correlation
     if (!isset($payload['meta']) || !is_array($payload['meta'])) {
@@ -510,7 +522,7 @@ try {
         Logger::error('[GATEWAY] invalid_handler_result', [
             'trace_id' => $traceId,
             'handler_key' => $handlerKey ?? null,
-            'result_dump' => is_scalar($result) ? (string)$result : json_encode($result, JSON_UNESCAPED_UNICODE),
+            'result_dump' => is_scalar($result) ? (string) $result : json_encode($result, JSON_UNESCAPED_UNICODE),
         ]);
         Response::error('Handler did not return a valid result', 500);
     }

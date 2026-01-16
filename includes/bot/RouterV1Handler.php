@@ -1529,9 +1529,36 @@ class RouterV1Handler implements BotHandlerInterface
 
                 $replyText = ProductSearchService::formatMultipleForChat($products, 3);
 
+                // Get thumbnail from first product for image message
+                $imageUrl = null;
+                if (!empty($products[0]['thumbnail_url'])) {
+                    $imageUrl = $products[0]['thumbnail_url'];
+                }
+
+                // ✅ Create case for product inquiry
+                try {
+                    $botProfileCfg = json_decode($context['bot_profile']['config'] ?? '{}', true) ?: [];
+                    $caseEngine = new CaseEngine($botProfileCfg, $context);
+                    $caseSlots = [
+                        'product_code' => $code,
+                        'product_name' => $products[0]['title'] ?? $products[0]['name'] ?? null,
+                        'product_price' => $products[0]['price'] ?? null,
+                        'product_ref_id' => $products[0]['ref_id'] ?? null,
+                    ];
+                    $case = $caseEngine->getOrCreateCase(CaseEngine::CASE_PRODUCT_INQUIRY, $caseSlots);
+                    Logger::info('[ROUTER_V1] Created/updated case for product inquiry', [
+                        'case_id' => $case['id'] ?? null,
+                        'case_no' => $case['case_no'] ?? null,
+                        'product_code' => $code
+                    ]);
+                } catch (Exception $caseErr) {
+                    Logger::error('[ROUTER_V1] Failed to create case: ' . $caseErr->getMessage());
+                }
+
                 return [
                     'handled' => true,
                     'reply_text' => $replyText,
+                    'image_url' => $imageUrl,
                     'reason' => 'internal_product_lookup_by_code',
                     'meta' => ['products' => $products],
                     'slots' => $slots
