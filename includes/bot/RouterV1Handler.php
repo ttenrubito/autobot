@@ -1507,12 +1507,16 @@ class RouterV1Handler implements BotHandlerInterface
                 return ['handled' => false, 'reply_text' => $askProductCode, 'reason' => 'missing_product_code', 'slots' => $slots];
             }
 
-            // Try internal ProductSearchService first (uses mock/local data)
-            $endpoint = $ep(['product_search', 'product_get', 'product_lookup']);
-
-            if (!$endpoint) {
-                // Use internal ProductSearchService
+            // Always use internal ProductSearchService (mock data for now)
+            // When Data team provides real API, change this to call backend
+            try {
                 $products = ProductSearchService::searchByProductCode($code);
+
+                Logger::info('[ROUTER_V1] ProductSearchService result', [
+                    'code' => $code,
+                    'found' => count($products),
+                    'trace_id' => $context['trace_id'] ?? null
+                ]);
 
                 if (empty($products)) {
                     return [
@@ -1532,35 +1536,20 @@ class RouterV1Handler implements BotHandlerInterface
                     'meta' => ['products' => $products],
                     'slots' => $slots
                 ];
+            } catch (Exception $e) {
+                Logger::error('[ROUTER_V1] ProductSearchService error', [
+                    'code' => $code,
+                    'error' => $e->getMessage(),
+                    'trace_id' => $context['trace_id'] ?? null
+                ]);
+
+                return [
+                    'handled' => false,
+                    'reply_text' => $fallback,
+                    'reason' => 'product_search_error',
+                    'slots' => $slots
+                ];
             }
-
-            // Fallback to backend API if configured
-            $payload = [
-                'q' => $code,
-                'product_code' => $code,
-                'channel_id' => $channelId,
-                'external_user_id' => $externalUserId,
-            ];
-
-            $resp = $this->callBackendJson($backendCfg, $endpoint, $payload);
-            if (!$resp['ok']) {
-                return ['handled' => false, 'reply_text' => $fallback, 'reason' => 'backend_error', 'meta' => $resp, 'slots' => $slots];
-            }
-
-            $products = $resp['data']['products'] ?? ($resp['data']['items'] ?? ($resp['data']['candidates'] ?? []));
-            if (!is_array($products))
-                $products = [];
-
-            $rendered = $this->renderProductsFromBackend($products, $templates);
-
-            return [
-                'handled' => true,
-                'reply_text' => $rendered['text'],
-                'actions' => $rendered['actions'] ?? [],
-                'reason' => 'backend_product_lookup_by_code',
-                'meta' => $resp,
-                'slots' => $slots
-            ];
         }
 
         // -------------------------
@@ -3059,7 +3048,8 @@ class RouterV1Handler implements BotHandlerInterface
             'total_products' => count($products),
             'actions_count' => count($actions),
             'image_urls' => array_map(function ($a) {
-                return $a['url'] ?? 'N/A'; }, $actions)
+                return $a['url'] ?? 'N/A';
+            }, $actions)
         ]);
 
         return ['text' => $text, 'actions' => $actions];
