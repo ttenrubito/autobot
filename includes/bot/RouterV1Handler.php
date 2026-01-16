@@ -1647,8 +1647,49 @@ class RouterV1Handler implements BotHandlerInterface
         // Intent: product_availability / price_inquiry
         // -------------------------
         if ($intent === 'product_availability' || $intent === 'price_inquiry') {
-            $name = trim((string) ($slots['product_name'] ?? ''));
-            if ($name === '') {
+            // Initialize fallback for error cases
+            $fallback = $templates['product_search_error'] ?? $templates['fallback'] ?? 'ขออภัยค่ะ ระบบค้นหาสินค้าขัดข้อง กรุณาลองใหม่อีกครั้งค่ะ 🙏';
+
+            // Determine search keyword - prefer product_type for category searches, then product_name
+            $productType = trim((string) ($slots['product_type'] ?? ''));
+            $productName = trim((string) ($slots['product_name'] ?? ''));
+            $incomingText = trim((string) ($context['message']['text'] ?? ''));
+
+            // If incoming text mentions product types (สร้อย, แหวน, กำไล, etc.), use that for search
+            $categoryKeywords = ['สร้อย', 'แหวน', 'กำไล', 'ต่างหู', 'จี้', 'เพชร', 'ทอง', 'สายสร้อย', 'กำไล', 'พระ', 'นาฬิกา'];
+            $searchKeyword = '';
+
+            // First priority: Check if incoming text contains category keywords
+            foreach ($categoryKeywords as $cat) {
+                if (mb_strpos($incomingText, $cat) !== false) {
+                    $searchKeyword = $cat;
+                    Logger::info('[ROUTER_V1] Product search - using category from text', [
+                        'category' => $cat,
+                        'incoming_text' => $incomingText
+                    ]);
+                    break;
+                }
+            }
+
+            // Second priority: Use product_type if available and different from previous product_name
+            if ($searchKeyword === '' && $productType !== '' && $productType !== $productName) {
+                $searchKeyword = $productType;
+                Logger::info('[ROUTER_V1] Product search - using product_type', [
+                    'product_type' => $productType
+                ]);
+            }
+
+            // Third priority: Use product_name
+            if ($searchKeyword === '' && $productName !== '') {
+                $searchKeyword = $productName;
+            }
+
+            // Fallback: Use incoming text as search query
+            if ($searchKeyword === '') {
+                $searchKeyword = $incomingText;
+            }
+
+            if ($searchKeyword === '') {
                 // Use fallback template instead of non-existent product_availability template
                 $tpl = $templates['fallback'] ?? 'ลูกค้าสนใจสินค้าไหมค่ะ 😊 ช่วยอธิบายรายละเอียดเพิ่มอีกนิดทีค่ะ เช่น รุ่น/รหัส';
                 return ['handled' => false, 'reply_text' => $tpl, 'reason' => 'missing_product_name', 'slots' => $slots];
@@ -1658,13 +1699,21 @@ class RouterV1Handler implements BotHandlerInterface
             if (!$endpoint)
                 return ['handled' => false, 'reason' => 'missing_endpoint_product_search'];
 
-            // Build payload with attributes from slots
+            // Build payload with search keyword
             $payload = [
-                'q' => $name,
-                'product_name' => $name,
+                'q' => $searchKeyword,
+                'keyword' => $searchKeyword,
+                'product_name' => $searchKeyword,
                 'channel_id' => $channelId,
                 'external_user_id' => $externalUserId,
             ];
+
+            Logger::info('[ROUTER_V1] Product search payload', [
+                'search_keyword' => $searchKeyword,
+                'original_product_name' => $productName,
+                'original_product_type' => $productType,
+                'incoming_text' => $incomingText
+            ]);
 
             // Extract attributes from slots (color, brand, etc.)
             $attributes = [];
@@ -4038,18 +4087,41 @@ class RouterV1Handler implements BotHandlerInterface
             'payload_size' => strlen(json_encode($payload))
         ]);
 
-        $ch = curl_init($endpoint);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_POST => true,
-            CURLOPT_HTTPHEADER => $headers,
-            CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE),
-            CURLOPT_TIMEOUT => (int) ($llmCfg['timeout_seconds'] ?? 10),
-        ]);
-        $raw = curl_exec($ch);
-        $err = curl_error($ch);
-        $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
+        // ✅ Retry logic for 503/429 errors
+        $maxRetries = 2;
+        $retryDelay = 500; // ms
+        $raw = null;
+        $err = null;
+        $status = 0;
+
+        for ($attempt = 0; $attempt <= $maxRetries; $attempt++) {
+            if ($attempt > 0) {
+                // Exponential backoff
+                usleep($retryDelay * 1000 * $attempt);
+                Logger::info("Gemini/LLM API retry attempt", [
+                    'attempt' => $attempt,
+                    'previous_status' => $status
+                ]);
+            }
+
+            $ch = curl_init($endpoint);
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_POST => true,
+                CURLOPT_HTTPHEADER => $headers,
+                CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE),
+                CURLOPT_TIMEOUT => (int) ($llmCfg['timeout_seconds'] ?? 10),
+            ]);
+            $raw = curl_exec($ch);
+            $err = curl_error($ch);
+            $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+
+            // Don't retry on success or non-retryable errors
+            if ($status < 400 || ($status !== 503 && $status !== 429)) {
+                break;
+            }
+        }
 
         $duration = round((microtime(true) - $startTime) * 1000, 2);
         Logger::info("Gemini/LLM API call completed", [
@@ -4057,11 +4129,12 @@ class RouterV1Handler implements BotHandlerInterface
             'duration_ms' => $duration,
             'status' => $status,
             'has_error' => !empty($err),
-            'response_size' => strlen($raw)
+            'response_size' => strlen($raw),
+            'retries' => $attempt
         ]);
 
         if ($err || $status >= 400) {
-            return ['reply_text' => null, 'intent' => null, 'meta' => ['error' => $err ?: ('http_' . $status), 'raw' => $raw]];
+            return ['reply_text' => null, 'intent' => null, 'meta' => ['error' => $err ?: ('http_' . $status), 'raw' => $raw, 'message' => $status == 503 ? 'The model is overloaded. Please try again later.' : null]];
         }
 
         $data = json_decode($raw, true);
