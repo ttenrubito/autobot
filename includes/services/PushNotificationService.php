@@ -17,12 +17,12 @@ class PushNotificationService
     private $db;
     private $lineAccessTokens = [];
     private $facebookPageTokens = [];
-    
+
     public function __construct($db)
     {
         $this->db = $db;
     }
-    
+
     /**
      * Send push notification
      * 
@@ -41,13 +41,13 @@ class PushNotificationService
             if (!$template) {
                 return ['success' => false, 'error' => 'Template not found: ' . $notificationType];
             }
-            
+
             // Build message
             $message = $this->buildMessage($template, $platform, $data);
-            
+
             // Log notification
             $notificationId = $this->logNotification($platform, $platformUserId, $notificationType, $message, $data, $channelId);
-            
+
             // Send based on platform
             if ($platform === 'line') {
                 $result = $this->sendLine($platformUserId, $message, $channelId);
@@ -56,18 +56,18 @@ class PushNotificationService
             } else {
                 return ['success' => false, 'error' => 'Unsupported platform: ' . $platform];
             }
-            
+
             // Update log
             $this->updateNotificationStatus($notificationId, $result);
-            
+
             return $result;
-            
+
         } catch (Exception $e) {
             error_log("PushNotificationService Error: " . $e->getMessage());
             return ['success' => false, 'error' => $e->getMessage()];
         }
     }
-    
+
     /**
      * Queue notification for later sending (async)
      */
@@ -75,10 +75,10 @@ class PushNotificationService
     {
         $template = $this->getTemplate($notificationType);
         $message = $template ? $this->buildMessage($template, $platform, $data) : '';
-        
+
         return $this->logNotification($platform, $platformUserId, $notificationType, $message, $data, $channelId, 'pending');
     }
-    
+
     /**
      * Process pending notifications (called by cron/worker)
      */
@@ -93,12 +93,12 @@ class PushNotificationService
              LIMIT ?",
             [$limit]
         );
-        
+
         $results = ['sent' => 0, 'failed' => 0, 'errors' => []];
-        
+
         foreach ($pending as $notification) {
             $result = $this->sendNotification($notification);
-            
+
             if ($result['success']) {
                 $results['sent']++;
             } else {
@@ -109,10 +109,10 @@ class PushNotificationService
                 ];
             }
         }
-        
+
         return $results;
     }
-    
+
     /**
      * Send a single queued notification
      */
@@ -122,7 +122,7 @@ class PushNotificationService
         $platformUserId = $notification['platform_user_id'];
         $message = $notification['message'];
         $channelId = $notification['channel_id'];
-        
+
         if ($platform === 'line') {
             $result = $this->sendLine($platformUserId, $message, $channelId);
         } elseif ($platform === 'facebook') {
@@ -130,12 +130,12 @@ class PushNotificationService
         } else {
             $result = ['success' => false, 'error' => 'Unsupported platform'];
         }
-        
+
         $this->updateNotificationStatus($notification['id'], $result);
-        
+
         return $result;
     }
-    
+
     /**
      * Send LINE push message
      */
@@ -145,34 +145,34 @@ class PushNotificationService
         if (!$accessToken) {
             return ['success' => false, 'error' => 'LINE access token not found'];
         }
-        
+
         $url = 'https://api.line.me/v2/bot/message/push';
-        
+
         $body = [
             'to' => $userId,
             'messages' => [
                 ['type' => 'text', 'text' => $message]
             ]
         ];
-        
+
         $headers = [
             'Content-Type: application/json',
             'Authorization: Bearer ' . $accessToken
         ];
-        
+
         $result = $this->httpPost($url, $body, $headers);
-        
+
         if ($result['http_code'] === 200) {
             return ['success' => true, 'response' => $result];
         } else {
             return [
-                'success' => false, 
+                'success' => false,
                 'error' => 'LINE API error: ' . ($result['body']['message'] ?? 'Unknown'),
                 'response' => $result
             ];
         }
     }
-    
+
     /**
      * Send Facebook Messenger push message
      */
@@ -182,22 +182,22 @@ class PushNotificationService
         if (!$pageToken) {
             return ['success' => false, 'error' => 'Facebook page token not found'];
         }
-        
+
         $url = 'https://graph.facebook.com/v18.0/me/messages?access_token=' . $pageToken;
-        
+
         $body = [
             'recipient' => ['id' => $psid],
             'message' => ['text' => $message],
             'messaging_type' => 'MESSAGE_TAG',
             'tag' => 'CONFIRMED_EVENT_UPDATE' // For transactional messages outside 24h window
         ];
-        
+
         $headers = [
             'Content-Type: application/json'
         ];
-        
+
         $result = $this->httpPost($url, $body, $headers);
-        
+
         if ($result['http_code'] === 200 && isset($result['body']['message_id'])) {
             return ['success' => true, 'message_id' => $result['body']['message_id'], 'response' => $result];
         } else {
@@ -208,7 +208,7 @@ class PushNotificationService
             ];
         }
     }
-    
+
     /**
      * Get LINE channel access token
      */
@@ -217,14 +217,14 @@ class PushNotificationService
         if ($channelId && isset($this->lineAccessTokens[$channelId])) {
             return $this->lineAccessTokens[$channelId];
         }
-        
+
         // Try to get from customer_services table
         if ($channelId) {
             $service = $this->db->queryOne(
                 "SELECT config FROM customer_services WHERE id = ? AND platform = 'line'",
                 [$channelId]
             );
-            
+
             if ($service && $service['config']) {
                 $config = json_decode($service['config'], true);
                 $accessToken = $config['channel_access_token'] ?? $config['access_token'] ?? null;
@@ -234,14 +234,14 @@ class PushNotificationService
                 }
             }
         }
-        
+
         // Fallback: get first active LINE service
         $service = $this->db->queryOne(
             "SELECT config FROM customer_services 
              WHERE platform = 'line' AND status = 'active' AND config IS NOT NULL
              LIMIT 1"
         );
-        
+
         if ($service && $service['config']) {
             $config = json_decode($service['config'], true);
             $accessToken = $config['channel_access_token'] ?? $config['access_token'] ?? null;
@@ -249,12 +249,12 @@ class PushNotificationService
                 return $accessToken;
             }
         }
-        
+
         // Final fallback: environment variable
         $envToken = getenv('LINE_CHANNEL_ACCESS_TOKEN');
         return $envToken ?: null;
     }
-    
+
     /**
      * Get Facebook page access token
      */
@@ -263,14 +263,14 @@ class PushNotificationService
         if ($channelId && isset($this->facebookPageTokens[$channelId])) {
             return $this->facebookPageTokens[$channelId];
         }
-        
+
         // Try to get from customer_services table
         if ($channelId) {
             $service = $this->db->queryOne(
                 "SELECT config FROM customer_services WHERE id = ? AND platform = 'facebook'",
                 [$channelId]
             );
-            
+
             if ($service && $service['config']) {
                 $config = json_decode($service['config'], true);
                 $accessToken = $config['page_access_token'] ?? $config['access_token'] ?? null;
@@ -280,14 +280,14 @@ class PushNotificationService
                 }
             }
         }
-        
+
         // Fallback: get first active Facebook service
         $service = $this->db->queryOne(
             "SELECT config FROM customer_services 
              WHERE platform = 'facebook' AND status = 'active' AND config IS NOT NULL
              LIMIT 1"
         );
-        
+
         if ($service && $service['config']) {
             $config = json_decode($service['config'], true);
             $accessToken = $config['page_access_token'] ?? $config['access_token'] ?? null;
@@ -295,12 +295,12 @@ class PushNotificationService
                 return $accessToken;
             }
         }
-        
+
         // Final fallback: environment variable
         $envToken = getenv('FACEBOOK_PAGE_ACCESS_TOKEN');
         return $envToken ?: null;
     }
-    
+
     /**
      * Get notification template
      */
@@ -311,18 +311,18 @@ class PushNotificationService
             [$templateKey]
         );
     }
-    
+
     /**
      * Build message from template
      */
     private function buildMessage(array $template, string $platform, array $data): string
     {
         $templateText = $platform === 'line' ? $template['line_template'] : $template['facebook_template'];
-        
+
         if (!$templateText) {
             $templateText = $template['line_template'] ?? $template['facebook_template'] ?? '';
         }
-        
+
         // Replace variables
         foreach ($data as $key => $value) {
             if (is_numeric($value) && strpos($key, 'date') === false && strpos($key, 'period') === false) {
@@ -330,10 +330,10 @@ class PushNotificationService
             }
             $templateText = str_replace("{{{$key}}}", $value, $templateText);
         }
-        
+
         return $templateText;
     }
-    
+
     /**
      * Log notification to database
      */
@@ -355,10 +355,10 @@ class PushNotificationService
                 $status
             ]
         );
-        
+
         return $this->db->lastInsertId();
     }
-    
+
     /**
      * Update notification status
      */
@@ -392,14 +392,14 @@ class PushNotificationService
             );
         }
     }
-    
+
     /**
      * HTTP POST helper
      */
     private function httpPost(string $url, array $body, array $headers): array
     {
         $ch = curl_init($url);
-        
+
         curl_setopt_array($ch, [
             CURLOPT_POST => true,
             CURLOPT_POSTFIELDS => json_encode($body),
@@ -408,12 +408,12 @@ class PushNotificationService
             CURLOPT_TIMEOUT => 30,
             CURLOPT_SSL_VERIFYPEER => true
         ]);
-        
+
         $response = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $error = curl_error($ch);
         curl_close($ch);
-        
+
         return [
             'http_code' => $httpCode,
             'body' => json_decode($response, true),
@@ -421,7 +421,7 @@ class PushNotificationService
             'curl_error' => $error
         ];
     }
-    
+
     /**
      * Send notification for payment verification
      */
@@ -429,7 +429,7 @@ class PushNotificationService
     {
         return $this->send($platform, $platformUserId, 'payment_verified', $paymentData, $channelId);
     }
-    
+
     /**
      * Send notification for payment rejection
      */
@@ -437,7 +437,7 @@ class PushNotificationService
     {
         return $this->send($platform, $platformUserId, 'payment_rejected', $paymentData, $channelId);
     }
-    
+
     /**
      * Send notification for installment payment verified
      */
@@ -445,7 +445,7 @@ class PushNotificationService
     {
         return $this->send($platform, $platformUserId, 'installment_payment_verified', $data, $channelId);
     }
-    
+
     /**
      * Send notification for installment completed
      */
@@ -453,7 +453,7 @@ class PushNotificationService
     {
         return $this->send($platform, $platformUserId, 'installment_completed', $data, $channelId);
     }
-    
+
     /**
      * Send notification for savings deposit verified
      */
@@ -461,12 +461,73 @@ class PushNotificationService
     {
         return $this->send($platform, $platformUserId, 'savings_deposit_verified', $data, $channelId);
     }
-    
+
     /**
      * Send notification for savings goal reached
      */
     public function sendSavingsGoalReached(string $platform, string $platformUserId, array $data, ?int $channelId = null): array
     {
         return $this->send($platform, $platformUserId, 'savings_goal_reached', $data, $channelId);
+    }
+
+    /**
+     * Send notification for order created
+     * Automatically selects template based on order type
+     * 
+     * @param string $platform 'line' or 'facebook'
+     * @param string $platformUserId User ID on the platform
+     * @param string $orderType 'full_payment', 'installment', 'savings', 'deposit'
+     * @param array $orderData Order details including:
+     *   - product_name, total_amount, order_number
+     *   - For installment: period_1_amount, period_1_due, period_2_amount, period_3_amount, total_periods
+     *   - For savings: target_amount, current_balance
+     * @param int|null $channelId Channel ID for token lookup
+     * @return array Result with success status
+     */
+    public function sendOrderCreated(string $platform, string $platformUserId, string $orderType, array $orderData, ?int $channelId = null): array
+    {
+        // Map order type to template key
+        $templateMap = [
+            'full_payment' => 'order_created_full',
+            'full' => 'order_created_full',
+            'installment' => 'order_created_installment',
+            'savings' => 'order_created_savings',
+            'savings_completion' => 'order_created_savings',
+            'deposit' => 'order_created_full', // Deposit uses full template with deposit info in data
+        ];
+
+        $templateKey = $templateMap[$orderType] ?? 'order_created_full';
+
+        return $this->send($platform, $platformUserId, $templateKey, $orderData, $channelId);
+    }
+
+    /**
+     * Send direct text message (no template)
+     * Use this for custom messages that don't fit templates
+     */
+    public function sendDirectMessage(string $platform, string $platformUserId, string $message, ?int $channelId = null): array
+    {
+        try {
+            // Log notification
+            $notificationId = $this->logNotification($platform, $platformUserId, 'direct_message', $message, ['raw_message' => $message], $channelId);
+
+            // Send based on platform
+            if ($platform === 'line') {
+                $result = $this->sendLine($platformUserId, $message, $channelId);
+            } elseif ($platform === 'facebook') {
+                $result = $this->sendFacebook($platformUserId, $message, $channelId);
+            } else {
+                return ['success' => false, 'error' => 'Unsupported platform: ' . $platform];
+            }
+
+            // Update log
+            $this->updateNotificationStatus($notificationId, $result);
+
+            return $result;
+
+        } catch (Exception $e) {
+            error_log("PushNotificationService Direct Message Error: " . $e->getMessage());
+            return ['success' => false, 'error' => $e->getMessage()];
+        }
     }
 }

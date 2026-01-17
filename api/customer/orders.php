@@ -458,6 +458,11 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
     $totalAmount = floatval($input['total_amount'] ?? 0);
     $quantity = intval($input['quantity'] ?? 1);
 
+    // Ensure quantity is at least 1
+    if ($quantity < 1) {
+        $quantity = 1;
+    }
+
     if (empty($productName)) {
         http_response_code(400);
         echo json_encode(['success' => false, 'message' => 'กรุณาระบุชื่อสินค้า']);
@@ -479,16 +484,21 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
     $customerName = trim($input['customer_name'] ?? '');
     $customerPhone = trim($input['customer_phone'] ?? '');
     $note = trim($input['note'] ?? ($input['notes'] ?? ''));
-    $unitPrice = $totalAmount / $quantity;
-    
+
+    // Calculate unit price - ensure it's never 0 or invalid
+    $unitPrice = ($quantity > 0) ? ($totalAmount / $quantity) : $totalAmount;
+    if ($unitPrice <= 0) {
+        $unitPrice = $totalAmount; // fallback
+    }
+
     // Deposit-specific fields
     $depositAmount = floatval($input['deposit_amount'] ?? 0);
     $depositExpiry = $input['deposit_expiry'] ?? null;
-    
+
     // Installment-specific fields  
     $downPayment = floatval($input['down_payment'] ?? 0);
     $installmentMonths = intval($input['installment_months'] ?? 3);
-    
+
     // Shipping fields
     $shippingMethod = trim($input['shipping_method'] ?? 'pickup');
     $shippingAddress = trim($input['shipping_address'] ?? '');
@@ -514,12 +524,12 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
             $orderType = 'full';
         // Keep deposit and installment as-is
     }
-    
+
     // Determine initial status based on order type
     $initialStatus = 'pending';
     $paidAmount = 0;
     $paymentStatus = 'unpaid';
-    
+
     if ($orderType === 'deposit') {
         // Deposit order: partially paid, waiting for balance
         $initialStatus = 'pending_balance';
@@ -552,6 +562,18 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
             ];
             $insertVals = ['?', '?', '?', '?', '?'];
             $insertParams = [$orderNumber, $user_id, $orderType, $totalAmount, $initialStatus];
+
+            // ✅ Add product_name to orders table (for backward compatibility & search)
+            if (isset($columns['product_name'])) {
+                $insertCols[] = 'product_name';
+                $insertVals[] = '?';
+                $insertParams[] = $productName ?: 'สินค้า';
+            }
+            if (isset($columns['product_code'])) {
+                $insertCols[] = 'product_code';
+                $insertVals[] = '?';
+                $insertParams[] = $productCode ?: null;
+            }
 
             // Add optional columns if they exist
             if (isset($columns['subtotal'])) {
@@ -641,35 +663,38 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
             ]);
         } else {
             // No order_items table - product info in orders table directly
+            // IMPORTANT: unit_price is required (no default value on production)
             $insertCols = [
                 $orderNoCol,
                 $userColumn,
                 $typeCol,
                 'product_name',
+                'quantity',
+                'unit_price',
                 'total_amount',
                 'status',
                 $noteCol,
                 'created_at',
                 'updated_at'
             ];
-            $insertVals = ['?', '?', '?', '?', '?', "'pending'", '?', 'NOW()', 'NOW()'];
-            $insertParams = [$orderNumber, $user_id, $orderType, $productName, $totalAmount, $note ?: null];
+            $insertVals = ['?', '?', '?', '?', '?', '?', '?', '?', '?', 'NOW()', 'NOW()'];
+            $insertParams = [
+                $orderNumber,
+                $user_id,
+                $orderType,
+                $productName,
+                $quantity,
+                $unitPrice,
+                $totalAmount,
+                'pending',
+                $note ?: null
+            ];
 
             // Add optional columns if they exist
             if (isset($columns['product_code'])) {
                 $insertCols[] = 'product_code';
                 $insertVals[] = '?';
                 $insertParams[] = $productCode ?: null;
-            }
-            if (isset($columns['quantity'])) {
-                $insertCols[] = 'quantity';
-                $insertVals[] = '?';
-                $insertParams[] = $quantity;
-            }
-            if (isset($columns['unit_price'])) {
-                $insertCols[] = 'unit_price';
-                $insertVals[] = '?';
-                $insertParams[] = $unitPrice;
             }
 
             $sql = "INSERT INTO orders (" . implode(', ', $insertCols) . ") VALUES (" . implode(', ', $insertVals) . ")";
@@ -678,10 +703,15 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
 
             $orderId = $pdo->lastInsertId();
         }
-        
+
         // =========================================================================
         // Create Installment Records (if installment order)
-        // 3 งวด, ดอกเบี้ย 3% ต่อเดือน
+        // Spec: 3 งวด, ค่าดำเนินการ 3% ตลอดสัญญา (ไม่ใช่ต่อเดือน)
+        // 
+        // ตัวอย่าง 10,000 บาท:
+        // - งวดที่ 1: 3,500 + 300 (3%) = 3,800 บาท
+        // - งวดที่ 2: 3,500 บาท
+        // - งวดที่ 3: 3,000 บาท (ยอดคงเหลือ)
         // =========================================================================
         $installmentId = null;
         if ($orderType === 'installment' && $orderId) {
@@ -691,21 +721,47 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
                 try {
                     $stmtCheck = $pdo->query("SHOW TABLES LIKE 'installments'");
                     $hasInstallments = $stmtCheck->rowCount() > 0;
-                } catch (Exception $e) {}
-                
+                } catch (Exception $e) {
+                }
+
                 if ($hasInstallments) {
                     $remaining = $totalAmount - $downPayment;
-                    $interestRate = 0.03; // 3% per month
+
+                    // Service fee: 3% TOTAL (not per month!)
+                    $serviceFeeRate = 0.03;
+                    $serviceFee = round($remaining * $serviceFeeRate);
                     $months = 3;
-                    $monthlyPrincipal = $remaining / $months;
-                    $monthlyInterest = $remaining * $interestRate;
-                    $monthlyPayment = $monthlyPrincipal + $monthlyInterest;
-                    $totalInterest = $monthlyInterest * $months;
-                    $grandTotal = $totalAmount + $totalInterest;
-                    
+
+                    // Calculate installment amounts following spec:
+                    // - Period 1 & 2: equal amounts (rounded up to nearest 500)
+                    // - Period 3: remaining balance
+                    // - Service fee added to period 1
+                    $baseAmount = $remaining / 3;
+                    $p1 = ceil($baseAmount / 500) * 500;  // Round up to nearest 500
+                    $p2 = $p1;
+                    $p3 = $remaining - $p1 - $p2;
+
+                    // Adjust if period 3 becomes negative
+                    if ($p3 < 0) {
+                        $p1 = ceil($remaining / 3);
+                        $p2 = ceil($remaining / 3);
+                        $p3 = $remaining - $p1 - $p2;
+                        if ($p3 < 0) {
+                            $p2 += $p3;
+                            $p3 = 0;
+                        }
+                    }
+
+                    // Period 1 includes service fee
+                    $period1Total = $p1 + $serviceFee;
+                    $grandTotal = $remaining + $serviceFee;
+
+                    // For installments table compatibility
+                    $avgPayment = $grandTotal / $months;  // Average for monthly_payment field
+
                     // Generate installment number
                     $installmentNo = 'INS-' . date('Ymd') . '-' . strtoupper(substr(bin2hex(random_bytes(3)), 0, 5));
-                    
+
                     // Insert main installment record
                     $stmt = $pdo->prepare("
                         INSERT INTO installments (
@@ -726,34 +782,41 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
                         $downPayment,
                         $remaining,
                         $months,
-                        $interestRate * 100, // Store as percentage
-                        $monthlyPayment,
-                        $totalInterest,
+                        $serviceFeeRate * 100, // Store as percentage (3%)
+                        $avgPayment,
+                        $serviceFee,  // Total service fee (not monthly interest)
                         $grandTotal
                     ]);
-                    
+
                     $installmentId = $pdo->lastInsertId();
-                    
+
                     // Check if installment_payments table exists for payment schedule
                     $hasPayments = false;
                     try {
                         $stmtCheck = $pdo->query("SHOW TABLES LIKE 'installment_payments'");
                         $hasPayments = $stmtCheck->rowCount() > 0;
-                    } catch (Exception $e) {}
-                    
+                    } catch (Exception $e) {
+                    }
+
                     if ($hasPayments) {
-                        // Create 3 payment schedule records
-                        for ($i = 1; $i <= $months; $i++) {
-                            $dueDate = date('Y-m-d', strtotime("+{$i} month"));
+                        // Create 3 payment schedule records with correct amounts
+                        $payments = [
+                            1 => $period1Total,  // Period 1: includes service fee
+                            2 => $p2,            // Period 2: base amount
+                            3 => $p3             // Period 3: remaining
+                        ];
+
+                        foreach ($payments as $termNum => $amount) {
+                            $dueDate = date('Y-m-d', strtotime("+{$termNum} month"));
                             $stmt = $pdo->prepare("
                                 INSERT INTO installment_payments (
                                     installment_id, term_number, amount, due_date, status, created_at
                                 ) VALUES (?, ?, ?, ?, 'pending', NOW())
                             ");
-                            $stmt->execute([$installmentId, $i, $monthlyPayment, $dueDate]);
+                            $stmt->execute([$installmentId, $termNum, $amount, $dueDate]);
                         }
                     }
-                    
+
                     // Update order with installment_id
                     if (isset($columns['installment_id'])) {
                         $stmt = $pdo->prepare("UPDATE orders SET installment_id = ? WHERE id = ?");
@@ -767,44 +830,72 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
         }
 
         $pdo->commit();
-        
+
         // =========================================================================
-        // Push Message to Customer (if requested)
+        // Auto Push Message to Customer
+        // Send notification based on order type with proper template
         // =========================================================================
         $messageSent = false;
-        $sendMessage = !empty($input['send_message']);
-        $customerMessage = trim($input['customer_message'] ?? '');
         $customerId = $input['customer_id'] ?? null;
-        
-        if ($sendMessage && !empty($customerMessage) && $customerId) {
+
+        // Only send if customer_id provided (has platform info)
+        if ($customerId) {
             try {
                 // Get customer's platform info
                 $stmt = $pdo->prepare("SELECT platform, platform_user_id FROM customer_profiles WHERE id = ?");
-                $stmt->execute([(int)$customerId]);
+                $stmt->execute([(int) $customerId]);
                 $customer = $stmt->fetch(PDO::FETCH_ASSOC);
-                
+
                 if ($customer && !empty($customer['platform_user_id'])) {
-                    // Get user's channel_id
-                    $stmt = $pdo->prepare("SELECT id FROM customer_channels WHERE user_id = ? LIMIT 1");
-                    $stmt->execute([$user_id]);
+                    // Get channel_id from customer_services
+                    $stmt = $pdo->prepare("SELECT id FROM customer_services WHERE user_id = ? AND platform = ? LIMIT 1");
+                    $stmt->execute([$user_id, $customer['platform']]);
                     $channel = $stmt->fetch(PDO::FETCH_ASSOC);
-                    
-                    if ($channel) {
-                        require_once __DIR__ . '/../../includes/services/PushMessageService.php';
-                        $pushService = new \App\Services\PushMessageService($pdo);
-                        
-                        $result = $pushService->send(
-                            $customer['platform'],
-                            $customer['platform_user_id'],
-                            $customerMessage,
-                            (int)$channel['id']
-                        );
-                        
-                        $messageSent = $result['success'] ?? false;
-                        
-                        if (!$messageSent) {
-                            error_log("Push message failed for order {$orderNumber}: " . ($result['error'] ?? 'Unknown error'));
+                    $channelId = $channel ? (int) $channel['id'] : null;
+
+                    require_once __DIR__ . '/../../includes/services/PushNotificationService.php';
+                    $pushService = new PushNotificationService(Database::getInstance());
+
+                    // Build notification data based on order type
+                    $notificationData = [
+                        'product_name' => $productName,
+                        'total_amount' => number_format($totalAmount, 0),
+                        'order_number' => $orderNumber,
+                    ];
+
+                    // Add type-specific data
+                    if ($orderType === 'installment' && isset($period1Total)) {
+                        // Calculate due dates
+                        $period1Due = date('d/m/Y', strtotime('+1 month'));
+
+                        $notificationData['total_periods'] = 3;
+                        $notificationData['period_1_amount'] = number_format($period1Total, 0);
+                        $notificationData['period_1_due'] = $period1Due;
+                        $notificationData['period_2_amount'] = number_format($p2 ?? 0, 0);
+                        $notificationData['period_3_amount'] = number_format($p3 ?? 0, 0);
+                    } elseif (in_array($orderType, ['savings', 'savings_completion'])) {
+                        $notificationData['target_amount'] = number_format($totalAmount, 0);
+                        $notificationData['current_balance'] = '0';
+                    } elseif ($orderType === 'deposit') {
+                        $notificationData['deposit_amount'] = number_format($depositAmount, 0);
+                        if ($depositExpiry) {
+                            $notificationData['deposit_expiry'] = $depositExpiry;
                         }
+                    }
+
+                    // Send notification using template
+                    $result = $pushService->sendOrderCreated(
+                        $customer['platform'],
+                        $customer['platform_user_id'],
+                        $orderType,
+                        $notificationData,
+                        $channelId
+                    );
+
+                    $messageSent = $result['success'] ?? false;
+
+                    if (!$messageSent) {
+                        error_log("Auto push failed for order {$orderNumber}: " . ($result['error'] ?? 'Unknown error'));
                     }
                 }
             } catch (Exception $pushEx) {
@@ -813,15 +904,52 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
             }
         }
 
+        // Also send custom message if provided (legacy support)
+        $customMessageSent = false;
+        $sendMessage = !empty($input['send_message']);
+        $customerMessage = trim($input['customer_message'] ?? '');
+
+        if ($sendMessage && !empty($customerMessage) && $customerId && !$messageSent) {
+            try {
+                $stmt = $pdo->prepare("SELECT platform, platform_user_id FROM customer_profiles WHERE id = ?");
+                $stmt->execute([(int) $customerId]);
+                $customer = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                if ($customer && !empty($customer['platform_user_id'])) {
+                    // Get channel_id
+                    $stmt = $pdo->prepare("SELECT id FROM customer_services WHERE user_id = ? AND platform = ? LIMIT 1");
+                    $stmt->execute([$user_id, $customer['platform']]);
+                    $channelRow = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                    if ($channelRow) {
+                        require_once __DIR__ . '/../../includes/services/PushMessageService.php';
+                        $pushService = new \App\Services\PushMessageService($pdo);
+
+                        $result = $pushService->send(
+                            $customer['platform'],
+                            $customer['platform_user_id'],
+                            $customerMessage,
+                            (int) $channelRow['id']
+                        );
+
+                        $customMessageSent = $result['success'] ?? false;
+                    }
+                }
+            } catch (Exception $pushEx) {
+                error_log("Custom push message error for order {$orderNumber}: " . $pushEx->getMessage());
+            }
+        }
+
         // Return success (with order_no alias for frontend compatibility)
         echo json_encode([
             'success' => true,
-            'message' => $messageSent ? 'สร้างคำสั่งซื้อและส่งข้อความแจ้งลูกค้าแล้ว' : 'สร้างคำสั่งซื้อเรียบร้อย',
+            'message' => ($messageSent || $customMessageSent) ? 'สร้างคำสั่งซื้อและส่งข้อความแจ้งลูกค้าแล้ว' : 'สร้างคำสั่งซื้อเรียบร้อย',
             'data' => [
                 'id' => $orderId,
                 'order_number' => $orderNumber,
                 'order_no' => $orderNumber,
-                'message_sent' => $messageSent
+                'message_sent' => $messageSent || $customMessageSent,
+                'auto_notification' => $messageSent
             ]
         ]);
 
@@ -852,9 +980,32 @@ function updateOrder($pdo, $user_id, $tenant_id)
 
     $order_id = (int) $order_id;
 
-    // Check if order exists and belongs to this tenant
-    $stmt = $pdo->prepare("SELECT id, status FROM orders WHERE id = ? AND tenant_id = ?");
-    $stmt->execute([$order_id, $tenant_id]);
+    // ✅ Dynamic schema detection - check which columns exist
+    $columns = [];
+    $stmt = $pdo->query("SHOW COLUMNS FROM orders");
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        $columns[$row['Field']] = true;
+    }
+
+    $hasTenantId = isset($columns['tenant_id']);
+    $hasUserId = isset($columns['user_id']);
+
+    // Check if order exists and belongs to this user/tenant
+    if ($hasTenantId && $hasUserId) {
+        // Both exist - use user_id as primary (more reliable)
+        $stmt = $pdo->prepare("SELECT id, status FROM orders WHERE id = ? AND user_id = ?");
+        $stmt->execute([$order_id, $user_id]);
+    } elseif ($hasUserId) {
+        $stmt = $pdo->prepare("SELECT id, status FROM orders WHERE id = ? AND user_id = ?");
+        $stmt->execute([$order_id, $user_id]);
+    } elseif ($hasTenantId) {
+        $stmt = $pdo->prepare("SELECT id, status FROM orders WHERE id = ? AND tenant_id = ?");
+        $stmt->execute([$order_id, $tenant_id]);
+    } else {
+        // Fallback - just check order exists
+        $stmt = $pdo->prepare("SELECT id, status FROM orders WHERE id = ?");
+        $stmt->execute([$order_id]);
+    }
     $order = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if (!$order) {

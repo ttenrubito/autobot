@@ -249,11 +249,16 @@ function verifyPayment($db, $pdo, int $paymentId, $adminId)
     $input = json_decode(file_get_contents('php://input'), true);
     $notes = $input['notes'] ?? null;
 
-    // Get payment with platform info
+    // Get payment with platform info and order details
     $payment = $db->queryOne("
         SELECT p.*, 
+               o.product_name,
+               o.total_amount as order_total,
+               o.installment_months,
+               o.installment_id,
                pd.channel_id, pd.external_user_id, pd.platform
         FROM payments p
+        LEFT JOIN orders o ON p.order_id = o.id
         LEFT JOIN (
             SELECT payment_no, 
                    JSON_UNQUOTE(JSON_EXTRACT(payment_details, '$.channel_id')) as channel_id,
@@ -276,6 +281,68 @@ function verifyPayment($db, $pdo, int $paymentId, $adminId)
         return;
     }
 
+    // =========================================================================
+    // Auto-detect installment period if payment_type is installment
+    // =========================================================================
+    $currentPeriod = $payment['current_period'] ?? null;
+    $totalPeriods = 3; // Default
+    $paidPeriods = 0;
+    $nextPeriodInfo = '';
+    $isInstallmentComplete = false;
+    $installmentData = null;
+
+    if ($payment['payment_type'] === 'installment' && $payment['order_id']) {
+        // Try to get installment info from installments table
+        $installmentData = $db->queryOne("
+            SELECT i.*, 
+                   (SELECT COUNT(*) FROM installment_payments ip WHERE ip.installment_id = i.id AND ip.status = 'paid') as paid_count
+            FROM installments i 
+            WHERE i.order_id = ?
+        ", [$payment['order_id']]);
+
+        if ($installmentData) {
+            $totalPeriods = (int) ($installmentData['total_terms'] ?? 3);
+            $paidPeriods = (int) ($installmentData['paid_count'] ?? 0);
+
+            // Auto-detect current period from installment_payments
+            if (!$currentPeriod) {
+                $unpaidPeriod = $db->queryOne("
+                    SELECT term_number, amount 
+                    FROM installment_payments 
+                    WHERE installment_id = ? AND status = 'pending'
+                    ORDER BY term_number ASC 
+                    LIMIT 1
+                ", [$installmentData['id']]);
+
+                if ($unpaidPeriod) {
+                    $currentPeriod = (int) $unpaidPeriod['term_number'];
+                }
+            }
+
+            // Update payment with detected period
+            if ($currentPeriod && !$payment['current_period']) {
+                $stmt = $pdo->prepare("UPDATE payments SET current_period = ?, installment_period = ? WHERE id = ?");
+                $stmt->execute([$currentPeriod, "{$currentPeriod}/{$totalPeriods}", $paymentId]);
+            }
+
+            // Get next period info
+            $nextPeriod = $db->queryOne("
+                SELECT term_number, amount, due_date 
+                FROM installment_payments 
+                WHERE installment_id = ? AND term_number > ? AND status = 'pending'
+                ORDER BY term_number ASC 
+                LIMIT 1
+            ", [$installmentData['id'], $currentPeriod ?? 0]);
+
+            if ($nextPeriod) {
+                $nextDueDate = date('d/m/Y', strtotime($nextPeriod['due_date']));
+                $nextPeriodInfo = "▫️ งวดถัดไป: ฿" . number_format($nextPeriod['amount'], 0) . " (ครบกำหนด {$nextDueDate})";
+            } else {
+                $isInstallmentComplete = true;
+            }
+        }
+    }
+
     // Update payment status
     $stmt = $pdo->prepare("
         UPDATE payments
@@ -288,51 +355,168 @@ function verifyPayment($db, $pdo, int $paymentId, $adminId)
 
     // Update order if linked
     if ($payment['order_id']) {
-        $stmt = $pdo->prepare("
-            UPDATE orders 
-            SET payment_status = 'paid',
-                status = CASE WHEN status = 'pending_payment' THEN 'processing' ELSE status END,
-                updated_at = NOW()
-            WHERE id = ?
-        ");
-        $stmt->execute([$payment['order_id']]);
+        // For installment, only mark as paid if all periods done
+        if ($payment['payment_type'] === 'installment') {
+            if ($isInstallmentComplete) {
+                $stmt = $pdo->prepare("
+                    UPDATE orders 
+                    SET payment_status = 'paid',
+                        status = 'processing',
+                        updated_at = NOW()
+                    WHERE id = ?
+                ");
+            } else {
+                $stmt = $pdo->prepare("
+                    UPDATE orders 
+                    SET payment_status = 'partial',
+                        paid_amount = COALESCE(paid_amount, 0) + ?,
+                        updated_at = NOW()
+                    WHERE id = ?
+                ");
+                $stmt->execute([$payment['amount'], $payment['order_id']]);
+                $stmt = null; // Skip second execute
+            }
+        } else {
+            $stmt = $pdo->prepare("
+                UPDATE orders 
+                SET payment_status = 'paid',
+                    status = CASE WHEN status = 'pending_payment' THEN 'processing' ELSE status END,
+                    paid_amount = COALESCE(paid_amount, 0) + ?,
+                    updated_at = NOW()
+                WHERE id = ?
+            ");
+            $stmt->execute([$payment['amount'], $payment['order_id']]);
+            $stmt = null;
+        }
+
+        if ($stmt) {
+            $stmt->execute([$payment['order_id']]);
+        }
     }
 
     // If installment payment, update schedule
-    if ($payment['payment_type'] === 'installment' && $payment['current_period']) {
+    if ($payment['payment_type'] === 'installment' && $currentPeriod && $installmentData) {
+        // Update installment_payments
         $stmt = $pdo->prepare("
-            UPDATE installment_schedules
+            UPDATE installment_payments
             SET status = 'paid',
-                paid_amount = amount,
                 paid_at = NOW(),
                 payment_id = ?
-            WHERE order_id = ? AND period_number = ?
+            WHERE installment_id = ? AND term_number = ?
         ");
-        $stmt->execute([$paymentId, $payment['order_id'], $payment['current_period']]);
+        $stmt->execute([$paymentId, $installmentData['id'], $currentPeriod]);
+
+        // Also update installments.paid_terms
+        $stmt = $pdo->prepare("
+            UPDATE installments
+            SET paid_terms = paid_terms + 1,
+                status = CASE WHEN paid_terms + 1 >= total_terms THEN 'completed' ELSE status END,
+                updated_at = NOW()
+            WHERE id = ?
+        ");
+        $stmt->execute([$installmentData['id']]);
+
+        $paidPeriods++;
     }
 
     Logger::info('Payment verified', [
         'payment_id' => $paymentId,
         'payment_no' => $payment['payment_no'],
         'amount' => $payment['amount'],
-        'admin_id' => $adminId
+        'admin_id' => $adminId,
+        'payment_type' => $payment['payment_type'],
+        'current_period' => $currentPeriod
     ]);
 
-    // Send push notification if platform info available
+    // =========================================================================
+    // Send push notification based on payment type
+    // =========================================================================
     if ($payment['platform'] && $payment['external_user_id']) {
         try {
             $pushService = new PushNotificationService($db);
-            $pushService->sendPaymentVerified(
-                $payment['platform'],
-                $payment['external_user_id'],
-                [
-                    'amount' => $payment['amount'],
-                    'payment_ref' => $payment['payment_no'],
-                    'verified_date' => date('d/m/Y H:i'),
-                    'order_number' => $payment['order_no'] ?? ''
-                ],
-                $payment['channel_id'] ? (int) $payment['channel_id'] : null
-            );
+            $channelId = $payment['channel_id'] ? (int) $payment['channel_id'] : null;
+
+            if ($payment['payment_type'] === 'installment') {
+                if ($isInstallmentComplete) {
+                    // Send completion notification
+                    $pushService->sendInstallmentCompleted(
+                        $payment['platform'],
+                        $payment['external_user_id'],
+                        [
+                            'product_name' => $payment['product_name'] ?? 'สินค้า',
+                            'total_paid' => number_format($payment['order_total'] ?? 0, 0),
+                            'completion_date' => date('d/m/Y')
+                        ],
+                        $channelId
+                    );
+                } else {
+                    // Send period verified notification
+                    $pushService->sendInstallmentPaymentVerified(
+                        $payment['platform'],
+                        $payment['external_user_id'],
+                        [
+                            'product_name' => $payment['product_name'] ?? 'สินค้า',
+                            'amount' => $payment['amount'],
+                            'payment_date' => date('d/m/Y H:i'),
+                            'current_period' => $currentPeriod ?? 1,
+                            'total_periods' => $totalPeriods,
+                            'paid_periods' => $paidPeriods,
+                            'next_period_info' => $nextPeriodInfo ?: 'ชำระครบแล้ว! 🎉'
+                        ],
+                        $channelId
+                    );
+                }
+            } elseif ($payment['payment_type'] === 'savings' || $payment['payment_type'] === 'savings_deposit') {
+                // Get savings info
+                $savings = $db->queryOne("
+                    SELECT * FROM savings_accounts WHERE order_id = ?
+                ", [$payment['order_id']]);
+
+                if ($savings) {
+                    $newBalance = (float) $savings['current_amount'] + (float) $payment['amount'];
+                    $targetAmount = (float) $savings['target_amount'];
+                    $remaining = $targetAmount - $newBalance;
+
+                    if ($remaining <= 0) {
+                        $pushService->sendSavingsGoalReached(
+                            $payment['platform'],
+                            $payment['external_user_id'],
+                            [
+                                'product_name' => $payment['product_name'] ?? 'สินค้า',
+                                'total_saved' => number_format($newBalance, 0),
+                                'completion_date' => date('d/m/Y')
+                            ],
+                            $channelId
+                        );
+                    } else {
+                        $pushService->sendSavingsDepositVerified(
+                            $payment['platform'],
+                            $payment['external_user_id'],
+                            [
+                                'product_name' => $payment['product_name'] ?? 'สินค้า',
+                                'amount' => $payment['amount'],
+                                'new_balance' => number_format($newBalance, 0),
+                                'target_amount' => number_format($targetAmount, 0),
+                                'remaining' => number_format($remaining, 0)
+                            ],
+                            $channelId
+                        );
+                    }
+                }
+            } else {
+                // Full payment - use regular template
+                $pushService->sendPaymentVerified(
+                    $payment['platform'],
+                    $payment['external_user_id'],
+                    [
+                        'amount' => $payment['amount'],
+                        'payment_no' => $payment['payment_no'],
+                        'payment_date' => date('d/m/Y H:i'),
+                        'order_number' => $payment['order_no'] ?? ''
+                    ],
+                    $channelId
+                );
+            }
         } catch (Exception $e) {
             Logger::error('Failed to send push notification: ' . $e->getMessage());
         }
@@ -341,7 +525,12 @@ function verifyPayment($db, $pdo, int $paymentId, $adminId)
     echo json_encode([
         'success' => true,
         'message' => 'Payment verified successfully',
-        'data' => ['payment_no' => $payment['payment_no']]
+        'data' => [
+            'payment_no' => $payment['payment_no'],
+            'payment_type' => $payment['payment_type'],
+            'current_period' => $currentPeriod,
+            'is_complete' => $isInstallmentComplete
+        ]
     ]);
 }
 

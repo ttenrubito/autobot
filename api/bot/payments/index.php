@@ -277,6 +277,19 @@ function createDraftOrderInternal($db, array $data): array
 
     // Get or create customer
     $customerId = $data['customer_id'] ?? null;
+    $userId = $data['user_id'] ?? null;
+
+    // ✅ Lookup user_id from customer_profiles if not provided
+    if (!$userId && !empty($data['external_user_id']) && !empty($data['platform'])) {
+        $customerProfile = $db->queryOne(
+            "SELECT id, user_id FROM customer_profiles WHERE platform_user_id = ? AND platform = ? LIMIT 1",
+            [$data['external_user_id'], $data['platform']]
+        );
+        if ($customerProfile) {
+            $userId = $customerProfile['user_id'] ?? null;
+            $customerId = $customerId ?? $customerProfile['id'];
+        }
+    }
 
     if (!$customerId) {
         // Create placeholder user directly (without channel linking)
@@ -290,6 +303,9 @@ function createDraftOrderInternal($db, array $data): array
         );
         $customerId = $db->lastInsertId();
     }
+
+    $totalAmount = (float) ($data['total_amount'] ?? 0);
+    $unitPrice = $totalAmount; // unit_price = total_amount for single item
 
     $sql = "INSERT INTO orders (
         order_no, user_id, platform_user_id, customer_id, tenant_id,
@@ -305,18 +321,16 @@ function createDraftOrderInternal($db, array $data): array
         NOW(), NOW()
     )";
 
-    $totalAmount = (float) ($data['total_amount'] ?? 0);
-
     $params = [
         $orderNo,
-        $data['user_id'] ?? null,
+        $userId,                           // ✅ Now properly looked up
         $data['external_user_id'] ?? null, // platform_user_id for JOIN
         $customerId,
         $data['tenant_id'] ?? 'default',
         $data['product_name'] ?? 'สินค้า (รอระบุ)',
         $data['product_code'] ?? null,
         $data['product_ref_id'] ?? null,
-        $totalAmount,
+        $unitPrice,                        // ✅ unit_price
         $totalAmount,
         $data['payment_type'] ?? 'full',
         $data['source'] ?? 'chatbot',
