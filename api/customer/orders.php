@@ -553,15 +553,18 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
 
         if ($hasOrderItems) {
             // Has order_items table - insert into both tables
+            // IMPORTANT: unit_price is required (no default value on production)
             $insertCols = [
                 $orderNoCol,
                 $userColumn,
                 $typeCol,
+                'quantity',
+                'unit_price',
                 'total_amount',
                 'status'
             ];
-            $insertVals = ['?', '?', '?', '?', '?'];
-            $insertParams = [$orderNumber, $user_id, $orderType, $totalAmount, $initialStatus];
+            $insertVals = ['?', '?', '?', '?', '?', '?', '?'];
+            $insertParams = [$orderNumber, $user_id, $orderType, $quantity, $unitPrice, $totalAmount, $initialStatus];
 
             // ✅ Add product_name to orders table (for backward compatibility & search)
             if (isset($columns['product_name'])) {
