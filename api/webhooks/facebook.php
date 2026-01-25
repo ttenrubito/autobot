@@ -171,9 +171,34 @@ function processMessagingEvent(array $event, string $entryPageId): void
         'entry_page_id' => $entryPageId,
     ]);
 
-    // Check for messages
+    // ✅ CRITICAL FIX: Handle postback events (button clicks)
+    // When user clicks a button on Generic Template, Facebook sends postback event with payload
+    // The payload contains the button text like "สนใจ P-2026-000001"
+    if (isset($event['postback']) && is_array($event['postback'])) {
+        $postbackPayload = $event['postback']['payload'] ?? '';
+        Logger::info('[FB_WEBHOOK] Postback event received', [
+            'payload' => $postbackPayload,
+            'sender_id' => $event['sender']['id'] ?? null,
+        ]);
+        
+        // ✅ Convert postback to message format so rest of code can process it
+        // This treats button clicks the same as if user typed the text
+        if ($postbackPayload !== '') {
+            $event['message'] = [
+                'text' => $postbackPayload,
+                'mid' => 'postback_' . time() . '_' . ($event['sender']['id'] ?? ''),
+                '_from_postback' => true,  // Mark as converted from postback
+            ];
+            Logger::info('[FB_WEBHOOK] Postback converted to message', [
+                'original_payload' => $postbackPayload,
+                'converted_text' => $event['message']['text'],
+            ]);
+        }
+    }
+
+    // Check for messages (now includes converted postback events)
     if (!isset($event['message']) || !is_array($event['message'])) {
-        Logger::info('[FB_WEBHOOK] Event ignored (not a message)', [
+        Logger::info('[FB_WEBHOOK] Event ignored (not a message or postback)', [
             'event_type' => array_keys($event)[0] ?? 'unknown',
         ]);
         return;
@@ -435,8 +460,19 @@ function processMessagingEvent(array $event, string $entryPageId): void
     // ✅ NEW: Support for multi-message replies (human-like conversation)
     // Check for reply_texts array first, fallback to single reply_text
     $replyTexts = [];
+    $replyMessages = []; // Flex/Rich messages
     
     if (is_array($data)) {
+        // Check for reply_messages (Flex/Rich messages - convert to FB Generic Template)
+        if (!empty($data['reply_messages']) && is_array($data['reply_messages'])) {
+            $replyMessages = $data['reply_messages'];
+            Logger::info('[FB_WEBHOOK] Flex/Rich message reply detected', [
+                'trace_id' => $traceId,
+                'message_count' => count($replyMessages),
+                'types' => array_map(fn($m) => $m['type'] ?? 'unknown', $replyMessages)
+            ]);
+        }
+        
         // Check for new format: reply_texts array
         if (!empty($data['reply_texts']) && is_array($data['reply_texts'])) {
             $replyTexts = $data['reply_texts'];
@@ -445,8 +481,8 @@ function processMessagingEvent(array $event, string $entryPageId): void
                 'message_count' => count($replyTexts),
             ]);
         }
-        // Fallback to single message format
-        elseif (!empty($data['reply_text'])) {
+        // Fallback to single message format (only if no Flex messages)
+        elseif (!empty($data['reply_text']) && empty($replyMessages)) {
             $replyTexts = [(string)$data['reply_text']];
             Logger::info('[FB_WEBHOOK] Single message reply (legacy format)', [
                 'trace_id' => $traceId,
@@ -454,10 +490,90 @@ function processMessagingEvent(array $event, string $entryPageId): void
         }
     }
 
-    // Send text messages with natural delays
+    // ✅ Extract quick_replies and images from actions (if any)
+    $fbQuickReplies = [];
+    $imageActions = [];
+    
+    if (!empty($actions) && is_array($actions)) {
+        foreach ($actions as $action) {
+            if (!is_array($action)) continue;
+            
+            // Collect quick_replies
+            if (($action['type'] ?? '') === 'quick_reply' && !empty($action['items'])) {
+                foreach ($action['items'] as $item) {
+                    $fbQuickReplies[] = [
+                        'content_type' => 'text',
+                        'title' => mb_substr($item['label'] ?? $item['text'], 0, 20), // FB limit 20 chars
+                        'payload' => $item['text']
+                    ];
+                }
+            }
+            
+            // Collect images
+            if (($action['type'] ?? '') === 'image' && !empty($action['url'])) {
+                $imageActions[] = $action;
+            }
+        }
+        
+        if (!empty($fbQuickReplies)) {
+            Logger::info('[FB_WEBHOOK] ✅ Found quick_replies in actions', ['count' => count($fbQuickReplies)]);
+        }
+        if (!empty($imageActions)) {
+            Logger::info('[FB_WEBHOOK] ✅ Found images in actions', ['count' => count($imageActions)]);
+        }
+    }
+    
+    // =========================================================
+    // ✅ SEND ORDER: Carousel FIRST, then Images, then text + quick_reply LAST
+    // This ensures quick_reply buttons appear at the bottom
+    // =========================================================
+    
+    // 0️⃣ Send Flex/Carousel as Facebook Generic Template FIRST
+    if (!empty($replyMessages)) {
+        Logger::info("[FB_WEBHOOK] 🎨 Converting " . count($replyMessages) . " Flex message(s) to FB Template");
+        
+        foreach ($replyMessages as $flexMsg) {
+            if (($flexMsg['type'] ?? '') === 'flex' && !empty($flexMsg['contents'])) {
+                $fbTemplate = convertFlexToFacebookTemplate($flexMsg);
+                if ($fbTemplate) {
+                    Logger::info("[FB_WEBHOOK] 🎨 Sending FB Generic Template", [
+                        'element_count' => count($fbTemplate['message']['attachment']['payload']['elements'] ?? [])
+                    ]);
+                    $success = sendFacebookTemplate($senderId, $fbTemplate, $channel);
+                    if ($success) {
+                        Logger::info("[FB_WEBHOOK] ✅ FB Template sent successfully");
+                    } else {
+                        Logger::error("[FB_WEBHOOK] ❌ FB Template failed to send");
+                    }
+                    usleep(200000); // 200ms delay
+                }
+            }
+        }
+    }
+    
+    // 1️⃣ Send images FIRST (before text messages)
+    if (!empty($imageActions)) {
+        Logger::info("[FB_WEBHOOK] 📸 Sending " . count($imageActions) . " image(s) FIRST");
+        foreach ($imageActions as $idx => $imgAction) {
+            $imageUrl = $imgAction['url'];
+            Logger::info("[FB_WEBHOOK] 📸 Sending image #" . ($idx + 1), [
+                'image_url' => $imageUrl
+            ]);
+            $success = sendFacebookImage($senderId, $imageUrl, $channel);
+            if ($success) {
+                Logger::info("[FB_WEBHOOK] ✅ Image #" . ($idx + 1) . " sent successfully");
+            } else {
+                Logger::error("[FB_WEBHOOK] ❌ Image #" . ($idx + 1) . " failed to send");
+            }
+            // Small delay to ensure proper ordering
+            usleep(200000); // 200ms
+        }
+    }
+    
+    // 2️⃣ Send text messages AFTER images (with quick_reply on last message)
     if (!empty($replyTexts)) {
         $messageCount = count($replyTexts);
-        Logger::info('[FB_WEBHOOK] Sending ' . $messageCount . ' message(s)', [
+        Logger::info('[FB_WEBHOOK] Sending ' . $messageCount . ' message(s) AFTER images', [
             'trace_id' => $traceId,
             'recipient_psid' => $senderId,
         ]);
@@ -468,10 +584,10 @@ function processMessagingEvent(array $event, string $entryPageId): void
                 continue;
             }
             
-            // Add natural delay between messages (except for first message)
-            if ($index > 0) {
-                // Random delay between 500-800ms for human-like feel
-                $delayMicros = rand(500000, 800000);
+            // Add natural delay between messages (except for first message after images)
+            if ($index > 0 || !empty($imageActions)) {
+                // Random delay between 300-500ms for human-like feel
+                $delayMicros = rand(300000, 500000);
                 Logger::info('[FB_WEBHOOK] Delay before message #' . ($index + 1), [
                     'delay_ms' => round($delayMicros / 1000),
                 ]);
@@ -484,52 +600,22 @@ function processMessagingEvent(array $event, string $entryPageId): void
                 'message_preview' => mb_substr($messageText, 0, 50, 'UTF-8'),
             ]);
             
-            $ok = sendFacebookMessage($senderId, $messageText, $channel);
+            // ✅ Attach quick_replies to LAST message only
+            $isLastMessage = ($index === $messageCount - 1);
+            $quickRepliesToSend = ($isLastMessage && !empty($fbQuickReplies)) ? $fbQuickReplies : null;
+            
+            $ok = sendFacebookMessage($senderId, $messageText, $channel, $quickRepliesToSend);
             
             Logger::info('[FB_WEBHOOK] Message #' . ($index + 1) . ' send result', [
                 'trace_id' => $traceId,
                 'ok' => $ok,
+                'had_quick_replies' => !empty($quickRepliesToSend),
             ]);
         }
         
         Logger::info('[FB_WEBHOOK] All messages sent', [
             'trace_id' => $traceId,
             'total_sent' => $messageCount,
-        ]);
-    }
-
-    // Send images if actions contain images
-    if (!empty($actions) && is_array($actions)) {
-        Logger::info("[FB_WEBHOOK] ✅ Processing " . count($actions) . " actions for sending");
-        $imageCount = 0;
-        foreach ($actions as $idx => $action) {
-            if (is_array($action) && isset($action['type']) && $action['type'] === 'image' && !empty($action['url'])) {
-                $imageCount++;
-                Logger::info("[FB_WEBHOOK] 📸 Sending image #{$imageCount}", [
-                    'action_index' => $idx,
-                    'image_url' => $action['url']
-                ]);
-                $success = sendFacebookImage($senderId, $action['url'], $channel);
-                if ($success) {
-                    Logger::info("[FB_WEBHOOK] ✅ Image #{$imageCount} sent successfully");
-                } else {
-                    Logger::error("[FB_WEBHOOK] ❌ Image #{$imageCount} failed to send");
-                }
-                // Small delay to ensure proper ordering
-                usleep(200000); // 200ms
-            } else {
-                Logger::warning("[FB_WEBHOOK] ⚠️ Skipping action at index {$idx}", [
-                    'reason' => 'Not an image action or missing URL',
-                    'action' => $action
-                ]);
-            }
-        }
-        Logger::info("[FB_WEBHOOK] ✅ Finished processing actions - sent {$imageCount} images");
-    } else {
-        Logger::warning("[FB_WEBHOOK] ⚠️ No actions to process", [
-            'actions_empty' => empty($actions),
-            'actions_is_array' => is_array($actions),
-            'actions_value' => $actions
         ]);
     }
 }
@@ -655,6 +741,15 @@ function callGateway(array $payload): ?array
     $err  = curl_error($ch);
     curl_close($ch);
 
+    // Debug log raw response
+    Logger::info('[FB_WEBHOOK] Gateway raw response', [
+        'gateway_url' => $gatewayUrl,
+        'http_code' => $http,
+        'raw_len' => strlen((string)$raw),
+        'raw_snippet' => substr((string)$raw, 0, 300),
+        'curl_error' => $err,
+    ]);
+
     if ($raw === false || $http !== 200) {
         Logger::error('[FB_WEBHOOK] Gateway call failed', [
             'gateway_url' => $gatewayUrl,
@@ -678,6 +773,7 @@ function callGateway(array $payload): ?array
         Logger::error('[FB_WEBHOOK] Gateway returned non-JSON', [
             'gateway_url' => $gatewayUrl,
             'resp_snippet' => substr((string)$raw, 0, 500),
+            'json_error' => json_last_error_msg(),
         ]);
 
         return [
@@ -695,8 +791,12 @@ function callGateway(array $payload): ?array
 
 /**
  * Send message back to user via Page Access Token
+ * @param string $recipientPsid
+ * @param string $text
+ * @param array $channel
+ * @param array|null $quickReplies Optional quick reply buttons
  */
-function sendFacebookMessage(string $recipientPsid, string $text, array $channel): bool
+function sendFacebookMessage(string $recipientPsid, string $text, array $channel, ?array $quickReplies = null): bool
 {
     $cfg = json_decode($channel['config'] ?? '{}', true);
     $pageToken = trim((string)($cfg['page_access_token'] ?? ''));
@@ -709,9 +809,19 @@ function sendFacebookMessage(string $recipientPsid, string $text, array $channel
     // ใช้ access_token เป็น query param (กันเคส /me ไม่ resolve เพราะ token ไม่ใช่ page token)
     $url = 'https://graph.facebook.com/v18.0/me/messages?access_token=' . urlencode($pageToken);
 
+    $message = ['text' => $text];
+    
+    // ✅ Add quick_replies if provided
+    if (!empty($quickReplies)) {
+        $message['quick_replies'] = $quickReplies;
+        Logger::info('[FB_SEND] Adding quick_replies to message', [
+            'count' => count($quickReplies)
+        ]);
+    }
+
     $payload = [
         'recipient'      => ['id' => $recipientPsid],
-        'message'        => ['text' => $text],
+        'message'        => $message,
         'messaging_type' => 'RESPONSE',
     ];
 
@@ -734,6 +844,157 @@ function sendFacebookMessage(string $recipientPsid, string $text, array $channel
         return false;
     }
 
+    return true;
+}
+
+/**
+ * Convert LINE Flex Message (Carousel) to Facebook Generic Template
+ */
+function convertFlexToFacebookTemplate(array $flexMsg): ?array
+{
+    $contents = $flexMsg['contents'] ?? null;
+    if (!$contents || ($contents['type'] ?? '') !== 'carousel') {
+        return null;
+    }
+    
+    $bubbles = $contents['contents'] ?? [];
+    if (empty($bubbles)) {
+        return null;
+    }
+    
+    $elements = [];
+    foreach (array_slice($bubbles, 0, 10) as $bubble) { // FB limit: 10 elements
+        if (($bubble['type'] ?? '') !== 'bubble') continue;
+        
+        // Extract data from LINE bubble
+        $hero = $bubble['hero'] ?? [];
+        $body = $bubble['body'] ?? [];
+        $footer = $bubble['footer'] ?? [];
+        
+        $imageUrl = $hero['url'] ?? 'https://via.placeholder.com/400x300';
+        
+        // Extract texts from body
+        $title = '';
+        $subtitle = '';
+        $price = '';
+        
+        $bodyContents = $body['contents'] ?? [];
+        foreach ($bodyContents as $item) {
+            if (($item['type'] ?? '') === 'text') {
+                $text = $item['text'] ?? '';
+                $size = $item['size'] ?? '';
+                
+                if ($size === 'sm' && !$title) {
+                    // Product code
+                    $title = $text;
+                } elseif ($size === 'md') {
+                    // Product name
+                    $subtitle = $text;
+                } elseif ($size === 'lg') {
+                    // Price
+                    $price = $text;
+                }
+            }
+        }
+        
+        // Build FB element
+        $element = [
+            'title' => mb_substr($subtitle ?: $title, 0, 80), // FB limit: 80 chars
+            'subtitle' => mb_substr("รหัส: {$title}\n💰 {$price}", 0, 80),
+            'image_url' => $imageUrl,
+        ];
+        
+        // Extract button from footer
+        $buttons = [];
+        $footerContents = $footer['contents'] ?? [];
+        foreach ($footerContents as $btn) {
+            if (($btn['type'] ?? '') === 'button' && !empty($btn['action'])) {
+                $action = $btn['action'];
+                if (($action['type'] ?? '') === 'message') {
+                    $buttons[] = [
+                        'type' => 'postback',
+                        'title' => mb_substr($action['label'] ?? 'สนใจ', 0, 20),
+                        'payload' => $action['text'] ?? ''
+                    ];
+                }
+            }
+        }
+        
+        if (!empty($buttons)) {
+            $element['buttons'] = array_slice($buttons, 0, 3); // FB limit: 3 buttons
+        }
+        
+        $elements[] = $element;
+    }
+    
+    if (empty($elements)) {
+        return null;
+    }
+    
+    return [
+        'message' => [
+            'attachment' => [
+                'type' => 'template',
+                'payload' => [
+                    'template_type' => 'generic',
+                    'elements' => $elements
+                ]
+            ]
+        ]
+    ];
+}
+
+/**
+ * Send Facebook Generic Template
+ */
+function sendFacebookTemplate(string $recipientPsid, array $template, array $channel): bool
+{
+    $cfg = json_decode($channel['config'] ?? '{}', true);
+    $pageToken = trim((string)($cfg['page_access_token'] ?? ''));
+
+    if ($pageToken === '') {
+        Logger::error('[FB_TEMPLATE] ❌ Facebook page_access_token not configured');
+        return false;
+    }
+
+    $url = 'https://graph.facebook.com/v18.0/me/messages?access_token=' . urlencode($pageToken);
+
+    $payload = array_merge([
+        'recipient' => ['id' => $recipientPsid],
+        'messaging_type' => 'RESPONSE',
+    ], $template);
+    
+    Logger::info("[FB_TEMPLATE] Sending Generic Template", [
+        'recipient' => $recipientPsid,
+        'element_count' => count($template['message']['attachment']['payload']['elements'] ?? [])
+    ]);
+
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_UNICODE),
+        CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
+        CURLOPT_TIMEOUT        => 30,
+    ]);
+
+    $resp = curl_exec($ch);
+    $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err  = curl_error($ch);
+    curl_close($ch);
+
+    if ($http !== 200) {
+        Logger::error('[FB_TEMPLATE] ❌ Facebook API returned error', [
+            'http_code' => $http,
+            'curl_error' => $err,
+            'facebook_response' => substr((string)$resp, 0, 800),
+        ]);
+        return false;
+    }
+
+    Logger::info("[FB_TEMPLATE] ✅ Template sent successfully", [
+        'http_code' => $http,
+    ]);
     return true;
 }
 
