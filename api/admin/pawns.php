@@ -187,7 +187,7 @@ try {
         $input = json_decode(file_get_contents('php://input'), true);
 
         // Validate required fields
-        $required = ['customer_id', 'item_type', 'item_name', 'loan_amount', 'interest_rate'];
+        $required = ['customer_id', 'item_type', 'item_name', 'loan_amount'];
         foreach ($required as $field) {
             if (empty($input[$field]) && $input[$field] !== 0) {
                 http_response_code(400);
@@ -195,6 +195,9 @@ try {
                 exit;
             }
         }
+
+        // Default interest rate to 2% per business requirement
+        $interestRate = $input['interest_rate'] ?? 2.00;
 
         // Generate pawn number
         $lastPawn = $db->queryOne(
@@ -206,31 +209,100 @@ try {
         }
         $pawnNo = 'PWN' . str_pad($nextNum, 6, '0', STR_PAD_LEFT);
 
-        // Calculate due date if not provided
+        // Calculate due date - default 30 days (monthly interest cycle)
         $dueDate = $input['due_date'] ?? null;
         if (!$dueDate) {
-            $months = (int) ($input['period_months'] ?? 3);
+            $months = (int) ($input['period_months'] ?? 1);
             $dueDate = date('Y-m-d', strtotime("+{$months} months"));
         }
 
-        // Insert pawn
-        $sql = "INSERT INTO pawns (
-                    pawn_no, customer_id, {$categoryCol}, item_description,
-                    {$loanCol}, interest_rate, due_date, status, notes, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, NOW())";
+        // Check which columns exist for compatibility
+        $hasWarrantyNo = in_array('warranty_no', $columns);
+        $hasProductRefId = in_array('product_ref_id', $columns);
+        $hasOriginalOrderId = in_array('original_order_id', $columns);
+        $hasItemName = in_array('item_name', $columns);
 
-        $db->execute($sql, [
+        // Build dynamic column list
+        $insertCols = "pawn_no, customer_id, {$categoryCol}, item_description, {$loanCol}, interest_rate, due_date, status, notes, created_at";
+        $insertVals = "?, ?, ?, ?, ?, ?, ?, 'active', ?, NOW()";
+        $insertParams = [
             $pawnNo,
             $input['customer_id'],
             $input['item_type'],
             $input['item_name'] . ($input['item_description'] ? ' - ' . $input['item_description'] : ''),
             $input['loan_amount'],
-            $input['interest_rate'],
+            $interestRate,
             $dueDate,
             $input['notes'] ?? null
-        ]);
+        ];
+
+        // Add optional business fields if columns exist
+        if ($hasItemName) {
+            $insertCols .= ", item_name";
+            $insertVals .= ", ?";
+            $insertParams[] = $input['item_name'];
+        }
+        if ($hasWarrantyNo && !empty($input['warranty_no'])) {
+            $insertCols .= ", warranty_no";
+            $insertVals .= ", ?";
+            $insertParams[] = $input['warranty_no'];
+        }
+        if ($hasProductRefId && !empty($input['product_ref_id'])) {
+            $insertCols .= ", product_ref_id";
+            $insertVals .= ", ?";
+            $insertParams[] = $input['product_ref_id'];
+        }
+        if ($hasOriginalOrderId && !empty($input['original_order_id'])) {
+            $insertCols .= ", original_order_id";
+            $insertVals .= ", ?";
+            $insertParams[] = $input['original_order_id'];
+        }
+
+        // Insert pawn
+        $sql = "INSERT INTO pawns ({$insertCols}) VALUES ({$insertVals})";
+        $db->execute($sql, $insertParams);
 
         $pawnId = $db->lastInsertId();
+
+        // Calculate monthly interest for notification
+        $monthlyInterest = round((float) $input['loan_amount'] * ($interestRate / 100), 2);
+
+        // Send push notification to customer
+        try {
+            // Get customer profile info with channel lookup
+            $customer = $db->queryOne(
+                "SELECT cp.platform, cp.platform_user_id, cp.display_name, cp.tenant_id,
+                        cc.id as channel_id
+                 FROM customer_profiles cp 
+                 LEFT JOIN customer_channels cc ON cc.tenant_id = cp.tenant_id 
+                    AND cc.platform = cp.platform AND cc.status = 'active'
+                 WHERE cp.id = ?
+                 LIMIT 1",
+                [$input['customer_id']]
+            );
+
+            if ($customer && $customer['platform_user_id']) {
+                require_once __DIR__ . '/../../includes/services/PushNotificationService.php';
+                $pushService = new PushNotificationService($db);
+
+                $pushService->sendPawnCreated(
+                    $customer['platform'],
+                    $customer['platform_user_id'],
+                    [
+                        'pawn_no' => $pawnNo,
+                        'item_name' => $input['item_name'],
+                        'loan_amount' => $input['loan_amount'],
+                        'interest_rate' => $interestRate,
+                        'monthly_interest' => $monthlyInterest,
+                        'due_date' => $dueDate
+                    ],
+                    $customer['channel_id']
+                );
+            }
+        } catch (Exception $e) {
+            error_log("Pawn notification error: " . $e->getMessage());
+            // Don't fail the pawn creation if notification fails
+        }
 
         http_response_code(201);
         echo json_encode([
@@ -239,7 +311,9 @@ try {
             'data' => [
                 'id' => $pawnId,
                 'pawn_no' => $pawnNo,
-                'due_date' => $dueDate
+                'due_date' => $dueDate,
+                'interest_rate' => $interestRate,
+                'monthly_interest' => $monthlyInterest
             ]
         ]);
     }
@@ -304,6 +378,202 @@ try {
     } else {
         http_response_code(405);
         echo json_encode(['success' => false, 'message' => 'Method not allowed']);
+    }
+
+    // ==================== ADDITIONAL POST ACTIONS ====================
+    // Handle action parameter for POST requests
+    if ($method === 'POST' && isset($_GET['action'])) {
+        $action = $_GET['action'];
+        $input = json_decode(file_get_contents('php://input'), true);
+
+        if ($action === 'verify-interest') {
+            // Admin verifies interest payment
+            $pawnPaymentId = $input['payment_id'] ?? null;
+            $status = $input['status'] ?? 'verified'; // verified or rejected
+
+            if (!$pawnPaymentId) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'message' => 'Payment ID required']);
+                exit;
+            }
+
+            // Get payment info
+            $payment = $db->queryOne(
+                "SELECT pp.*, p.pawn_no, p.item_description, p.platform_user_id, p.platform, p.channel_id
+                 FROM pawn_payments pp
+                 JOIN pawns p ON pp.pawn_id = p.id
+                 WHERE pp.id = ?",
+                [$pawnPaymentId]
+            );
+
+            if (!$payment) {
+                http_response_code(404);
+                echo json_encode(['success' => false, 'message' => 'Payment not found']);
+                exit;
+            }
+
+            if ($status === 'verified') {
+                // Update payment status
+                $db->execute(
+                    "UPDATE pawn_payments SET status = 'verified', verified_at = NOW() WHERE id = ?",
+                    [$pawnPaymentId]
+                );
+
+                // Calculate new due date and update pawn
+                $months = (int) ($input['months'] ?? 1);
+                $newDueDate = date('Y-m-d', strtotime("+{$months} months", strtotime($payment['period_end'] ?? 'now')));
+
+                // Update pawn due date and extension count
+                $db->execute(
+                    "UPDATE pawns SET 
+                        due_date = ?, 
+                        status = 'active',
+                        extension_count = COALESCE(extension_count, 0) + 1,
+                        updated_at = NOW() 
+                     WHERE id = ?",
+                    [$newDueDate, $payment['pawn_id']]
+                );
+
+                // Send push notification
+                if ($payment['platform_user_id']) {
+                    try {
+                        require_once __DIR__ . '/../../includes/services/PushNotificationService.php';
+                        $pushService = new PushNotificationService($db);
+                        $pushService->sendPawnInterestVerified(
+                            $payment['platform'] ?? 'line',
+                            $payment['platform_user_id'],
+                            [
+                                'pawn_no' => $payment['pawn_no'],
+                                'amount' => $payment['amount'],
+                                'months' => $months,
+                                'new_due_date' => $newDueDate
+                            ],
+                            $payment['channel_id']
+                        );
+                    } catch (Exception $e) {
+                        error_log("Pawn interest notification error: " . $e->getMessage());
+                    }
+                }
+
+                echo json_encode(['success' => true, 'message' => 'อนุมัติต่อดอกสำเร็จ', 'new_due_date' => $newDueDate]);
+            } else {
+                // Reject payment
+                $db->execute(
+                    "UPDATE pawn_payments SET status = 'rejected', rejection_reason = ? WHERE id = ?",
+                    [$input['reason'] ?? 'ไม่อนุมัติ', $pawnPaymentId]
+                );
+                echo json_encode(['success' => true, 'message' => 'ปฏิเสธการต่อดอก']);
+            }
+            exit;
+        }
+
+        if ($action === 'verify-redemption') {
+            // Admin verifies redemption payment
+            $pawnPaymentId = $input['payment_id'] ?? null;
+            $status = $input['status'] ?? 'verified';
+
+            if (!$pawnPaymentId) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'message' => 'Payment ID required']);
+                exit;
+            }
+
+            // Get payment info
+            $payment = $db->queryOne(
+                "SELECT pp.*, p.id as pawn_id, p.pawn_no, p.product_name, p.product_description, p.pawn_amount,
+                        p.platform_user_id, p.platform, p.channel_id, p.case_id, p.external_user_id
+                 FROM pawn_payments pp
+                 JOIN pawns p ON pp.pawn_id = p.id
+                 WHERE pp.id = ?",
+                [$pawnPaymentId]
+            );
+
+            if (!$payment) {
+                http_response_code(404);
+                echo json_encode(['success' => false, 'message' => 'Payment not found']);
+                exit;
+            }
+
+            if ($status === 'verified') {
+                // Update payment status
+                $db->execute(
+                    "UPDATE pawn_payments SET status = 'verified', verified_at = NOW(), verified_by = ? WHERE id = ?",
+                    [$_SESSION['admin_user_id'] ?? 1, $pawnPaymentId]
+                );
+
+                // Update pawn status to redeemed
+                $db->execute(
+                    "UPDATE pawns SET 
+                        status = 'redeemed',
+                        redeemed_at = NOW(),
+                        updated_at = NOW() 
+                     WHERE id = ?",
+                    [$payment['pawn_id']]
+                );
+
+                // ✅ Auto-close related case on successful redemption
+                if (!empty($payment['case_id'])) {
+                    $db->execute(
+                        "UPDATE cases SET 
+                            status = 'closed', 
+                            resolved_at = NOW(),
+                            resolution = 'ไถ่ถอนสำเร็จ - ลูกค้าได้รับสินค้าคืน'
+                         WHERE id = ?",
+                        [$payment['case_id']]
+                    );
+                }
+                
+                // Also close any open pawn_redemption case for this pawn
+                $db->execute(
+                    "UPDATE cases SET 
+                        status = 'closed', 
+                        resolved_at = NOW(),
+                        resolution = 'ไถ่ถอนสำเร็จ - สลิปผ่านการตรวจสอบ'
+                     WHERE case_type = 'pawn_redemption' 
+                       AND status = 'open'
+                       AND subject LIKE ?",
+                    ['%' . $payment['pawn_no'] . '%']
+                );
+
+                // Send push notification to customer
+                if ($payment['platform_user_id'] || $payment['external_user_id']) {
+                    try {
+                        require_once __DIR__ . '/../../includes/services/PushMessageService.php';
+                        $pushService = new \App\Services\PushMessageService(getDB());
+                        
+                        $platformUserId = $payment['external_user_id'] ?: $payment['platform_user_id'];
+                        $productName = $payment['product_name'] ?? $payment['product_description'] ?? 'สินค้า';
+                        $loanAmount = $payment['pawn_amount'] ?? $payment['principal_amount'] ?? 0;
+                        
+                        $message = "🎉 ไถ่ถอนสำเร็จค่ะ!\n\n"
+                            . "📋 รหัสจำนำ: {$payment['pawn_no']}\n"
+                            . "📦 สินค้า: {$productName}\n"
+                            . "💰 เงินต้น: ฿" . number_format($loanAmount, 0) . "\n"
+                            . "💵 ยอดชำระ: ฿" . number_format($payment['amount'] ?? 0, 0) . "\n\n"
+                            . "✅ กรุณานัดหมายรับสินค้าคืนที่ร้านค่ะ 😊";
+                        
+                        $pushService->sendMessage(
+                            $payment['platform'] ?? 'line',
+                            $platformUserId,
+                            $payment['channel_id'],
+                            $message
+                        );
+                    } catch (Exception $e) {
+                        error_log("Pawn redemption notification error: " . $e->getMessage());
+                    }
+                }
+
+                echo json_encode(['success' => true, 'message' => 'อนุมัติไถ่ถอนสำเร็จ กรุณานัดลูกค้ารับสินค้า']);
+            } else {
+                // Reject redemption
+                $db->execute(
+                    "UPDATE pawn_payments SET status = 'rejected', rejection_reason = ? WHERE id = ?",
+                    [$input['reason'] ?? 'ไม่อนุมัติ', $pawnPaymentId]
+                );
+                echo json_encode(['success' => true, 'message' => 'ปฏิเสธการไถ่ถอน']);
+            }
+            exit;
+        }
     }
 
 } catch (Exception $e) {
