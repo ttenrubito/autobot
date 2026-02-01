@@ -362,11 +362,23 @@ function buildReminderMessage($contract, $reminderType, $periodNumber, $daysUnti
  * Send push notification to platform
  */
 function sendPushNotification($db, $platform, $platformUserId, $channelId, $message) {
-    // Get channel config from customer_channels table
-    $channel = $db->queryOne("SELECT * FROM customer_channels WHERE id = ?", [$channelId]);
+    $channel = null;
+    
+    // Try by channel_id first
+    if ($channelId) {
+        $channel = $db->queryOne("SELECT * FROM customer_channels WHERE id = ?", [$channelId]);
+    }
+    
+    // Fallback: find channel by platform type
+    if (!$channel && $platform) {
+        $channel = $db->queryOne(
+            "SELECT * FROM customer_channels WHERE type = ? AND status = 'active' ORDER BY id DESC LIMIT 1", 
+            [$platform]
+        );
+    }
     
     if (!$channel) {
-        throw new Exception("Channel not found: {$channelId}");
+        throw new Exception("Channel not found for platform: {$platform}, channel_id: {$channelId}");
     }
     
     $config = json_decode($channel['config'] ?? '{}', true);
