@@ -25,10 +25,11 @@ try {
     require_once __DIR__ . '/../config.php';
     require_once __DIR__ . '/../includes/Database.php';
     require_once __DIR__ . '/../includes/Response.php';
+    require_once __DIR__ . '/../includes/auth.php';
 
-    // Simple auth check - ต้องมี Bearer token
-    $authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
-    if (empty($authHeader) || !preg_match('/^Bearer\s+(.+)$/i', $authHeader, $matches)) {
+    // Verify JWT token (same as other customer APIs)
+    $auth = verifyToken();
+    if (!$auth['valid']) {
         http_response_code(401);
         echo json_encode(['success' => false, 'message' => 'Unauthorized']);
         exit;
