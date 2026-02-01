@@ -124,10 +124,9 @@ function getEligibleItems($pdo, $shop_owner_id)
         return;
     }
     
-    // Get orders that are paid/delivered but not already pawned
+    // ดึง orders ทั้งหมดของลูกค้า (ทุกสถานะ ให้เจ้าหน้าที่พิจารณาเอง)
     // Match by customer_id (FK to customer_profiles) หรือ platform_user_id
-    // NOTE: pawns table ไม่มี original_order_id - ใช้ item_name/product_code match แทน
-    // หรือในอนาคตควรเพิ่ม column order_id ใน pawns table
+    // JOIN กับ products table เพื่อดึง image_url
     $stmt = $pdo->prepare("
         SELECT 
             o.id as order_id, 
@@ -140,18 +139,20 @@ function getEligibleItems($pdo, $shop_owner_id)
             o.paid_amount,
             o.status as order_status,
             o.payment_status,
+            o.payment_type,
             o.created_at as purchase_date,
             (o.unit_price * ? / 100) as suggested_loan,
             (o.unit_price * ? / 100 * ? / 100) as monthly_interest,
             cp.display_name as customer_name,
-            cp.platform
+            cp.platform,
+            p.image_url as product_image
         FROM orders o
         LEFT JOIN customer_profiles cp ON (
             o.customer_id = cp.id 
             OR (o.platform_user_id = cp.platform_user_id AND o.platform = cp.platform)
         )
+        LEFT JOIN products p ON o.product_code = p.product_code
         WHERE (o.customer_id = ? OR cp.id = ?)
-        AND o.status IN ('paid', 'delivered', 'completed')
         ORDER BY o.created_at DESC
     ");
     $stmt->execute([

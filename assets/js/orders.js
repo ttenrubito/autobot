@@ -30,6 +30,38 @@ function buildAddressesLinkForOrder(order) {
     return base;
 }
 
+/**
+ * Render payment progress bar showing % paid
+ */
+function renderPaymentProgress(order) {
+    const total = parseFloat(order.total_amount) || 0;
+    const paid = parseFloat(order.paid_amount) || 0;
+    
+    if (total <= 0) return '';
+    
+    const percent = Math.min(100, Math.round((paid / total) * 100));
+    const remaining = total - paid;
+    
+    // Color based on progress
+    let color = '#dc2626'; // red - not paid
+    if (percent >= 100) color = '#059669'; // green - fully paid
+    else if (percent >= 50) color = '#0284c7'; // blue - half paid
+    else if (percent > 0) color = '#d97706'; // orange - partial
+    
+    return `
+        <div style="margin-top:4px;">
+            <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:#6b7280;">
+                <span>ชำระแล้ว ฿${formatNumber(paid)}</span>
+                <span style="font-weight:600;color:${color}">${percent}%</span>
+            </div>
+            <div style="background:#e5e7eb;border-radius:4px;height:6px;margin-top:2px;overflow:hidden;">
+                <div style="background:${color};height:100%;width:${percent}%;transition:width 0.3s;"></div>
+            </div>
+            ${remaining > 0 ? `<div style="font-size:0.7rem;color:#9ca3af;margin-top:2px;">คงเหลือ ฿${formatNumber(remaining)}</div>` : ''}
+        </div>
+    `;
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     loadOrders();
 
@@ -57,6 +89,7 @@ function prefillOrderFromUrlParams() {
     const productCode = params.get('product_code');
     const totalAmount = params.get('total_amount');
     const downPayment = params.get('down_payment');
+    const productImage = params.get('product_image');
 
     // Customer info
     const customerName = params.get('customer_name');
@@ -67,6 +100,9 @@ function prefillOrderFromUrlParams() {
 
     // Payment type
     const paymentType = params.get('payment_type');
+
+    // Shipping method
+    const shippingMethod = params.get('shipping_method');
 
     // Notes
     const notes = params.get('notes');
@@ -86,6 +122,25 @@ function prefillOrderFromUrlParams() {
     if (totalAmount) {
         const el = document.getElementById('totalAmount');
         if (el) el.value = totalAmount;
+    }
+    if (productImage) {
+        const el = document.getElementById('productImageUrl');
+        if (el) el.value = productImage;
+        console.log('[prefillOrder] Set productImageUrl:', productImage);
+        
+        // Also display the product image in the UI
+        const imgEl = document.getElementById('selectedProductImg');
+        if (imgEl) {
+            imgEl.src = productImage;
+            console.log('[prefillOrder] Set product image src:', productImage);
+        }
+        
+        // Show the product card (it's hidden by default)
+        const cardEl = document.getElementById('selectedProductCard');
+        if (cardEl) {
+            cardEl.style.display = 'flex';
+            console.log('[prefillOrder] Show selectedProductCard');
+        }
     }
 
     // Fill customer fields
@@ -116,10 +171,50 @@ function prefillOrderFromUrlParams() {
         const radio = document.querySelector(`input[name="payment_type"][value="${paymentType}"]`);
         if (radio) {
             radio.checked = true;
-            if (paymentType === 'installment') {
-                toggleInstallmentFields();
+            // Always call toggleInstallmentFields to show/hide deposit or installment fields
+            toggleInstallmentFields();
+        }
+    }
+
+    // Select shipping method
+    if (shippingMethod) {
+        const shippingSelect = document.getElementById('shippingMethod');
+        if (shippingSelect) {
+            shippingSelect.value = shippingMethod;
+            console.log('[prefillOrder] Set shippingMethod:', shippingMethod);
+            // ✅ FIX: Call toggleShippingFields directly instead of dispatchEvent
+            // dispatchEvent doesn't work with onchange attribute in HTML
+            if (typeof toggleShippingFields === 'function') {
+                toggleShippingFields();
             }
         }
+    }
+    
+    // ✅ NEW: Fill shipping address from case checkout flow
+    const shippingAddress = params.get('shipping_address');
+    const recipientName = params.get('recipient_name');
+    const recipientPhone = params.get('recipient_phone');
+    const addressLine1 = params.get('address_line1');
+    const district = params.get('district');
+    const province = params.get('province');
+    const postalCode = params.get('postal_code');
+    
+    if (shippingAddress) {
+        const el = document.getElementById('shippingAddress');
+        if (el) {
+            el.value = shippingAddress;
+            console.log('[prefillOrder] Set shippingAddress:', shippingAddress);
+        }
+    }
+    if (recipientName && !customerName) {
+        // Use recipient name as customer name if no customer name
+        const el = document.getElementById('customerName');
+        if (el && !el.value) el.value = recipientName;
+    }
+    if (recipientPhone && !customerPhone) {
+        // Use recipient phone as customer phone if no customer phone
+        const el = document.getElementById('customerPhone');
+        if (el && !el.value) el.value = recipientPhone;
     }
 
     // Fill down payment for installment
@@ -140,6 +235,17 @@ function prefillOrderFromUrlParams() {
     if (fromCase) {
         const el = document.getElementById('fromCaseId');
         if (el) el.value = fromCase;
+    }
+
+    // =========================================================================
+    // Auto-fetch and select product from product catalog
+    // =========================================================================
+    if (productCode || productName) {
+        autoSelectProductFromParams({
+            product_code: productCode,
+            product_name: productName,
+            total_amount: totalAmount
+        });
     }
 
     // =========================================================================
@@ -164,6 +270,61 @@ function prefillOrderFromUrlParams() {
     if (window.history.replaceState) {
         const cleanUrl = window.location.pathname;
         window.history.replaceState({}, document.title, cleanUrl);
+    }
+}
+
+/**
+ * Auto-fetch and select product from URL params
+ * Tries to find product in catalog by product_code
+ */
+async function autoSelectProductFromParams(params) {
+    const { product_code, product_name, total_amount } = params;
+
+    try {
+        // Try to search by product_code first (most reliable)
+        let searchQuery = product_code || product_name;
+
+        if (searchQuery) {
+            const apiUrl = (typeof API_ENDPOINTS !== 'undefined' && API_ENDPOINTS.PRODUCTS_SEARCH_V1)
+                ? API_ENDPOINTS.PRODUCTS_SEARCH_V1
+                : '/api/v1/products/search';
+
+            const searchBody = product_code 
+                ? { product_code: product_code, page: { limit: 5 } }
+                : { keyword: product_name, page: { limit: 5 } };
+
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(searchBody)
+            });
+            const result = await response.json();
+
+            if (result && result.data && result.data.length > 0) {
+                // Find best match - prefer exact product_code match
+                let bestMatch = result.data[0];
+
+                if (product_code) {
+                    const exactMatch = result.data.find(p =>
+                        p.product_code === product_code ||
+                        p.ref_id === product_code
+                    );
+                    if (exactMatch) {
+                        bestMatch = exactMatch;
+                        console.log('[autoSelectProduct] Found exact match by product_code:', bestMatch);
+                    }
+                }
+
+                // Auto-select this product
+                selectProduct(bestMatch);
+                console.log('[autoSelectProduct] Auto-selected product:', bestMatch);
+            } else {
+                console.log('[autoSelectProduct] No product found, using manual input');
+            }
+        }
+    } catch (error) {
+        console.error('[autoSelectProduct] Error:', error);
+        // Fallback: keep the manual input values (already filled)
     }
 }
 
@@ -316,7 +477,7 @@ function renderOrders(orders) {
     const targetOrderNo = getQueryParam('order_no');
 
     if (!orders || orders.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--color-gray);">ไม่พบคำสั่งซื้อ</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:2rem;color:var(--color-gray);">ไม่พบคำสั่งซื้อ</td></tr>';
         return;
     }
 
@@ -349,11 +510,11 @@ function renderOrders(orders) {
         const isHighlighted = targetOrderNo && String(order.order_no) === String(targetOrderNo);
         const rowStyle = isHighlighted ? 'background: rgba(59, 130, 246, 0.08);' : '';
 
-        // Prepare customer profile
+        // Prepare customer profile (use new API field names)
         const customerProfile = {
-            platform: order.customer_platform || 'web',
-            name: order.customer_name || 'ไม่ระบุลูกค้า',
-            avatar: order.customer_avatar || null
+            platform: order.cp_platform || order.customer_platform || 'web',
+            name: order.customer_display_name || order.customer_name || 'ไม่ระบุลูกค้า',
+            avatar: order.customer_avatar_url || order.customer_avatar || null
         };
         const customerBadgeHtml = typeof renderCustomerProfileBadge === 'function'
             ? renderCustomerProfileBadge(customerProfile)
@@ -363,7 +524,12 @@ function renderOrders(orders) {
         const paymentType = order.payment_type || order.order_type || 'full_payment';
         const isFullPayment = paymentType === 'full' || paymentType === 'full_payment';
         const isInstallment = paymentType === 'installment';
+        const isDeposit = paymentType === 'deposit';
+        const isSavings = paymentType === 'savings' || paymentType === 'savings_completion';
         const installmentMonths = order.installment_months || 0;
+
+        // Format created_at for display
+        const createdDate = order.created_at ? formatDateTime(order.created_at) : '-';
 
         return `
             <tr onclick="viewOrderDetail(${order.id})" style="cursor:pointer;${rowStyle}">
@@ -373,13 +539,17 @@ function renderOrders(orders) {
                     ${order.product_name || '-'}<br>
                     <small style="color:var(--color-gray);">${order.product_code || ''}</small>
                 </td>
-                <td style="text-align:right;"><strong>฿${formatNumber(order.total_amount)}</strong></td>
+                <td style="text-align:right;">
+                    <strong>฿${formatNumber(order.total_amount)}</strong>
+                    ${renderPaymentProgress(order)}
+                </td>
                 <td>
-                    <span class="badge badge-${isFullPayment ? 'success' : 'info'}">
-                        ${isFullPayment ? '💳 จ่ายเต็ม' : (isInstallment ? '📅 ผ่อน ' + installmentMonths + ' งวด' : '💰 ออมครบ')}
+                    <span class="badge badge-${isFullPayment ? 'success' : (isDeposit ? 'warning' : 'info')}">
+                        ${isFullPayment ? '💳 จ่ายเต็ม' : (isInstallment ? '📅 ผ่อน ' + installmentMonths + ' งวด' : (isDeposit ? '💎 มัดจำ' : '💰 ออมครบ'))}
                     </span>
                 </td>
                 <td><span class="badge badge-${statusClass}">${statusText}</span></td>
+                <td style="font-size: 0.85rem; color: var(--color-gray);">${createdDate}</td>
                 <td>
                     <button class="btn btn-sm btn-primary" onclick="event.stopPropagation(); viewOrderDetail(${order.id});">
                         <i class="fas fa-eye"></i> ดู
@@ -437,6 +607,9 @@ function renderOrderDetails(order) {
     // Build installment section
     const installmentHtml = buildInstallmentSection(order);
 
+    // Build deposit section
+    const depositHtml = buildDepositSection(order);
+
     return `
         <!-- Customer Profile -->
         ${customerHtml}
@@ -463,12 +636,24 @@ function renderOrderDetails(order) {
                     <div class="detail-label">แหล่งที่มา</div>
                     <div class="detail-value">${order.source || '-'}</div>
                 </div>
+                <div class="detail-item">
+                    <div class="detail-label">🚚 ช่องทางรับสินค้า</div>
+                    <div class="detail-value">${getShippingMethodLabel(order.shipping_method)}</div>
+                </div>
             </div>
         </div>
         
         <!-- Product Info -->
         <div class="detail-section">
             <div class="detail-section-title">รายละเอียดสินค้า</div>
+            ${order.product_image_url || (order.items && order.items[0]?.product_image_url) ? `
+            <div style="margin-bottom: 1rem; text-align: center;">
+                <img src="${order.product_image_url || order.items[0]?.product_image_url}" 
+                     alt="${order.product_name || 'สินค้า'}" 
+                     style="max-width: 200px; max-height: 200px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);"
+                     onerror="this.style.display='none';">
+            </div>
+            ` : ''}
             <div class="detail-grid">
                 <div class="detail-item">
                     <div class="detail-label">ชื่อสินค้า</div>
@@ -492,23 +677,35 @@ function renderOrderDetails(order) {
         <!-- Payment Info -->
         <div class="detail-section">
             <div class="detail-section-title">การชำระเงิน</div>
+            ${buildPaymentProgressSection(order)}
             <div class="detail-grid">
                 <div class="detail-item">
                     <div class="detail-label">ประเภทการชำระ</div>
                     <div class="detail-value">
                         <span class="payment-type-tag">
-                            ${(order.payment_type === 'full' || order.order_type === 'full_payment' || !order.payment_type) ? '💳 ชำระเต็มจำนวน' : '📅 ผ่อนชำระ ' + (order.installment_months || 0) + ' งวด'}
+                            ${getPaymentTypeLabel(order)}
                         </span>
                     </div>
                 </div>
-                ${order.payments && order.payments.length > 0 ? `
                 <div class="detail-item">
-                    <div class="detail-label">การชำระล่าสุด</div>
-                    <div class="detail-value">${order.payments[0].payment_no || order.payments[0].id || '-'} - ฿${formatNumber(order.payments[0].amount)}</div>
+                    <div class="detail-label">สถานะชำระ</div>
+                    <div class="detail-value">
+                        <span class="status-badge status-${getPaymentStatusClass(order.payment_status)}">${getPaymentStatusLabel(order.payment_status)}</span>
+                    </div>
                 </div>
-                ` : ''}
             </div>
-            
+            ${depositHtml}
+            ${buildPaymentHistorySection(order)}
+        </div>
+        
+        <!-- Shipping Address -->
+        ${addressHtml}
+        
+        <!-- Installment Schedule -->
+        ${installmentHtml}
+        
+        <!-- Action Buttons - ย้ายมาล่างสุด -->
+        <div class="detail-section">
             <div class="action-buttons">
                 <button class="btn-action btn-edit" onclick="openEditOrderModal(${order.id})">
                     <i class="fas fa-edit"></i> แก้ไขคำสั่งซื้อ
@@ -521,20 +718,16 @@ function renderOrderDetails(order) {
                 </a>
             </div>
         </div>
-        
-        <!-- Shipping Address -->
-        ${addressHtml}
-        
-        <!-- Installment Schedule -->
-        ${installmentHtml}
     `;
 }
 
 function buildCustomerSection(order) {
-    const name = order.customer_name || 'ไม่ระบุลูกค้า';
-    const platform = order.customer_platform || 'web';
-    const avatar = validateAvatarUrl(order.customer_avatar);
-    const phone = order.phone || order.recipient_phone || null;
+    // Try customer_profile from API join first, then fall back to direct fields
+    const profile = order.customer_profile || {};
+    const name = profile.display_name || profile.full_name || order.customer_display_name || order.customer_name || 'ไม่ระบุลูกค้า';
+    const platform = profile.platform || order.cp_platform || order.customer_platform || order.platform || 'web';
+    const avatar = validateAvatarUrl(profile.avatar_url || order.customer_avatar_url || order.customer_avatar);
+    const phone = profile.phone || order.phone || order.shipping_phone || null;
 
     const initials = name.split(' ').map(n => n.charAt(0)).join('').substring(0, 2).toUpperCase();
 
@@ -590,66 +783,435 @@ function validateAvatarUrl(url) {
 }
 
 function buildAddressSection(order) {
-    // Check if we have address info
-    if (!order.recipient_name && !order.address_line1) {
+    // ถ้าเป็นรับที่ร้าน ไม่ต้องแสดง section ที่อยู่
+    const shippingMethod = order.shipping_method || 'pickup';
+    if (shippingMethod === 'pickup') {
+        return `
+            <div class="detail-section">
+                <div class="detail-section-title">📍 ช่องทางรับสินค้า</div>
+                <div class="address-block" style="background: #ecfdf5; border: 1px solid #a7f3d0;">
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <span style="font-size: 1.5rem;">🏪</span>
+                        <div>
+                            <div style="font-weight: 600; color: #059669;">รับที่ร้าน</div>
+                            <div style="font-size: 0.85rem; color: #6b7280;">นัดหมายรับสินค้าที่หน้าร้าน</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    // Check if we have shipping_address_detail from API (from customer_addresses join)
+    const addr = order.shipping_address_detail || {};
+    
+    // Check if we have address info - either from join or from direct fields
+    const recipientName = addr.recipient_name || order.shipping_name || order.recipient_name;
+    const phone = addr.phone || order.shipping_phone || order.phone;
+    const addressLine1 = addr.address_line1 || order.address_line1;
+    
+    // Link to addresses page if we have shipping_address_id
+    const addressLink = order.shipping_address_id 
+        ? buildAddressesLinkForOrder(order) 
+        : null;
+    
+    if (!recipientName && !addressLine1 && !order.shipping_address) {
         return '';
     }
 
+    // If we have shipping_address as text (legacy), use it
+    if (!addressLine1 && order.shipping_address) {
+        return `
+            <div class="detail-section">
+                <div class="detail-section-title">📦 ที่อยู่จัดส่ง (${getShippingMethodLabel(shippingMethod)})</div>
+                <div class="address-block">
+                    <div class="address-name">${order.shipping_name || '-'}</div>
+                    <div class="address-phone">${order.shipping_phone || '-'}</div>
+                    <div>${order.shipping_address}</div>
+                </div>
+            </div>
+        `;
+    }
+
     const addressParts = [
-        order.address_line1,
-        order.address_line2,
-        order.subdistrict,
-        order.district,
-        order.province,
-        order.postal_code
+        addr.address_line1 || order.address_line1,
+        addr.address_line2 || order.address_line2,
+        addr.subdistrict || order.subdistrict,
+        addr.district || order.district,
+        addr.province || order.province,
+        addr.postal_code || order.postal_code
     ].filter(Boolean);
+
+    // Build link button if we have address_id
+    const viewAddressBtn = addressLink 
+        ? `<a href="${addressLink}" class="btn btn-sm btn-outline" style="margin-top: 0.75rem; display: inline-flex; align-items: center; gap: 0.25rem;">
+            <i class="fas fa-external-link-alt"></i> ดูรายละเอียดที่อยู่
+           </a>` 
+        : '';
 
     return `
         <div class="detail-section">
-            <div class="detail-section-title">ที่อยู่จัดส่ง</div>
+            <div class="detail-section-title">📦 ที่อยู่จัดส่ง (${getShippingMethodLabel(shippingMethod)})</div>
             <div class="address-block">
-                <div class="address-name">${order.recipient_name || '-'}</div>
-                <div class="address-phone">${order.phone || '-'}</div>
+                <div class="address-name">${recipientName || '-'}</div>
+                <div class="address-phone">${phone || '-'}</div>
                 <div>${addressParts.join(' ') || '-'}</div>
+                ${viewAddressBtn}
             </div>
         </div>
     `;
 }
 
 function buildInstallmentSection(order) {
-    if (!order.installments || order.installments.length === 0) {
+    // Check for installment_schedule (from API) or installments
+    const installments = order.installment_schedule || order.installments || [];
+    
+    if (!installments || installments.length === 0) {
+        // If order is installment type but no schedule yet, show info
+        if (order.payment_type === 'installment' || order.order_type === 'installment') {
+            const totalPeriods = order.installment_months || 3;
+            return `
+                <div class="detail-section">
+                    <div class="detail-section-title">📅 แผนผ่อนชำระ (${totalPeriods} งวด)</div>
+                    <div style="padding: 1rem; background: #fef3c7; border-radius: 8px; text-align: center; color: #92400e;">
+                        <i class="fas fa-clock"></i> กำลังสร้างตารางผ่อนชำระ กรุณาติดต่อแอดมิน
+                    </div>
+                </div>
+            `;
+        }
         return '';
     }
 
+    // Calculate installment progress
+    const paidCount = installments.filter(i => i.status === 'paid').length;
+    const totalCount = installments.length;
+    const installmentProgress = totalCount > 0 ? Math.round((paidCount / totalCount) * 100) : 0;
+
     return `
         <div class="detail-section">
-            <div class="detail-section-title">ตารางผ่อนชำระ (${order.installment_months || order.installments.length} งวด)</div>
+            <div class="detail-section-title">📅 ตารางผ่อนชำระ</div>
+            
+            <!-- Installment Progress Bar -->
+            <div style="margin-bottom: 1rem; padding: 1rem; background: #f0f9ff; border-radius: 8px; border: 1px solid #bae6fd;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                    <span style="font-size: 0.9rem; font-weight: 600; color: #0369a1;">
+                        <i class="fas fa-calendar-check"></i> ความคืบหน้า: ${paidCount}/${totalCount} งวด
+                    </span>
+                    <span style="font-weight: 600; color: ${paidCount === totalCount ? '#22c55e' : '#0369a1'};">${installmentProgress}%</span>
+                </div>
+                <div style="height: 12px; background: #e0f2fe; border-radius: 6px; overflow: hidden;">
+                    <div style="height: 100%; width: ${installmentProgress}%; background: ${paidCount === totalCount ? '#22c55e' : '#0ea5e9'}; transition: width 0.3s ease; border-radius: 6px;"></div>
+                </div>
+            </div>
+            
             <table class="installment-table">
                 <thead>
                     <tr>
                         <th>งวดที่</th>
                         <th>วันครบกำหนด</th>
                         <th style="text-align:right;">จำนวนเงิน</th>
+                        <th style="text-align:right;">ชำระแล้ว</th>
                         <th>สถานะ</th>
                     </tr>
                 </thead>
                 <tbody>
-                    ${order.installments.map(inst => `
-                        <tr>
-                            <td><strong>${inst.period_number}</strong></td>
-                            <td>${formatDate(inst.due_date)}</td>
-                            <td style="text-align:right;">฿${formatNumber(inst.amount)}</td>
-                            <td>
-                                <span class="inst-status ${inst.status}">
-                                    ${inst.status === 'paid' ? '✓ ชำระแล้ว' : inst.status === 'overdue' ? '⚠ เกินกำหนด' : '⏳ รอชำระ'}
-                                </span>
-                            </td>
-                        </tr>
-                    `).join('')}
+                    ${installments.map(inst => {
+                        const paidAmt = parseFloat(inst.paid_amount) || 0;
+                        const dueAmt = parseFloat(inst.amount) || 0;
+                        const isFullyPaid = paidAmt >= dueAmt;
+                        return `
+                            <tr style="${inst.status === 'overdue' ? 'background: #fef2f2;' : inst.status === 'paid' ? 'background: #f0fdf4;' : ''}">
+                                <td><strong>${inst.period_number}</strong></td>
+                                <td>${formatDate(inst.due_date)}</td>
+                                <td style="text-align:right;">฿${formatNumber(dueAmt)}</td>
+                                <td style="text-align:right; color: ${paidAmt > 0 ? '#22c55e' : '#9ca3af'};">฿${formatNumber(paidAmt)}</td>
+                                <td>
+                                    <span class="inst-status ${inst.status}">
+                                        ${inst.status === 'paid' ? '✓ ชำระแล้ว' : inst.status === 'overdue' ? '⚠ เกินกำหนด' : inst.status === 'partial' ? '◐ ชำระบางส่วน' : '⏳ รอชำระ'}
+                                    </span>
+                                </td>
+                            </tr>
+                        `;
+                    }).join('')}
                 </tbody>
             </table>
         </div>
     `;
+}
+
+/**
+ * Build Deposit Section - แสดงข้อมูลมัดจำ
+ * @param {Object} order - Order data from API
+ * @returns {string} HTML for deposit section
+ */
+function buildDepositSection(order) {
+    const paymentType = order.payment_type || order.order_type || 'full';
+    
+    // Only show for deposit orders
+    if (paymentType !== 'deposit') {
+        return '';
+    }
+
+    const depositAmount = parseFloat(order.deposit_amount) || 0;
+    const totalAmount = parseFloat(order.total_amount) || 0;
+    const paidAmount = parseFloat(order.paid_amount) || 0;
+    const remainingAmount = Math.max(0, totalAmount - paidAmount);
+    const depositExpiry = order.deposit_expiry;
+    
+    // Check if deposit is expired
+    let isExpired = false;
+    let daysRemaining = null;
+    if (depositExpiry) {
+        const expiryDate = new Date(depositExpiry);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        expiryDate.setHours(0, 0, 0, 0);
+        const diffTime = expiryDate - today;
+        daysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        isExpired = daysRemaining < 0;
+    }
+
+    // Determine status for deposit
+    let statusColor = '#f59e0b'; // warning/orange
+    let statusBg = '#fef3c7';
+    let statusIcon = '💎';
+    let statusText = 'รอชำระมัดจำ';
+    
+    if (paidAmount > 0 && paidAmount < totalAmount) {
+        statusColor = '#0ea5e9'; // info/blue
+        statusBg = '#e0f2fe';
+        statusIcon = '✓';
+        statusText = 'มัดจำแล้ว รอชำระส่วนที่เหลือ';
+    } else if (paidAmount >= totalAmount) {
+        statusColor = '#22c55e'; // success/green
+        statusBg = '#dcfce7';
+        statusIcon = '✓✓';
+        statusText = 'ชำระครบแล้ว';
+    } else if (isExpired) {
+        statusColor = '#ef4444'; // danger/red
+        statusBg = '#fef2f2';
+        statusIcon = '⚠';
+        statusText = 'หมดอายุกันสินค้า';
+    }
+
+    // ไม่แสดง progress bar ซ้ำ - ใช้ buildPaymentProgressSection แทน
+    // แสดงเฉพาะข้อมูลเฉพาะของ deposit: สถานะมัดจำ, ยอดมัดจำที่กำหนด, วันหมดอายุ
+
+    return `
+        <!-- Deposit-specific Info -->
+        <div style="margin-top: 1rem; padding: 1rem; background: ${statusBg}; border-radius: 8px; border: 1px solid ${statusColor}33;">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
+                <span style="font-weight: 600; color: ${statusColor};">
+                    <span style="margin-right: 0.5rem;">${statusIcon}</span>${statusText}
+                </span>
+                ${depositExpiry ? `
+                <span style="font-size: 0.85rem; color: ${isExpired ? '#ef4444' : '#6b7280'};">
+                    📅 กันสินค้า${isExpired ? 'หมดอายุ' : 'ถึง'}: ${formatDate(depositExpiry)}
+                    ${!isExpired && daysRemaining !== null ? `(อีก ${daysRemaining} วัน)` : ''}
+                </span>
+                ` : ''}
+            </div>
+            ${depositAmount > 0 ? `
+            <div style="margin-top: 0.75rem; font-size: 0.9rem; color: #374151;">
+                💰 ยอดมัดจำที่กำหนด: <strong style="color: #7c3aed;">฿${formatNumber(depositAmount)}</strong>
+            </div>
+            ` : ''}
+        </div>
+    `;
+}
+
+/**
+ * Build Payment Progress Bar Section
+ * แสดง Progress Bar และยอดคงเหลือ รวมถึงยอดรอตรวจสอบ
+ */
+function buildPaymentProgressSection(order) {
+    const totalAmount = parseFloat(order.total_amount) || 0;
+    const paidAmount = parseFloat(order.paid_amount) || 0;
+    const pendingAmount = parseFloat(order.paid_amount_pending) || 0;
+    const remainingAmount = parseFloat(order.remaining_amount) || Math.max(0, totalAmount - paidAmount);
+    const percentage = totalAmount > 0 ? Math.min(100, (paidAmount / totalAmount) * 100) : 0;
+    const pendingPercentage = totalAmount > 0 ? Math.min(100 - percentage, (pendingAmount / totalAmount) * 100) : 0;
+    
+    // Determine progress bar color based on percentage
+    let progressColor = '#e5e7eb'; // gray
+    let statusIcon = '○';
+    let statusText = 'ยังไม่ชำระ';
+    
+    if (percentage >= 100) {
+        progressColor = '#22c55e'; // green - paid
+        statusIcon = '✓';
+        statusText = 'ชำระครบแล้ว';
+    } else if (percentage > 0) {
+        progressColor = '#f59e0b'; // orange - partial
+        statusIcon = '◐';
+        statusText = 'ชำระบางส่วน';
+    }
+    
+    // Build pending amount indicator if there are pending payments
+    const pendingHtml = pendingAmount > 0 ? `
+        <div style="margin-top: 0.5rem; padding: 0.5rem 0.75rem; background: #fef3c7; border-radius: 6px; display: flex; align-items: center; gap: 0.5rem;">
+            <span style="color: #d97706;">⏳</span>
+            <span style="font-size: 0.8rem; color: #92400e;">
+                รอตรวจสอบ: <strong>฿${formatNumber(pendingAmount)}</strong>
+                ${order.payments?.filter(p => p.status === 'pending' || p.status === 'verifying').length || 0} รายการ
+            </span>
+        </div>
+    ` : '';
+    
+    return `
+        <div class="payment-progress-container" style="margin-bottom: 1rem; padding: 1rem; background: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                <span style="font-size: 0.9rem; font-weight: 500; color: #374151;">
+                    ${statusIcon} ${statusText}
+                </span>
+                <span style="font-weight: 700; font-size: 1.1rem; color: ${percentage >= 100 ? '#22c55e' : '#374151'};">${percentage.toFixed(1)}%</span>
+            </div>
+            <div style="height: 12px; background: #e5e7eb; border-radius: 6px; overflow: hidden; position: relative;">
+                <div style="position: absolute; height: 100%; width: ${percentage + pendingPercentage}%; background: #fcd34d; border-radius: 6px;"></div>
+                <div style="position: absolute; height: 100%; width: ${percentage}%; background: ${progressColor}; transition: width 0.3s ease; border-radius: 6px;"></div>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; margin-top: 0.75rem; font-size: 0.85rem;">
+                <div style="text-align: center; padding: 0.5rem; background: #f0fdf4; border-radius: 6px;">
+                    <div style="color: #9ca3af; font-size: 0.75rem;">ชำระแล้ว</div>
+                    <div style="font-weight: 600; color: #22c55e;">฿${formatNumber(paidAmount)}</div>
+                </div>
+                <div style="text-align: center; padding: 0.5rem; background: ${remainingAmount > 0 ? '#fef3c7' : '#f0fdf4'}; border-radius: 6px;">
+                    <div style="color: #9ca3af; font-size: 0.75rem;">คงเหลือ</div>
+                    <div style="font-weight: 600; color: ${remainingAmount > 0 ? '#d97706' : '#22c55e'};">฿${formatNumber(remainingAmount)}</div>
+                </div>
+                <div style="text-align: center; padding: 0.5rem; background: #eff6ff; border-radius: 6px;">
+                    <div style="color: #9ca3af; font-size: 0.75rem;">ยอดรวม</div>
+                    <div style="font-weight: 600; color: #3b82f6;">฿${formatNumber(totalAmount)}</div>
+                </div>
+            </div>
+            ${pendingHtml}
+        </div>
+    `;
+}
+
+/**
+ * Get Shipping Method Label
+ * แปลงช่องทางรับสินค้าเป็นข้อความภาษาไทย
+ */
+function getShippingMethodLabel(shippingMethod) {
+    const methodMap = {
+        'pickup': '🏪 รับที่ร้าน',
+        'ems': '📦 จัดส่ง EMS',
+        'grab': '🚗 Grab Express',
+        'delivery': '🚚 จัดส่ง',
+        'lalamove': '🛵 Lalamove'
+    };
+    return methodMap[shippingMethod] || shippingMethod || '🏪 รับที่ร้าน';
+}
+
+/**
+ * Get Payment Type Label
+ */
+function getPaymentTypeLabel(order) {
+    const paymentType = order.payment_type || order.order_type || 'full';
+    
+    if (paymentType === 'full' || paymentType === 'full_payment') {
+        return '💳 ชำระเต็มจำนวน';
+    } else if (paymentType === 'installment') {
+        return '📅 ผ่อนชำระ ' + (order.installment_months || 0) + ' งวด';
+    } else if (paymentType === 'deposit') {
+        const depositAmt = parseFloat(order.deposit_amount) || 0;
+        if (depositAmt > 0) {
+            return `💎 มัดจำ ฿${formatNumber(depositAmt)}`;
+        }
+        return '💎 มัดจำ';
+    } else if (paymentType === 'savings' || paymentType === 'savings_completion') {
+        return '🐷 ออมครบ';
+    }
+    return '💳 ' + paymentType;
+}
+
+/**
+ * Get Payment Status Class
+ */
+function getPaymentStatusClass(status) {
+    const statusMap = {
+        'paid': 'delivered',
+        'partial': 'processing',
+        'unpaid': 'pending',
+        'refunded': 'cancelled'
+    };
+    return statusMap[status] || 'pending';
+}
+
+/**
+ * Get Payment Status Label
+ */
+function getPaymentStatusLabel(status) {
+    const statusMap = {
+        'paid': '✓ ชำระครบแล้ว',
+        'partial': '⏳ ชำระบางส่วน',
+        'unpaid': '○ ยังไม่ชำระ',
+        'refunded': '↩ คืนเงินแล้ว'
+    };
+    return statusMap[status] || status || 'ไม่ระบุ';
+}
+
+/**
+ * Build Payment History Section
+ * แสดงรายการชำระเงินทั้งหมดใน Order
+ */
+function buildPaymentHistorySection(order) {
+    if (!order.payments || order.payments.length === 0) {
+        return `
+            <div style="margin-top: 1rem; padding: 0.75rem; background: #fef3c7; border-radius: 8px; text-align: center; color: #92400e; font-size: 0.85rem;">
+                <i class="fas fa-info-circle"></i> ยังไม่มีรายการชำระเงิน
+            </div>
+        `;
+    }
+    
+    return `
+        <div style="margin-top: 1rem;">
+            <div style="font-size: 0.8rem; color: #6b7280; margin-bottom: 0.5rem; font-weight: 500;">ประวัติการชำระเงิน (${order.payments.length} รายการ)</div>
+            <div style="max-height: 200px; overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 8px;">
+                ${order.payments.map((p, idx) => `
+                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 1rem; ${idx > 0 ? 'border-top: 1px solid #e5e7eb;' : ''} background: ${p.status === 'verified' ? '#f0fdf4' : p.status === 'pending' ? '#fffbeb' : '#fff'};">
+                        <div>
+                            <div style="font-weight: 500; color: #374151; font-size: 0.9rem;">${p.payment_no || '#' + p.id}</div>
+                            <div style="font-size: 0.75rem; color: #9ca3af;">${formatDateTime(p.created_at)}</div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div style="font-weight: 600; color: #059669;">฿${formatNumber(p.amount)}</div>
+                            <div style="font-size: 0.75rem;">
+                                <span style="padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 500; ${getPaymentItemStatusStyle(p.status)}">${getPaymentItemStatusText(p.status)}</span>
+                            </div>
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+    `;
+}
+
+/**
+ * Get Payment Item Status Style
+ */
+function getPaymentItemStatusStyle(status) {
+    const styles = {
+        'verified': 'background: #dcfce7; color: #166534;',
+        'pending': 'background: #fef3c7; color: #92400e;',
+        'rejected': 'background: #fee2e2; color: #dc2626;',
+        'cancelled': 'background: #f3f4f6; color: #6b7280;'
+    };
+    return styles[status] || 'background: #f3f4f6; color: #6b7280;';
+}
+
+/**
+ * Get Payment Item Status Text
+ */
+function getPaymentItemStatusText(status) {
+    const texts = {
+        'verified': '✓ อนุมัติ',
+        'pending': '⏳ รอตรวจ',
+        'rejected': '✗ ปฏิเสธ',
+        'cancelled': '✗ ยกเลิก'
+    };
+    return texts[status] || status || '-';
 }
 
 function closeOrderModal() {
@@ -804,7 +1366,8 @@ function renderProductSearchResults(products) {
         const code = product.sku || product.code || product.product_code || '';
         const price = product.price || product.selling_price || 0;
         const placeholderImg = typeof PATH !== 'undefined' ? PATH.asset('images/placeholder-product.svg') : '/images/placeholder-product.svg';
-        const image = product.image_url || product.thumbnail || product.images?.[0] || placeholderImg;
+        // ✅ FIX: Also check thumbnail_url (from v1 API)
+        const image = product.image_url || product.thumbnail_url || product.thumbnail || product.images?.[0] || placeholderImg;
         const brand = product.brand || '';
 
         return `
@@ -837,7 +1400,8 @@ function selectProduct(product) {
     const code = product.sku || product.code || product.product_code || '';
     const price = product.price || product.selling_price || 0;
     const placeholderImg = typeof PATH !== 'undefined' ? PATH.asset('images/placeholder-product.svg') : '/images/placeholder-product.svg';
-    const image = product.image_url || product.thumbnail || product.images?.[0] || placeholderImg;
+    // ✅ FIX: Also check thumbnail_url (from v1 API)
+    const image = product.image_url || product.thumbnail_url || product.thumbnail || product.images?.[0] || placeholderImg;
 
     // Show selected product card
     document.getElementById('selectedProductCard').style.display = 'flex';
@@ -854,6 +1418,12 @@ function selectProduct(product) {
     // Set hidden fields
     document.getElementById('selectedProductId').value = product.id || product.product_id || '';
     document.getElementById('selectedProductSku').value = code;
+    
+    // ✅ FIX: Also set product image URL for saving to order
+    const productImageUrlEl = document.getElementById('productImageUrl');
+    if (productImageUrlEl) {
+        productImageUrlEl.value = image !== placeholderImg ? image : '';
+    }
 
     // Hide search results and clear search input
     document.getElementById('productSearchResults').style.display = 'none';
@@ -950,11 +1520,21 @@ function autoCalculateDeposit() {
 }
 
 /**
- * Calculate installment breakdown (3 months, 3% interest per month)
+ * Calculate installment breakdown (3 periods, 3% service fee TOTAL - not per month)
+ * 
+ * นโยบายร้าน: ไม่มีดาวน์ - ผ่อนเต็มจำนวนเลย
+ * 
+ * Spec:
+ * - ผ่อน 3 งวด ภายใน 60 วัน
+ * - ค่าธรรมเนียม 3% รวมในงวดแรก
+ * 
+ * ตัวอย่าง 10,000 บาท:
+ * - งวด 1: 3,333 + 300 (3% fee) = 3,633 บาท (วันนี้)
+ * - งวด 2: 3,333 บาท (+30 วัน)
+ * - งวด 3: 3,334 บาท (+60 วัน รับของ)
  */
 function calculateInstallment() {
     const totalAmount = parseFloat(document.getElementById('totalAmount')?.value) || 0;
-    const downPayment = parseFloat(document.getElementById('downPayment')?.value) || 0;
     const summaryDiv = document.getElementById('installmentSummary');
     const calcDiv = document.getElementById('installmentCalc');
 
@@ -963,32 +1543,41 @@ function calculateInstallment() {
         return;
     }
 
-    const remaining = totalAmount - downPayment;
-    if (remaining <= 0) {
-        calcDiv.innerHTML = '<p style="color: #c00;">⚠️ เงินดาวน์มากกว่าหรือเท่ากับราคาสินค้า</p>';
-        summaryDiv.style.display = 'block';
-        return;
-    }
+    // ไม่มีดาวน์ - ผ่อนเต็มจำนวน
+    const remaining = totalAmount;
 
-    // 3 months, 3% interest per month
-    const interestRate = 0.03;
-    const months = 3;
-    const monthlyPrincipal = remaining / months;
-    const monthlyInterest = remaining * interestRate;
-    const monthlyPayment = monthlyPrincipal + monthlyInterest;
-    const totalInterest = monthlyInterest * months;
-    const grandTotal = totalAmount + totalInterest;
+    // Service fee: 3% TOTAL (not per month)
+    const serviceFeeRate = 0.03;
+    const serviceFee = Math.round(remaining * serviceFeeRate);
+    
+    // Calculate installment amounts following the spec:
+    // งวด 1 = floor(ราคา/3) + ค่าธรรมเนียม
+    // งวด 2 = floor(ราคา/3)
+    // งวด 3 = floor(ราคา/3) + เศษ
+    const baseAmount = Math.floor(remaining / 3);
+    const remainder = remaining - (baseAmount * 3);
+    
+    let p1 = baseAmount;
+    let p2 = baseAmount;
+    let p3 = baseAmount + remainder;
+    
+    // Period 1 includes service fee
+    const period1Total = p1 + serviceFee;
+    const grandTotal = remaining + serviceFee;
 
     calcDiv.innerHTML = `
         <table style="width: 100%; font-size: 0.9rem;">
             <tr><td>ราคาสินค้า:</td><td style="text-align: right; font-weight: 600;">${formatNumber(totalAmount)} บาท</td></tr>
-            <tr><td>เงินดาวน์:</td><td style="text-align: right;">${formatNumber(downPayment)} บาท</td></tr>
-            <tr><td>ยอดคงเหลือ:</td><td style="text-align: right;">${formatNumber(remaining)} บาท</td></tr>
-            <tr style="border-top: 1px solid #ddd;"><td colspan="2" style="padding-top: 0.5rem;"><strong>แบ่งจ่าย 3 งวด:</strong></td></tr>
-            <tr><td>• งวดละ:</td><td style="text-align: right;">${formatNumber(monthlyPayment)} บาท</td></tr>
-            <tr><td>• รวมดอกเบี้ย (3% x 3):</td><td style="text-align: right; color: #c00;">${formatNumber(totalInterest)} บาท</td></tr>
+            <tr><td>ค่าดำเนินการ (3%):</td><td style="text-align: right; color: #c00;">+${formatNumber(serviceFee)} บาท</td></tr>
+            <tr style="border-top: 1px solid #ddd;"><td colspan="2" style="padding-top: 0.5rem;"><strong>📅 แบ่งจ่าย 3 งวด (ภายใน 60 วัน):</strong></td></tr>
+            <tr><td>• งวดที่ 1 (วันนี้):</td><td style="text-align: right;">${formatNumber(p1)} + ${formatNumber(serviceFee)} = <strong style="color: #059669;">${formatNumber(period1Total)} บาท</strong></td></tr>
+            <tr><td>• งวดที่ 2 (+30 วัน):</td><td style="text-align: right;"><strong>${formatNumber(p2)} บาท</strong></td></tr>
+            <tr><td>• งวดที่ 3 (+60 วัน รับของ):</td><td style="text-align: right;"><strong>${formatNumber(p3)} บาท</strong></td></tr>
             <tr style="border-top: 1px solid #ddd; font-weight: 600;"><td style="padding-top: 0.5rem;">ยอดรวมทั้งหมด:</td><td style="text-align: right; padding-top: 0.5rem; color: #007bff;">${formatNumber(grandTotal)} บาท</td></tr>
         </table>
+        <p style="font-size: 0.8rem; color: #666; margin-top: 0.5rem;">
+            ⚠️ <strong>เงื่อนไข:</strong> ค่าดำเนินการ 3% ไม่สามารถคืนได้ทุกกรณี | ต้องชำระครบภายใน 60 วัน | สินค้าไม่สามารถเปลี่ยนเป็นชิ้นอื่นได้
+        </p>
     `;
     summaryDiv.style.display = 'block';
 }
@@ -1026,6 +1615,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
 /**
  * Update message template when bank account is selected
+ * ✅ Templates แยกตาม payment type: full, installment, deposit, savings
  */
 function updateMessageTemplate() {
     const select = document.getElementById('bankAccount');
@@ -1033,32 +1623,170 @@ function updateMessageTemplate() {
     const customerName = document.getElementById('customerName')?.value?.trim() || 'ลูกค้า';
     const totalAmount = document.getElementById('totalAmount')?.value || '0';
     const productName = document.getElementById('productName')?.value?.trim() || 'สินค้า';
+    const paymentType = document.querySelector('input[name="payment_type"]:checked')?.value || 'full';
 
     if (!select || !textarea) return;
 
     const selectedOption = select.options[select.selectedIndex];
     if (!selectedOption || !selectedOption.value) {
         textarea.value = '';
+        textarea.placeholder = 'เลือกบัญชีเพื่อสร้างข้อความอัตโนมัติ...';
         return;
     }
 
     const bankName = selectedOption.dataset.bank || '';
     const accountName = selectedOption.dataset.name || '';
     const accountNumber = selectedOption.dataset.number || '';
+    const formattedAmount = formatNumber(parseFloat(totalAmount) || 0);
 
-    const template = `ขอบพระคุณค่ะ คุณ${customerName} 
+    let template = '';
+
+    // ✅ Template ตามประเภทการชำระ
+    switch (paymentType) {
+        case 'installment':
+            // ผ่อน 3 งวด (ตาม spec ร้าน ฮ.เฮง เฮง)
+            // งวด 1 = floor(ยอด/3) + 3% fee
+            // งวด 2 = floor(ยอด/3)
+            // งวด 3 = เศษที่เหลือ
+            const totalNum = parseFloat(totalAmount) || 0;
+            const fee = Math.round(totalNum * 0.03);
+            const basePerPeriod = Math.floor(totalNum / 3);
+            const remainder = totalNum - (basePerPeriod * 3);
+            const period1 = basePerPeriod + fee;  // รวม 3% fee
+            const period2 = basePerPeriod;
+            const period3 = basePerPeriod + remainder;
+            const period1Due = new Date().toLocaleDateString('th-TH');
+            const period2Due = new Date(Date.now() + 30*24*60*60*1000).toLocaleDateString('th-TH');
+            const period3Due = new Date(Date.now() + 60*24*60*60*1000).toLocaleDateString('th-TH');
+
+            template = `🛒 สร้างคำสั่งซื้อผ่อนชำระเรียบร้อยแล้วค่ะ
+
+ขอบพระคุณค่ะ คุณ${customerName} 🙏
 ที่ไว้วางใจเลือกซื้อ ${productName} จากร้าน ฮ.เฮง เฮง 💎
 
-💰 ยอดชำระ: ${formatNumber(parseFloat(totalAmount) || 0)} บาท
+� เลขที่: {{ORDER_NUMBER}}
+
+�💰 ยอดรวม: ${formattedAmount} บาท
+📝 ค่าดำเนินการ 3%: ${formatNumber(fee)} บาท
+
+📅 ผ่อน 3 งวด:
+▫️ งวดที่ 1: ${formatNumber(period1)} บาท (ครบกำหนด ${period1Due})
+▫️ งวดที่ 2: ${formatNumber(period2)} บาท (ครบกำหนด ${period2Due})
+▫️ งวดที่ 3: ${formatNumber(period3)} บาท (ครบกำหนด ${period3Due} - รับของ)
 
 🏦 ข้อมูลการโอนเงิน
 ธนาคาร: ${bankName}
 ชื่อบัญชี: ${accountName}
 เลขบัญชี: ${accountNumber}
 
-หากคุณ${customerName} ชำระแล้วแจ้งสลิปให้แอดมินได้เลยนะคะ ขอบพระคุณค่ะ 🙏`;
+💳 กรุณาชำระงวดแรกภายในวันที่กำหนดค่ะ
+เมื่อชำระแล้ว ส่งสลิปมาได้เลยค่ะ 🙏`;
+            break;
+
+        case 'deposit':
+            // มัดจำ 10%
+            const depositNum = parseFloat(totalAmount) || 0;
+            const depositAmount = Math.round(depositNum * 0.1);
+            const depositExpiry = new Date(Date.now() + 7*24*60*60*1000).toLocaleDateString('th-TH');
+
+            template = `🛒 สร้างคำสั่งซื้อมัดจำเรียบร้อยแล้วค่ะ
+
+ขอบพระคุณค่ะ คุณ${customerName} 🙏
+ที่ไว้วางใจเลือกซื้อ ${productName} จากร้าน ฮ.เฮง เฮง 💎
+
+📋 เลขที่: {{ORDER_NUMBER}}
+
+💰 ราคาสินค้า: ${formattedAmount} บาท
+🎯 มัดจำ 10%: ${formatNumber(depositAmount)} บาท
+⏰ หมดอายุ: ${depositExpiry}
+
+🏦 ข้อมูลการโอนเงิน
+ธนาคาร: ${bankName}
+ชื่อบัญชี: ${accountName}
+เลขบัญชี: ${accountNumber}
+
+เมื่อมัดจำแล้ว ส่งสลิปมาได้เลยค่ะ 🙏
+พร้อมชำระส่วนที่เหลือเมื่อไหร่ แจ้งได้เลยนะคะ ✨`;
+            break;
+
+        case 'savings':
+            // ออมสินค้า
+            template = `🛒 สร้างคำสั่งออมสินค้าเรียบร้อยแล้วค่ะ
+
+ขอบพระคุณค่ะ คุณ${customerName} 🙏
+ที่เลือกออมสินค้า ${productName} กับร้าน ฮ.เฮง เฮง 💎
+
+📋 เลขที่: {{ORDER_NUMBER}}
+
+🎯 เป้าหมาย: ${formattedAmount} บาท
+💰 ยอดปัจจุบัน: 0 บาท
+
+🏦 ข้อมูลการโอนเงิน
+ธนาคาร: ${bankName}
+ชื่อบัญชี: ${accountName}
+เลขบัญชี: ${accountNumber}
+
+ออมได้ตามสะดวกค่ะ พอครบเป้าก็รับสินค้าได้เลย 🙏`;
+            break;
+
+        default:
+            // โอนเต็ม (full)
+            template = `🛒 สร้างคำสั่งซื้อเรียบร้อยแล้วค่ะ
+
+ขอบพระคุณค่ะ คุณ${customerName} 🙏
+ที่ไว้วางใจเลือกซื้อ ${productName} จากร้าน ฮ.เฮง เฮง 💎
+
+📋 เลขที่: {{ORDER_NUMBER}}
+
+💰 ยอดชำระ: ${formattedAmount} บาท
+
+🏦 ข้อมูลการโอนเงิน
+ธนาคาร: ${bankName}
+ชื่อบัญชี: ${accountName}
+เลขบัญชี: ${accountNumber}
+
+หากคุณ${customerName} ชำระแล้ว แจ้งสลิปให้แอดมินได้เลยนะคะ 🙏`;
+    }
 
     textarea.value = template;
+}
+
+/**
+ * ✅ Update template when payment type changes
+ */
+function onPaymentTypeChange() {
+    const bankSelect = document.getElementById('bankAccount');
+    // Only update if bank is already selected
+    if (bankSelect && bankSelect.value) {
+        updateMessageTemplate();
+    }
+}
+
+/**
+ * ✅ Update submit button text based on send message checkbox
+ */
+function updateSubmitButtonText() {
+    const sendMessageChecked = document.getElementById('sendMessageCheckbox')?.checked || false;
+    const submitBtn = document.getElementById('submitOrderBtn');
+    const warningEl = document.getElementById('sendMessageWarning');
+    const externalUserId = document.getElementById('externalUserId')?.value || '';
+    
+    if (submitBtn) {
+        if (sendMessageChecked) {
+            submitBtn.innerHTML = '<i class="fas fa-paper-plane"></i> บันทึก & ส่งข้อความ';
+        } else {
+            submitBtn.innerHTML = '<i class="fas fa-save"></i> บันทึกเท่านั้น';
+        }
+    }
+    
+    // แสดง warning ถ้าติ๊กส่งข้อความแต่ไม่มี external_user_id
+    if (warningEl) {
+        if (sendMessageChecked && !externalUserId) {
+            warningEl.style.display = 'block';
+        } else {
+            warningEl.style.display = 'none';
+        }
+    }
 }
 
 /**
@@ -1088,6 +1816,48 @@ async function submitCreateOrder(event) {
         return false;
     }
 
+    // ✅ Validate: ถ้าติ๊ก send_message ต้องเลือกลูกค้าจากระบบ, บัญชี, และมีข้อความ
+    const sendMessageChecked = document.getElementById('sendMessageCheckbox')?.checked || false;
+    const bankAccountValue = document.getElementById('bankAccount')?.value || '';
+    const customerMessageValue = document.getElementById('customerMessage')?.value?.trim() || '';
+    const externalUserIdForValidate = document.getElementById('externalUserId')?.value || '';
+
+    if (sendMessageChecked) {
+        // ต้องเลือกลูกค้าจากระบบ (มี LINE/Facebook ID)
+        if (!externalUserIdForValidate) {
+            showToast('⚠️ ต้องเลือกลูกค้าจากระบบก่อนส่งข้อความ (ลูกค้าต้องมี LINE/Facebook)', 'error');
+            document.getElementById('customerSearch').focus();
+            return false;
+        }
+        if (!bankAccountValue) {
+            showToast('กรุณาเลือกบัญชีรับโอนก่อนส่งข้อความ', 'error');
+            document.getElementById('bankAccount').focus();
+            return false;
+        }
+        if (!customerMessageValue) {
+            showToast('กรุณากรอกข้อความแจ้งลูกค้าก่อนส่ง', 'error');
+            document.getElementById('customerMessage').focus();
+            return false;
+        }
+    }
+
+    // ✅ Validate: ถ้าเป็น deposit ต้องมียอดมัดจำ
+    const paymentTypeSelected = document.querySelector('input[name="payment_type"]:checked')?.value || 'full';
+    if (paymentTypeSelected === 'deposit') {
+        const depositAmountVal = parseFloat(document.getElementById('depositAmount')?.value) || 0;
+        if (depositAmountVal <= 0) {
+            showToast('กรุณาระบุยอดมัดจำ', 'error');
+            document.getElementById('depositAmount').focus();
+            return false;
+        }
+        // ตรวจสอบยอดมัดจำ ≤ ยอดรวม
+        if (depositAmountVal >= parseFloat(totalAmount)) {
+            showToast('ยอดมัดจำต้องน้อยกว่ายอดรวม', 'error');
+            document.getElementById('depositAmount').focus();
+            return false;
+        }
+    }
+
     // Disable submit button
     submitBtn.disabled = true;
     submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> กำลังบันทึก...';
@@ -1095,11 +1865,23 @@ async function submitCreateOrder(event) {
     try {
         // Build order data
         const paymentType = document.querySelector('input[name="payment_type"]:checked')?.value || 'full';
+        
+        // Get external_user_id from hidden field
+        const externalUserIdValue = document.getElementById('externalUserId')?.value || null;
+        const productImageValue = document.getElementById('productImageUrl')?.value || null;
+        
+        // Get from_case from hidden field (NOT URL params - URL is cleared after prefill)
+        const fromCaseId = document.getElementById('fromCaseId')?.value || null;
+        
+        console.log('[submitCreateOrder] external_user_id:', externalUserIdValue);
+        console.log('[submitCreateOrder] product_image:', productImageValue);
+        console.log('[submitCreateOrder] from_case:', fromCaseId);
 
         const orderData = {
             product_name: productName,
             product_code: document.getElementById('productCode').value.trim(),
             product_id: document.getElementById('selectedProductId').value || null,
+            product_image: productImageValue,
             quantity: parseInt(quantity) || 1,
             total_amount: parseFloat(totalAmount),
             payment_type: paymentType,
@@ -1107,17 +1889,30 @@ async function submitCreateOrder(event) {
             customer_name: document.getElementById('customerName').value.trim() || null,
             customer_phone: document.getElementById('customerPhone').value.trim() || null,
             customer_id: document.getElementById('selectedCustomerId').value || null,
+            // ✅ Add external_user_id for linking with customer_profiles
+            external_user_id: externalUserIdValue,
+            platform: document.getElementById('customerSource')?.value || null,
+            // ✅ Add from_case so backend can query cases table for external_user_id
+            from_case: fromCaseId,
             notes: document.getElementById('orderNotes').value.trim() || null,
             // Push message fields
             bank_account: document.getElementById('bankAccount')?.value || null,
             customer_message: document.getElementById('customerMessage')?.value?.trim() || null,
             send_message: document.getElementById('sendMessageCheckbox')?.checked || false
         };
+        
+        console.log('[submitCreateOrder] Full orderData:', JSON.stringify(orderData, null, 2));
 
-        // Add installment fields if applicable
+        // Add installment fields if applicable (no down payment - full installment)
         if (paymentType === 'installment') {
-            orderData.installment_months = parseInt(document.getElementById('installmentMonths').value) || 3;
-            orderData.down_payment = parseFloat(document.getElementById('downPayment').value) || 0;
+            orderData.installment_months = 3;  // Fixed at 3 periods
+            orderData.down_payment = 0;  // No down payment
+        }
+
+        // Add deposit fields if applicable
+        if (paymentType === 'deposit') {
+            orderData.deposit_amount = parseFloat(document.getElementById('depositAmount')?.value) || 0;
+            orderData.deposit_expiry = document.getElementById('depositExpiry')?.value || null;
         }
 
         // Call API to create order
@@ -1140,14 +1935,22 @@ async function submitCreateOrder(event) {
             }
             closeCreateOrderModal();
 
-            // Reload orders list
-            await loadOrders();
-
-            // Open the new order detail if we have the ID
-            if (result.data && result.data.id) {
+            // If created from case, redirect back to cases page after delay
+            const fromCaseId = document.getElementById('fromCaseId')?.value;
+            if (fromCaseId) {
                 setTimeout(() => {
-                    viewOrderDetail(result.data.id);
-                }, 500);
+                    window.location.href = '/cases.php';
+                }, 1500);
+            } else {
+                // Normal flow - reload orders list and show detail
+                await loadOrders();
+
+                // Open the new order detail if we have the ID
+                if (result.data && result.data.id) {
+                    setTimeout(() => {
+                        viewOrderDetail(result.data.id);
+                    }, 500);
+                }
             }
         } else {
             showToast('❌ ' + (result?.message || 'ไม่สามารถสร้างคำสั่งซื้อได้'), 'error');
@@ -1339,6 +2142,13 @@ function selectCustomer(customer) {
 
     // Set hidden field
     document.getElementById('selectedCustomerId').value = customer.id || customer.customer_id || customer.external_user_id || '';
+    
+    // ✅ Set external_user_id for push message (LINE/Facebook ID)
+    const externalId = customer.platform_user_id || customer.external_user_id || customer.line_user_id || '';
+    document.getElementById('externalUserId').value = externalId;
+    
+    // ✅ Update submit button text (hide warning if customer has platform ID)
+    updateSubmitButtonText();
 
     // Hide search results and clear search input
     document.getElementById('customerSearchResults').style.display = 'none';
@@ -1354,6 +2164,11 @@ function clearSelectedCustomer() {
     if (card) card.style.display = 'none';
     const hiddenField = document.getElementById('selectedCustomerId');
     if (hiddenField) hiddenField.value = '';
+    // ✅ Also clear external_user_id
+    const externalField = document.getElementById('externalUserId');
+    if (externalField) externalField.value = '';
+    // ✅ Update warning display
+    updateSubmitButtonText();
 }
 
 // Close modals on ESC key
