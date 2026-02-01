@@ -165,10 +165,13 @@ function getContractsForReminder($db, $dueDate, $reminderType) {
 
 /**
  * Get overdue contracts for reminder
+ * ดึงทุกรายการที่เกินกำหนด (ไม่จำกัดเฉพาะวันที่ 1,3,7,14)
+ * แต่จะไม่ส่งซ้ำถ้าเคยส่งใน due_date เดียวกันแล้ว
  */
 function getOverdueContracts($db) {
     return $db->queryAll(
         "SELECT c.*, 
+            o.order_no,
             (SELECT COUNT(*) FROM installment_payments WHERE contract_id = c.id AND status = 'paid') as paid_periods,
             (SELECT COALESCE(paid_amount, 0) FROM installment_payments 
              WHERE contract_id = c.id AND status IN ('pending', 'partial') 
@@ -178,14 +181,14 @@ function getOverdueContracts($db) {
              ORDER BY period_number ASC LIMIT 1) as next_period_amount,
             DATEDIFF(CURDATE(), c.next_due_date) as days_overdue
         FROM installment_contracts c 
+        LEFT JOIN orders o ON c.order_id = o.id
         WHERE c.status IN ('active', 'overdue')
         AND c.next_due_date < CURDATE()
-        AND DATEDIFF(CURDATE(), c.next_due_date) IN (1, 3, 7, 14)
         AND NOT EXISTS (
             SELECT 1 FROM installment_reminders 
             WHERE contract_id = c.id 
-            AND reminder_type = CONCAT('overdue_', DATEDIFF(CURDATE(), c.next_due_date), '_days')
             AND due_date = c.next_due_date
+            AND DATE(sent_at) = CURDATE()
             AND status = 'sent'
         )"
     );
@@ -311,6 +314,8 @@ function sendReminder($db, $contract, $reminderType, $daysUntil) {
  */
 function buildReminderMessage($contract, $reminderType, $periodNumber, $daysUntil) {
     $productName = $contract['product_name'] ?? 'สินค้า';
+    $contractNo = $contract['contract_no'] ?? '';
+    $orderNo = $contract['order_no'] ?? '';
     
     // Calculate remaining amount (supports partial payments)
     $periodAmount = floatval($contract['next_period_amount'] ?? $contract['amount_per_period'] ?? 0);
@@ -326,12 +331,23 @@ function buildReminderMessage($contract, $reminderType, $periodNumber, $daysUnti
     $totalPeriods = $contract['total_periods'] ?? 3;
     $customerName = $contract['customer_name'] ?? 'คุณลูกค้า';
     
+    // Reference line with order and contract numbers
+    $refLine = "";
+    if ($orderNo) {
+        $refLine = "🏷️ Order: {$orderNo}";
+    }
+    if ($contractNo) {
+        $refLine .= ($refLine ? " | " : "🏷️ ") . "สัญญา: {$contractNo}";
+    }
+    $refLine = $refLine ? $refLine . "\n" : "";
+    
     if (strpos($reminderType, 'before_') === 0) {
         // Before due date reminder
         $days = abs($daysUntil);
         return "🔔 แจ้งเตือนผ่อนชำระ\n\n" .
             "สวัสดีค่ะ {$customerName}\n" .
             "อีก {$days} วัน จะถึงกำหนดชำระงวดที่ {$periodNumber}/{$totalPeriods}\n\n" .
+            $refLine .
             "📦 สินค้า: {$productName}\n" .
             "💰 ยอดชำระ: {$amountDisplay} บาท{$partialNote}\n" .
             "📅 กำหนดชำระ: {$dueDate}\n\n" .
@@ -341,6 +357,7 @@ function buildReminderMessage($contract, $reminderType, $periodNumber, $daysUnti
         return "⏰ ถึงกำหนดชำระวันนี้!\n\n" .
             "สวัสดีค่ะ {$customerName}\n" .
             "วันนี้ถึงกำหนดชำระงวดที่ {$periodNumber}/{$totalPeriods} แล้วค่ะ\n\n" .
+            $refLine .
             "📦 สินค้า: {$productName}\n" .
             "💰 ยอดชำระ: {$amountDisplay} บาท{$partialNote}\n\n" .
             "รบกวนชำระและส่งสลิปมาภายในวันนี้นะคะ 🙏";
@@ -351,6 +368,7 @@ function buildReminderMessage($contract, $reminderType, $periodNumber, $daysUnti
         return "⚠️ เลยกำหนดชำระ {$daysOverdue} วัน\n\n" .
             "สวัสดีค่ะ {$customerName}\n" .
             "งวดที่ {$periodNumber}/{$totalPeriods} เลยกำหนดชำระมา {$daysOverdue} วันแล้วค่ะ\n\n" .
+            $refLine .
             "📦 สินค้า: {$productName}\n" .
             "💰 ยอดค้างชำระ: {$amountDisplay} บาท{$partialNote}\n" .
             "📅 กำหนดชำระ: {$dueDate}\n\n" .
