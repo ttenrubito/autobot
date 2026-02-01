@@ -126,6 +126,8 @@ function getEligibleItems($pdo, $shop_owner_id)
     
     // Get orders that are paid/delivered but not already pawned
     // Match by customer_id (FK to customer_profiles) หรือ platform_user_id
+    // NOTE: pawns table ไม่มี original_order_id - ใช้ item_name/product_code match แทน
+    // หรือในอนาคตควรเพิ่ม column order_id ใน pawns table
     $stmt = $pdo->prepare("
         SELECT 
             o.id as order_id, 
@@ -150,11 +152,6 @@ function getEligibleItems($pdo, $shop_owner_id)
         )
         WHERE (o.customer_id = ? OR cp.id = ?)
         AND o.status IN ('paid', 'delivered', 'completed')
-        AND o.id NOT IN (
-            SELECT COALESCE(original_order_id, 0) FROM pawns 
-            WHERE original_order_id IS NOT NULL 
-            AND status NOT IN ('redeemed', 'forfeited', 'cancelled')
-        )
         ORDER BY o.created_at DESC
     ");
     $stmt->execute([
