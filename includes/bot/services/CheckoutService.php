@@ -1225,8 +1225,19 @@ class CheckoutService
         
         if (!empty($shippingAddress)) {
             $addr = $shippingAddress;
-            $addrLine = $addr['name'] ?? '';
-            if (!empty($addr['phone'])) $addrLine .= " ({$addr['phone']})";
+            
+            // Build full address line for confirmation
+            $addressParts = [];
+            if (!empty($addr['name'])) $addressParts[] = $addr['name'];
+            if (!empty($addr['address_line1'])) $addressParts[] = $addr['address_line1'];
+            if (!empty($addr['subdistrict'])) $addressParts[] = "ต." . $addr['subdistrict'];
+            if (!empty($addr['district'])) $addressParts[] = "อ." . $addr['district'];
+            if (!empty($addr['province'])) $addressParts[] = "จ." . $addr['province'];
+            if (!empty($addr['postal_code'])) $addressParts[] = $addr['postal_code'];
+            
+            $addrLine = implode(' ', $addressParts);
+            if (!empty($addr['phone'])) $addrLine .= " (" . $addr['phone'] . ")";
+            
             if ($addrLine) $lines[] = "📍 จัดส่งถึง: " . $addrLine;
         }
         
