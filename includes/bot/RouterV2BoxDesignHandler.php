@@ -399,6 +399,8 @@ class RouterV2BoxDesignHandler extends RouterV1Handler
             $reply = str_replace('||SPLIT||', "\n\n", $reply);
             // Also handle || alone (some LLMs use this)
             $reply = str_replace('||', "\n\n", $reply);
+            // Handle "SPLIT" alone on its own line (LLM sometimes outputs this incorrectly)
+            $reply = preg_replace('/^\s*SPLIT\s*$/mu', '', $reply);
             // Clean up multiple newlines (3+ → 2)
             $reply = preg_replace('/\n{3,}/', "\n\n", $reply);
             $reply = trim($reply);
