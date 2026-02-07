@@ -239,7 +239,7 @@ function processMessagingEvent(array $event, string $entryPageId): void
     $cfg = json_decode($channel['config'] ?? '{}', true);
     $pageAccessToken = trim((string)($cfg['page_access_token'] ?? ''));
     if (!$isAdmin && !empty($senderId) && !empty($pageAccessToken)) {
-        upsertCustomerProfile('facebook', $senderId, $pageAccessToken);
+        upsertCustomerProfile('facebook', $senderId, $pageAccessToken, 'default', (int)$channel['id']);
     }
     
     $isAdminCommand = false;
@@ -299,6 +299,63 @@ function processMessagingEvent(array $event, string $entryPageId): void
             
             // Don't send this message to gateway - it's an admin command, not a real conversation
             return;
+        }
+        
+        // ✅ NEW: Admin Suggest Product - detect product codes and send card to customer
+        // Supports: #product XXX, #สินค้า XXX, or any message containing product code
+        // Format: GLD-BRC-001, RLX-SUB-001, P-2026-000001
+        $productCode = null;
+        
+        // Check for explicit command first: #product XXX or #สินค้า XXX
+        if (preg_match('/^(?:#product|#สินค้า)\s+([A-Z0-9\-]+)/iu', $text, $cmdMatch)) {
+            $productCode = strtoupper(trim($cmdMatch[1]));
+        }
+        // Or detect product code patterns in message
+        elseif (preg_match('/(P-\d{4}-\d{6})/i', $text, $refMatch)) {
+            // Internal Ref ID format: P-2026-000001
+            $productCode = strtoupper(trim($refMatch[1]));
+        }
+        elseif (preg_match('/([A-Z]{2,5}[-][A-Z0-9]{2,5}[-][A-Z0-9]{2,5})/i', $text, $codeMatch)) {
+            // 3-part code: GLD-BRC-001
+            $productCode = strtoupper(trim($codeMatch[1]));
+        }
+        elseif (preg_match('/([A-Z]{2,5}[-][A-Z0-9]{2,5})/i', $text, $codeMatch)) {
+            // 2-part code: RLX-SUB
+            $code = strtoupper(trim($codeMatch[1]));
+            if (strlen($code) >= 5) {
+                $productCode = $code;
+            }
+        }
+        
+        if ($productCode !== null) {
+            Logger::info('[FB_WEBHOOK] 🎁 Admin Suggest Product detected', [
+                'text' => $text,
+                'product_code' => $productCode,
+                'customer_id' => $recipientId,
+            ]);
+            
+            // Search for product in database
+            $product = findProductByCode($productCode, (int)$channel['user_id']);
+            
+            if ($product) {
+                // Build product card and send to customer
+                $cardSent = sendAdminSuggestProductCard($recipientId, $product, $channel, $text);
+                
+                if ($cardSent) {
+                    Logger::info('[FB_WEBHOOK] ✅ Product card sent to customer', [
+                        'product_code' => $productCode,
+                        'product_name' => $product['name'] ?? '',
+                        'customer_id' => $recipientId,
+                    ]);
+                    return; // Don't process further - card was sent
+                }
+            } else {
+                Logger::warning('[FB_WEBHOOK] ⚠️ Product not found', [
+                    'product_code' => $productCode,
+                    'user_id' => $channel['user_id'],
+                ]);
+                // Continue normal flow - admin message will just be sent as-is
+            }
         }
     }
 
@@ -733,7 +790,8 @@ function callGateway(array $payload): ?array
         CURLOPT_POST           => true,
         CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_UNICODE),
         CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
-        CURLOPT_TIMEOUT        => 30,
+        CURLOPT_TIMEOUT        => 70, // Increased for Gemini Vision retry (up to 2 retries * 30s + processing)
+        CURLOPT_CONNECTTIMEOUT => 10,
     ]);
 
     $raw = curl_exec($ch);
@@ -911,10 +969,13 @@ function convertFlexToFacebookTemplate(array $flexMsg): ?array
             if (($btn['type'] ?? '') === 'button' && !empty($btn['action'])) {
                 $action = $btn['action'];
                 if (($action['type'] ?? '') === 'message') {
+                    // ✅ FIX: Use action.text as title so it shows product code when clicked
+                    // action.text = "สนใจ P-2026-000001" (from LINE format)
+                    $buttonText = $action['text'] ?? ($action['label'] ?? 'สนใจ');
                     $buttons[] = [
                         'type' => 'postback',
-                        'title' => mb_substr($action['label'] ?? 'สนใจ', 0, 20),
-                        'payload' => $action['text'] ?? ''
+                        'title' => mb_substr($buttonText, 0, 20), // FB limit: 20 chars - shows "สนใจ P-2026-00"
+                        'payload' => $buttonText
                     ];
                 }
             }
@@ -1083,7 +1144,7 @@ function sendFacebookImage(string $recipientPsid, string $imageUrl, array $chann
  * บันทึกหรืออัพเดท profile ลูกค้าจาก Facebook (ซ้ำไม่ได้)
  * @return int|null Customer profile ID or null on failure
  */
-function upsertCustomerProfile(string $platform, string $platformUserId, string $pageAccessToken, string $tenantId = 'default'): ?int
+function upsertCustomerProfile(string $platform, string $platformUserId, string $pageAccessToken, string $tenantId = 'default', ?int $channelId = null): ?int
 {
     if (empty($platformUserId) || empty($pageAccessToken)) {
         return null;
@@ -1137,17 +1198,18 @@ function upsertCustomerProfile(string $platform, string $platformUserId, string 
         
         // Insert new customer profile (always create even if no display name)
         $sql = "
-            INSERT INTO customer_profiles (tenant_id, platform, platform_user_id, display_name, avatar_url, total_inquiries, first_seen_at, last_active_at, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, 1, NOW(), NOW(), NOW(), NOW())
+            INSERT INTO customer_profiles (tenant_id, channel_id, platform, platform_user_id, display_name, avatar_url, total_inquiries, first_seen_at, last_active_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 1, NOW(), NOW(), NOW(), NOW())
             ON DUPLICATE KEY UPDATE 
                 display_name = COALESCE(VALUES(display_name), display_name),
                 avatar_url = COALESCE(VALUES(avatar_url), avatar_url),
+                channel_id = COALESCE(VALUES(channel_id), channel_id),
                 total_inquiries = COALESCE(total_inquiries, 0) + 1,
                 last_active_at = NOW(),
                 updated_at = NOW()
         ";
         
-        $db->execute($sql, [$tenantId, $platform, $platformUserId, $displayName, $avatarUrl]);
+        $db->execute($sql, [$tenantId, $channelId, $platform, $platformUserId, $displayName, $avatarUrl]);
         
         // Get the ID (either new or existing due to race condition)
         $result = $db->queryOne(
@@ -1172,4 +1234,211 @@ function upsertCustomerProfile(string $platform, string $platformUserId, string 
         ]);
         return null;
     }
+}
+
+/**
+ * Find product by code (supports both product_code and internal ref_id)
+ * @param string $code Product code (e.g., GLD-BRC-001) or internal ref (e.g., P-2026-000001) or SKU (e.g., RX-SUB-BLK-001)
+ * @param int $userId Owner user ID
+ * @return array|null Product data or null if not found
+ */
+function findProductByCode(string $code, int $userId): ?array
+{
+    try {
+        $db = Database::getInstance();
+        $codeUpper = strtoupper(trim($code));
+        
+        // Try finding by internal ref_id first (P-YYYY-NNNNNN format)
+        if (preg_match('/^P-\d{4}-\d{6}$/i', $codeUpper)) {
+            $sql = "SELECT id, ref_id, name, code AS product_code, price, stock_status, 
+                           main_image_url, description, category
+                    FROM products 
+                    WHERE ref_id = ? AND user_id = ? AND status = 'active'
+                    LIMIT 1";
+            $product = $db->queryOne($sql, [$codeUpper, $userId]);
+            if ($product) {
+                Logger::info('[FB_PRODUCT] Found by ref_id in DB', ['code' => $codeUpper]);
+                return $product;
+            }
+        }
+        
+        // Try finding by product_code (GLD-BRC-001 format)
+        $sql = "SELECT id, ref_id, name, code AS product_code, price, stock_status, 
+                       main_image_url, description, category
+                FROM products 
+                WHERE code = ? AND user_id = ? AND status = 'active'
+                LIMIT 1";
+        $product = $db->queryOne($sql, [$codeUpper, $userId]);
+        
+        if ($product) {
+            Logger::info('[FB_PRODUCT] Found by code in DB', ['code' => $codeUpper]);
+            return $product;
+        }
+        
+        // Try case-insensitive search
+        $sql = "SELECT id, ref_id, name, code AS product_code, price, stock_status, 
+                       main_image_url, description, category
+                FROM products 
+                WHERE (UPPER(code) = ? OR UPPER(ref_id) = ?) AND user_id = ? AND status = 'active'
+                LIMIT 1";
+        $product = $db->queryOne($sql, [$codeUpper, $codeUpper, $userId]);
+        
+        if ($product) {
+            Logger::info('[FB_PRODUCT] Found by case-insensitive search in DB', ['code' => $codeUpper]);
+            return $product;
+        }
+        
+        // ✅ Fallback to mock products if not found in DB
+        Logger::info('[FB_PRODUCT] Not in DB, trying mock data', ['code' => $codeUpper]);
+        return findProductInMock($codeUpper);
+        
+    } catch (Throwable $e) {
+        Logger::error('[FB_PRODUCT] Error finding product: ' . $e->getMessage(), [
+            'code' => $code,
+            'user_id' => $userId,
+        ]);
+        // Try mock as fallback on error
+        return findProductInMock(strtoupper(trim($code)));
+    }
+}
+
+/**
+ * Find product in mock data by SKU
+ */
+function findProductInMock(string $code): ?array
+{
+    $mockProducts = require __DIR__ . '/../mock-data/products.php';
+    
+    foreach ($mockProducts as $product) {
+        // Match by SKU (exact or partial)
+        $sku = strtoupper($product['sku'] ?? '');
+        if ($sku === $code || strpos($sku, $code) !== false || strpos($code, $sku) !== false) {
+            Logger::info('[FB_PRODUCT] Found in mock data', ['sku' => $sku, 'name' => $product['name']]);
+            return [
+                'id' => $product['id'],
+                'ref_id' => $product['sku'],  // Use SKU as ref_id
+                'name' => $product['name'],
+                'product_code' => $product['sku'],
+                'price' => $product['price'],
+                'stock_status' => $product['in_stock'] ? 'in_stock' : 'out_of_stock',
+                'main_image_url' => $product['image_url'],
+                'description' => $product['description'] ?? '',
+                'category' => $product['category'] ?? '',
+            ];
+        }
+    }
+    
+    Logger::warning('[FB_PRODUCT] Not found in mock data either', ['code' => $code]);
+    return null;
+}
+
+/**
+ * Send product card to customer (Admin Suggest Product feature)
+ * @param string $recipientPsid Customer's PSID
+ * @param array $product Product data from DB
+ * @param array $channel Channel config
+ * @param string $adminMessage Original admin message (for context)
+ * @return bool Success
+ */
+function sendAdminSuggestProductCard(string $recipientPsid, array $product, array $channel, string $adminMessage): bool
+{
+    $cfg = json_decode($channel['config'] ?? '{}', true);
+    $pageToken = trim((string)($cfg['page_access_token'] ?? ''));
+
+    if ($pageToken === '') {
+        Logger::error('[FB_SUGGEST] ❌ Facebook page_access_token not configured');
+        return false;
+    }
+
+    // Build product info
+    $productName = $product['name'] ?? 'สินค้า';
+    $productCode = $product['product_code'] ?? $product['ref_id'] ?? '';
+    $productRefId = $product['ref_id'] ?? $productCode;
+    $price = $product['price'] ?? 0;
+    $imageUrl = $product['main_image_url'] ?? '';
+    $stockStatus = $product['stock_status'] ?? 'available';
+    
+    // Format price
+    $priceText = $price > 0 ? number_format((float)$price, 0) . ' บาท' : 'สอบถามราคา';
+    
+    // Stock status text
+    $stockText = $stockStatus === 'available' ? '✅ มีสินค้า' : ($stockStatus === 'sold' ? '❌ ขายแล้ว' : '📦 ' . $stockStatus);
+    
+    // Use default image if none
+    if (empty($imageUrl)) {
+        $imageUrl = 'https://autobot-ft2igm5e6q-as.a.run.app/assets/images/default-product.png';
+    }
+    
+    // Build button payload - use ref_id for checkout flow
+    $buttonPayload = 'สนใจ ' . $productRefId;
+    
+    // Prepare Generic Template
+    $template = [
+        'message' => [
+            'attachment' => [
+                'type' => 'template',
+                'payload' => [
+                    'template_type' => 'generic',
+                    'elements' => [
+                        [
+                            'title' => mb_substr($productName, 0, 80, 'UTF-8'),
+                            'subtitle' => mb_substr("💰 {$priceText}\n{$stockText}\n📦 รหัส: {$productCode}", 0, 80, 'UTF-8'),
+                            'image_url' => $imageUrl,
+                            'buttons' => [
+                                [
+                                    'type' => 'postback',
+                                    'title' => mb_substr('สนใจ ' . $productCode, 0, 20, 'UTF-8'),
+                                    'payload' => $buttonPayload
+                                ]
+                            ]
+                        ]
+                    ]
+                ]
+            ]
+        ]
+    ];
+
+    $url = 'https://graph.facebook.com/v18.0/me/messages?access_token=' . urlencode($pageToken);
+
+    $payload = array_merge([
+        'recipient' => ['id' => $recipientPsid],
+        'messaging_type' => 'RESPONSE',
+    ], $template);
+    
+    Logger::info("[FB_SUGGEST] 🎁 Sending Admin Suggest Product Card", [
+        'recipient' => $recipientPsid,
+        'product_code' => $productCode,
+        'product_name' => $productName,
+        'price' => $price,
+        'button_payload' => $buttonPayload,
+    ]);
+
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_UNICODE),
+        CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
+        CURLOPT_TIMEOUT        => 30,
+    ]);
+
+    $resp = curl_exec($ch);
+    $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err  = curl_error($ch);
+    curl_close($ch);
+
+    if ($http !== 200) {
+        Logger::error('[FB_SUGGEST] ❌ Facebook API returned error', [
+            'http_code' => $http,
+            'curl_error' => $err,
+            'facebook_response' => substr((string)$resp, 0, 800),
+        ]);
+        return false;
+    }
+
+    Logger::info("[FB_SUGGEST] ✅ Product card sent successfully", [
+        'http_code' => $http,
+        'product_code' => $productCode,
+    ]);
+    return true;
 }

@@ -14,7 +14,7 @@
  * - customer_name, customer_phone, customer_email, customer_platform, customer_avatar
  * 
  * Product info is in order_items table (order_id, product_name, product_code, quantity, unit_price)
- * Installment info is in installments table (total_terms as installment_months)
+ * Installment info is in installment_contracts + installment_payments tables
  */
 
 header('Content-Type: application/json');
@@ -70,11 +70,8 @@ $uri_parts = explode('/', trim(parse_url($uri, PHP_URL_PATH), '/'));
 try {
     $pdo = getDB();
 
-    // Get tenant_id from user (same pattern as payments.php and search-orders.php)
-    $stmt = $pdo->prepare("SELECT tenant_id FROM users WHERE id = ? LIMIT 1");
-    $stmt->execute([$user_id]);
-    $userRow = $stmt->fetch(PDO::FETCH_ASSOC);
-    $tenant_id = $userRow['tenant_id'] ?? 'default';
+    // ✅ FIX: Use shop_owner_id for data isolation instead of tenant_id
+    // shop_owner_id = logged-in user_id (each shop owner only sees their own orders)
 
     // =========================================================================
     // Dynamic Schema Detection - Support both old and new schema
@@ -143,7 +140,12 @@ try {
         'product_name',
         'product_code',
         'installment_months',
-        'shipping_address_id'
+        'shipping_address_id',
+        'platform_user_id',
+        'platform',
+        'shipping_method',
+        'deposit_amount',
+        'deposit_expiry'
     ];
 
     foreach ($optionalCols as $col) {
@@ -166,18 +168,19 @@ try {
         if ($order_id) {
             // GET /api/customer/orders/{id} OR ?id=X - Single order detail
 
-            // Check if tenant_id column exists
-            $hasTenantId = isset($columns['tenant_id']);
+            // ✅ FIX: Use shop_owner_id for data isolation
+            $hasShopOwnerId = isset($columns['shop_owner_id']);
 
-            if ($hasTenantId) {
+            if ($hasShopOwnerId) {
                 $stmt = $pdo->prepare("
                     SELECT 
                         {$selectClause}
                     FROM orders o
-                    WHERE o.id = ? AND o.tenant_id = ?
+                    WHERE o.id = ? AND o.shop_owner_id = ?
                 ");
-                $stmt->execute([$order_id, $tenant_id]);
+                $stmt->execute([$order_id, $user_id]);
             } else {
+                // Fallback to user_id column
                 $stmt = $pdo->prepare("
                     SELECT 
                         {$selectClause}
@@ -208,7 +211,7 @@ try {
 
                     // Build SELECT clause with only existing columns
                     $selectItemCols = ['id', 'order_id'];
-                    $optionalItemCols = ['product_ref_id', 'product_name', 'product_code', 'quantity', 'unit_price', 'discount', 'total_price', 'subtotal'];
+                    $optionalItemCols = ['product_ref_id', 'product_name', 'product_code', 'quantity', 'unit_price', 'discount', 'total', 'subtotal', 'product_metadata', 'product_image'];
                     foreach ($optionalItemCols as $col) {
                         if (isset($itemCols[$col])) {
                             $selectItemCols[] = $col;
@@ -218,6 +221,22 @@ try {
                     $stmt = $pdo->prepare("SELECT " . implode(', ', $selectItemCols) . " FROM order_items WHERE order_id = ?");
                     $stmt->execute([$order_id]);
                     $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                    // Extract image_url from product_metadata OR product_image column
+                    foreach ($items as &$item) {
+                        // Priority 1: product_image column (direct URL)
+                        if (!empty($item['product_image'])) {
+                            $item['product_image_url'] = $item['product_image'];
+                        }
+                        // Priority 2: product_metadata JSON field
+                        elseif (!empty($item['product_metadata'])) {
+                            $metadata = json_decode($item['product_metadata'], true);
+                            if ($metadata) {
+                                $item['product_image_url'] = $metadata['image_url'] ?? null;
+                            }
+                        }
+                    }
+                    unset($item);
                 }
             } catch (Exception $e) {
                 // order_items table might not exist
@@ -238,30 +257,80 @@ try {
             }
 
             // Get installment info if order_type is installment
+            // Get installment info if order_type is installment
+            // ค้นหาได้ทั้ง installment_id หรือ order_id (fallback ถ้า link ขาด)
             $order['installment_months'] = 0;
             $order['installment_schedule'] = null;
-            if ($order['order_type'] === 'installment' && !empty($order['installment_id'])) {
+            $order['installment_contract_id'] = null;
+            
+            if ($order['order_type'] === 'installment') {
+                // Try new table first (installment_contracts)
+                // ค้นหาทั้ง installment_id และ order_id เผื่อ link ขาด
+                
+                // ✅ Backward compatible: check if interest columns exist
+                $hasInterestCols = false;
+                try {
+                    $colCheck = $pdo->query("SHOW COLUMNS FROM installment_contracts LIKE 'interest_rate'");
+                    $hasInterestCols = $colCheck->rowCount() > 0;
+                } catch (Exception $e) {}
+                
+                // Build SELECT with or without interest columns
+                $selectCols = "id, total_periods as total_terms, amount_per_period as amount_per_term, 
+                           paid_periods as paid_terms, status as installment_status, next_due_date,
+                           financed_amount, product_price, paid_amount as contract_paid_amount";
+                if ($hasInterestCols) {
+                    $selectCols .= ", interest_rate, total_interest";
+                }
+                
                 $stmt = $pdo->prepare("
-                    SELECT total_terms, amount_per_term, paid_terms, status as installment_status
-                    FROM installments
-                    WHERE id = ?
+                    SELECT {$selectCols}
+                    FROM installment_contracts
+                    WHERE id = ? OR order_id = ?
+                    LIMIT 1
                 ");
-                $stmt->execute([$order['installment_id']]);
+                $stmt->execute([$order['installment_id'] ?? 0, $order['id']]);
                 $inst = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                // ✅ If interest columns don't exist, calculate from amounts
+                if ($inst && !$hasInterestCols) {
+                    $productPrice = (float)($inst['product_price'] ?? 0);
+                    $financedAmount = (float)($inst['financed_amount'] ?? 0);
+                    $inst['total_interest'] = $financedAmount - $productPrice;
+                    $inst['interest_rate'] = $productPrice > 0 ? round(($inst['total_interest'] / $productPrice) * 100, 2) : 3;
+                }
+                
                 if ($inst) {
+                    $contractId = $inst['id'];
+                    $order['installment_contract_id'] = $contractId;
                     $order['installment_months'] = (int) $inst['total_terms'];
                     $order['installment_info'] = $inst;
-                }
 
-                // Get installment schedules
-                $stmt = $pdo->prepare("
-                    SELECT id, period_number, due_date, amount, paid_amount, status
-                    FROM installment_schedules
-                    WHERE installment_id = ?
-                    ORDER BY period_number ASC
-                ");
-                $stmt->execute([$order['installment_id']]);
-                $order['installment_schedule'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                    // Self-healing: ถ้า orders.installment_id ไม่มี แต่หา contract ได้ → update ให้ถูกต้อง
+                    if (empty($order['installment_id']) && $contractId) {
+                        try {
+                            $stmtUpdate = $pdo->prepare("UPDATE orders SET installment_id = ? WHERE id = ?");
+                            $stmtUpdate->execute([$contractId, $order['id']]);
+                            $order['installment_id'] = $contractId; // Update local copy too
+                            error_log("[SELF_HEAL] Fixed orders.installment_id for order #{$order['id']} -> contract #{$contractId}");
+                        } catch (Exception $e) {
+                            // Ignore update errors
+                        }
+                    }
+
+                    // Get installment payments from new table
+                    // Note: installment_payments doesn't have paid_amount column
+                    // paid_amount = amount when status = 'paid', otherwise 0
+                    $stmt = $pdo->prepare("
+                        SELECT id, period_number, due_date, amount, 
+                               CASE WHEN status = 'paid' THEN amount ELSE 0 END as paid_amount, 
+                               status
+                        FROM installment_payments
+                        WHERE contract_id = ?
+                        ORDER BY period_number ASC
+                    ");
+                    $stmt->execute([$contractId]);
+                    $order['installment_schedule'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                }
             }
 
             // Get payments for this order
@@ -274,6 +343,188 @@ try {
             ");
             $stmt->execute([$order_id]);
             $order['payments'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            // =========================================================================
+            // ✅ Real-time paid_amount calculation from verified payments
+            // If stored paid_amount is 0 but there are verified payments, calculate it
+            // =========================================================================
+            $storedPaid = (float) ($order['paid_amount'] ?? 0);
+            $calculatedPaid = 0;
+            $pendingPaid = 0;
+            
+            foreach ($order['payments'] as $p) {
+                $amt = (float) ($p['amount'] ?? 0);
+                if ($p['status'] === 'verified') {
+                    $calculatedPaid += $amt;
+                } else {
+                    $pendingPaid += $amt;
+                }
+            }
+            
+            // Use the higher of stored or calculated (in case of sync issues)
+            $order['paid_amount'] = max($storedPaid, $calculatedPaid);
+            $order['paid_amount_verified'] = $calculatedPaid;
+            $order['paid_amount_pending'] = $pendingPaid;
+            
+            // Calculate remaining and payment progress
+            $totalAmount = (float) ($order['total_amount'] ?? 0);
+            $order['remaining_amount'] = max(0, $totalAmount - $order['paid_amount']);
+            $order['payment_progress'] = $totalAmount > 0 
+                ? round(($order['paid_amount'] / $totalAmount) * 100, 1) 
+                : 0;
+            
+            // Auto-fix: Update stored paid_amount if calculation is higher
+            if ($calculatedPaid > $storedPaid && $calculatedPaid > 0) {
+                try {
+                    $stmtFix = $pdo->prepare("UPDATE orders SET paid_amount = ? WHERE id = ?");
+                    $stmtFix->execute([$calculatedPaid, $order_id]);
+                    error_log("[SELF_HEAL] Updated orders.paid_amount for #{$order_id}: {$storedPaid} -> {$calculatedPaid}");
+                } catch (Exception $e) {
+                    // Ignore update errors
+                }
+            }
+
+            // ✅ Get customer profile if platform_user_id exists
+            if (!empty($order['platform_user_id'])) {
+                try {
+                    $stmt = $pdo->prepare("
+                        SELECT 
+                            id, display_name, full_name, phone, email,
+                            COALESCE(profile_pic_url, avatar_url) as avatar_url,
+                            platform, platform_user_id
+                        FROM customer_profiles
+                        WHERE platform_user_id = ?
+                        LIMIT 1
+                    ");
+                    $stmt->execute([$order['platform_user_id']]);
+                    $profile = $stmt->fetch(PDO::FETCH_ASSOC);
+                    if ($profile) {
+                        $order['customer_profile'] = $profile;
+                        // Also populate top-level fields for convenience
+                        if (empty($order['customer_name'])) {
+                            $order['customer_name'] = $profile['display_name'] ?? $profile['full_name'] ?? '';
+                        }
+                        if (empty($order['customer_avatar'])) {
+                            $order['customer_avatar'] = $profile['avatar_url'] ?? '';
+                        }
+                    }
+                } catch (Exception $e) {
+                    // customer_profiles table might not exist
+                }
+            }
+
+            // ✅ Get shipping address if shipping_address_id exists
+            if (!empty($order['shipping_address_id'])) {
+                try {
+                    $stmt = $pdo->prepare("
+                        SELECT 
+                            id, recipient_name, phone, address_line1, address_line2,
+                            subdistrict, district, province, postal_code, country,
+                            address_type, is_default, additional_info
+                        FROM customer_addresses
+                        WHERE id = ?
+                        LIMIT 1
+                    ");
+                    $stmt->execute([$order['shipping_address_id']]);
+                    $address = $stmt->fetch(PDO::FETCH_ASSOC);
+                    if ($address) {
+                        $order['shipping_address_detail'] = $address;
+                        // Build full address string if not already set
+                        if (empty($order['shipping_address'])) {
+                            $addressParts = array_filter([
+                                $address['address_line1'],
+                                $address['address_line2'],
+                                $address['subdistrict'],
+                                $address['district'],
+                                $address['province'],
+                                $address['postal_code']
+                            ]);
+                            $order['shipping_address'] = implode(', ', $addressParts);
+                        }
+                        // Populate shipping contact if not set
+                        if (empty($order['shipping_name'])) {
+                            $order['shipping_name'] = $address['recipient_name'];
+                        }
+                        if (empty($order['shipping_phone'])) {
+                            $order['shipping_phone'] = $address['phone'];
+                        }
+                    }
+                } catch (Exception $e) {
+                    // customer_addresses table might not exist
+                }
+            }
+
+            // ✅ Extract product_image_url from first item for top-level access
+            if (!empty($items) && !empty($items[0]['product_image_url'])) {
+                $order['product_image_url'] = $items[0]['product_image_url'];
+            }
+            
+            // ✅ Fallback: If no image from order_items, try to get from products table
+            if (empty($order['product_image_url'])) {
+                try {
+                    $productCode = $order['product_code'] ?? null;
+                    $productRefId = $order['product_ref_id'] ?? null;
+                    
+                    if ($productCode || $productRefId) {
+                        $imgStmt = $pdo->prepare("
+                            SELECT image_url 
+                            FROM products 
+                            WHERE (product_code = ? OR id = ?) 
+                            AND image_url IS NOT NULL AND image_url != ''
+                            LIMIT 1
+                        ");
+                        $imgStmt->execute([$productCode, $productRefId]);
+                        $productRow = $imgStmt->fetch(PDO::FETCH_ASSOC);
+                        
+                        if ($productRow && !empty($productRow['image_url'])) {
+                            $order['product_image_url'] = $productRow['image_url'];
+                        }
+                    }
+                } catch (Exception $e) {
+                    // products table might not have image_url column
+                }
+            }
+            
+            // ✅ Fallback 2: Try to get image from linked Case
+            // First check case_id field, then try to parse from note
+            $caseIdForImage = $order['case_id'] ?? null;
+            
+            // Parse case_id from note if not set (e.g., "จากเคส #67")
+            if (empty($caseIdForImage) && !empty($order['note'])) {
+                if (preg_match('/(?:เคส|case)\s*#?(\d+)/i', $order['note'], $matches)) {
+                    $caseIdForImage = (int)$matches[1];
+                }
+            }
+            if (empty($caseIdForImage) && !empty($order['notes'])) {
+                if (preg_match('/(?:เคส|case)\s*#?(\d+)/i', $order['notes'], $matches)) {
+                    $caseIdForImage = (int)$matches[1];
+                }
+            }
+            
+            if (empty($order['product_image_url']) && !empty($caseIdForImage)) {
+                try {
+                    // ✅ FIX: product_image_url is stored in `slots` JSON column, not as a direct column
+                    // slots = {"product_image_url": "https://...", ...}
+                    $caseStmt = $pdo->prepare("
+                        SELECT slots 
+                        FROM cases 
+                        WHERE id = ? 
+                        AND slots IS NOT NULL
+                        LIMIT 1
+                    ");
+                    $caseStmt->execute([$caseIdForImage]);
+                    $caseRow = $caseStmt->fetch(PDO::FETCH_ASSOC);
+                    
+                    if ($caseRow && !empty($caseRow['slots'])) {
+                        $slots = json_decode($caseRow['slots'], true);
+                        if (!empty($slots['product_image_url'])) {
+                            $order['product_image_url'] = $slots['product_image_url'];
+                        }
+                    }
+                } catch (Exception $e) {
+                    // cases table might not exist or query failed
+                }
+            }
 
             echo json_encode(['success' => true, 'data' => $order]);
 
@@ -286,18 +537,16 @@ try {
             $status = isset($_GET['status']) ? $_GET['status'] : null;
             $order_type = isset($_GET['order_type']) ? $_GET['order_type'] : null;
 
-            // Build query - use tenant_id (same pattern as search-orders.php)
-            // Check if tenant_id column exists using direct query (more reliable)
-            $colCheck = $pdo->query("SHOW COLUMNS FROM orders LIKE 'tenant_id'");
-            $hasTenantId = $colCheck->rowCount() > 0;
+            // ✅ FIX: Use shop_owner_id for data isolation
+            $hasShopOwnerId = isset($columns['shop_owner_id']);
 
-            if ($hasTenantId) {
-                $where = ["o.tenant_id = ?"];
-                $params = [$tenant_id];
+            if ($hasShopOwnerId) {
+                $where = ["o.shop_owner_id = ?"];
+                $params = [$user_id];
             } else {
-                // No tenant_id column - show all orders (same as search-orders.php fallback)
-                $where = ["1=1"];
-                $params = [];
+                // Fallback to user_id/customer_id column
+                $where = ["o.{$userColumn} = ?"];
+                $params = [$user_id];
             }
 
             if ($status) {
@@ -338,12 +587,21 @@ try {
                     (SELECT SUM(oi.quantity) FROM order_items oi WHERE oi.order_id = o.id) as quantity_items";
             }
 
-            // Get orders
+            // Get orders - JOIN with customer_profiles for name/avatar
+            // Note: Join via platform_user_id + platform (since orders stores these columns)
+            $customerJoinCols = ",
+                    COALESCE(cp.display_name, cp.full_name, CONCAT('ลูกค้า #', o.id)) as customer_display_name,
+                    COALESCE(cp.profile_pic_url, cp.avatar_url) as customer_avatar_url,
+                    cp.platform as cp_platform";
+
             $stmt = $pdo->prepare("
                 SELECT 
                     {$selectClause}
                     {$productSubqueries}
+                    {$customerJoinCols}
                 FROM orders o
+                LEFT JOIN customer_profiles cp ON o.platform_user_id = cp.platform_user_id 
+                    AND o.platform = cp.platform
                 WHERE $where_clause
                 ORDER BY o.created_at DESC
                 LIMIT ? OFFSET ?
@@ -371,11 +629,28 @@ try {
                 $order['installment_months'] = 0;
 
                 if ($order['order_type'] === 'installment' && !empty($order['installment_id'])) {
-                    $stmt2 = $pdo->prepare("SELECT total_terms FROM installments WHERE id = ?");
-                    $stmt2->execute([$order['installment_id']]);
+                    // Try new table first (installment_contracts)
+                    // ✅ Fetch financed_amount and paid_amount for correct progress display
+                    $stmt2 = $pdo->prepare("
+                        SELECT total_periods as total_terms, 
+                               financed_amount, 
+                               paid_amount as contract_paid_amount,
+                               product_price,
+                               paid_periods
+                        FROM installment_contracts 
+                        WHERE id = ? OR order_id = ?
+                    ");
+                    $stmt2->execute([$order['installment_id'], $order['id']]);
                     $inst = $stmt2->fetch(PDO::FETCH_ASSOC);
                     if ($inst) {
                         $order['installment_months'] = (int) $inst['total_terms'];
+                        // ✅ Add installment amounts for correct progress calculation
+                        $order['financed_amount'] = (float) ($inst['financed_amount'] ?? 0);
+                        $order['contract_paid_amount'] = (float) ($inst['contract_paid_amount'] ?? 0);
+                        $order['product_price'] = (float) ($inst['product_price'] ?? 0);
+                        $order['paid_periods'] = (int) ($inst['paid_periods'] ?? 0);
+                        // Calculate service fee
+                        $order['service_fee'] = $order['financed_amount'] - $order['product_price'];
                     }
                 }
             }
@@ -400,7 +675,8 @@ try {
 
         if ($action === 'update') {
             // POST /api/customer/orders?action=update - Update existing order
-            updateOrder($pdo, $user_id, $tenant_id);
+            // ✅ FIX: Use user_id as shop_owner_id (no separate tenant_id)
+            updateOrder($pdo, $user_id, $user_id);
         } else {
             // POST /api/customer/orders - Create new order
             createOrder($pdo, $user_id, $userColumn);
@@ -408,7 +684,7 @@ try {
 
     } elseif ($method === 'PUT' || $method === 'PATCH') {
         // PUT/PATCH /api/customer/orders/{id} - Update existing order
-        updateOrder($pdo, $user_id, $tenant_id);
+        updateOrder($pdo, $user_id, $user_id);
 
     } else {
         http_response_code(405);
@@ -475,15 +751,80 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
         return;
     }
 
+    // Get order type early to validate installment fields
+    $orderType = $input['order_type'] ?? ($input['payment_type'] ?? 'full_payment');
+
+    // Installment: No down payment required - just split into 3 periods + 3% fee
+    $downPayment = floatval($input['down_payment'] ?? 0);
+
     // Generate order number
     $orderNumber = 'ORD-' . date('Ymd') . '-' . strtoupper(substr(bin2hex(random_bytes(3)), 0, 5));
 
     // Prepare data
     $productCode = trim($input['product_code'] ?? '');
-    $orderType = $input['order_type'] ?? ($input['payment_type'] ?? 'full_payment');
+    $productImage = trim($input['product_image'] ?? '');
+    // $orderType already set above for validation
     $customerName = trim($input['customer_name'] ?? '');
     $customerPhone = trim($input['customer_phone'] ?? '');
     $note = trim($input['note'] ?? ($input['notes'] ?? ''));
+
+    // ✅ Platform & Customer identification for joining with customer_profiles
+    // Priority: 1) Query from cases table if from_case provided, 2) Input params
+    $platformUserIdInput = '';
+    $platformInput = '';
+
+    // Debug: log raw input for from_case
+    error_log("[CREATE_ORDER] DEBUG raw input: from_case=" . json_encode($input['from_case'] ?? 'NOT_SET') .
+        ", external_user_id=" . json_encode($input['external_user_id'] ?? 'NOT_SET') .
+        ", source=" . json_encode($input['source'] ?? 'NOT_SET') .
+        ", send_message=" . json_encode($input['send_message'] ?? 'NOT_SET') .
+        ", customer_message_len=" . strlen($input['customer_message'] ?? ''));
+
+    $fromCaseId = intval($input['from_case'] ?? 0);
+
+    if ($fromCaseId > 0) {
+        // Query external_user_id and platform from cases table (source of truth)
+        $stmtCase = $pdo->prepare("SELECT external_user_id, platform, customer_platform FROM cases WHERE id = ?");
+        $stmtCase->execute([$fromCaseId]);
+        $caseData = $stmtCase->fetch(PDO::FETCH_ASSOC);
+
+        if ($caseData) {
+            $platformUserIdInput = trim($caseData['external_user_id'] ?? '');
+            $platformInput = trim($caseData['platform'] ?? $caseData['customer_platform'] ?? '');
+            error_log("[CREATE_ORDER] Got from cases table (case_id={$fromCaseId}): external_user_id={$platformUserIdInput}, platform={$platformInput}");
+        }
+    }
+
+    // Fallback to input params if not found from cases
+    if (empty($platformUserIdInput)) {
+        $platformUserIdInput = trim($input['external_user_id'] ?? ($input['platform_user_id'] ?? ''));
+    }
+    if (empty($platformInput)) {
+        $platformInput = trim($input['source'] ?? ($input['platform'] ?? 'chatbot'));
+    }
+
+    error_log("[CREATE_ORDER] Final values: platformUserIdInput={$platformUserIdInput}, platformInput={$platformInput}, from_case={$fromCaseId}");
+
+    // ✅ Lookup customer_profile_id from platform_user_id for order matching
+    $customerProfileId = null;
+    if (!empty($platformUserIdInput)) {
+        $stmtProfile = $pdo->prepare("SELECT id FROM customer_profiles WHERE platform_user_id = ? LIMIT 1");
+        $stmtProfile->execute([$platformUserIdInput]);
+        $profileRow = $stmtProfile->fetch(PDO::FETCH_ASSOC);
+        if ($profileRow) {
+            $customerProfileId = (int) $profileRow['id'];
+            error_log("[CREATE_ORDER] Found customer_profile_id={$customerProfileId} for platform_user_id={$platformUserIdInput}");
+        } else {
+            error_log("[CREATE_ORDER] No customer_profile found for platform_user_id={$platformUserIdInput}");
+        }
+    }
+
+    // Map source to platform enum values
+    if (in_array($platformInput, ['facebook', 'line', 'web', 'instagram', 'manual'])) {
+        $platformForDb = $platformInput;
+    } else {
+        $platformForDb = 'web'; // default for chatbot/web orders
+    }
 
     // Calculate unit price - ensure it's never 0 or invalid
     $unitPrice = ($quantity > 0) ? ($totalAmount / $quantity) : $totalAmount;
@@ -495,18 +836,46 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
     $depositAmount = floatval($input['deposit_amount'] ?? 0);
     $depositExpiry = $input['deposit_expiry'] ?? null;
 
+    // Bank account for push message
+    $bankAccountKey = trim($input['bank_account'] ?? '');
+    
+    // ✅ Map bank account key to actual bank details
+    $bankAccountMap = [
+        'scb_1' => "ธนาคารไทยพาณิชย์\nชื่อบัญชี: บจก เพชรวิบวับ\nเลขบัญชี: 165-301-4242",
+        'kbank_1' => "ธนาคารกสิกรไทย\nชื่อบัญชี: บจก.เฮงเฮงโฮลดิ้ง\nเลขบัญชี: 800-002-9282",
+        'bay_1' => "ธนาคารกรุงศรี\nชื่อบัญชี: บจก.เฮงเฮงโฮลดิ้ง\nเลขบัญชี: 800-002-9282",
+    ];
+    $bankAccount = $bankAccountMap[$bankAccountKey] ?? $bankAccountKey;
+
     // Installment-specific fields  
-    $downPayment = floatval($input['down_payment'] ?? 0);
+    // $downPayment already set above for validation
     $installmentMonths = intval($input['installment_months'] ?? 3);
 
     // Shipping fields
     $shippingMethod = trim($input['shipping_method'] ?? 'pickup');
     $shippingAddress = trim($input['shipping_address'] ?? '');
+    $shippingAddressId = intval($input['shipping_address_id'] ?? 0);
     $shippingFee = floatval($input['shipping_fee'] ?? 0);
     $trackingNumber = trim($input['tracking_number'] ?? '');
 
     // Determine if we have order_type (new) or payment_type (old)
     $hasOrderTypeCol = isset($columns['order_type']);
+
+    // ✅ Store original order type for logic (deposit handling, push messages, etc.)
+    $originalOrderType = $orderType;
+
+    // ✅ Check what values are allowed in payment_type ENUM
+    // Production may only have ('full','installment') - we need to handle deposit/savings gracefully
+    $allowedPaymentTypes = ['full', 'installment']; // Default for old schema
+    try {
+        $enumStmt = $pdo->query("SHOW COLUMNS FROM orders WHERE Field = 'payment_type'");
+        $enumInfo = $enumStmt->fetch(PDO::FETCH_ASSOC);
+        if ($enumInfo && preg_match_all("/'([^']+)'/", $enumInfo['Type'], $matches)) {
+            $allowedPaymentTypes = $matches[1];
+        }
+    } catch (Exception $e) {
+        // Use default
+    }
 
     // Map payment_type values based on which column exists
     if ($hasOrderTypeCol) {
@@ -515,35 +884,48 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
             $orderType = 'full_payment';
         if ($orderType === 'savings')
             $orderType = 'savings_completion';
-        // Keep deposit and installment as-is
+        // Keep deposit and installment as-is (assuming ENUM was extended)
+        // If ENUM doesn't support deposit, fallback to full_payment
+        if ($originalOrderType === 'deposit' && !in_array('deposit', $allowedPaymentTypes)) {
+            $orderType = 'full_payment';
+            error_log("[CREATE_ORDER] order_type ENUM doesn't support 'deposit', using 'full_payment'. Original: {$originalOrderType}");
+        }
     } else {
         // Has payment_type column - use old values  
         if ($orderType === 'full_payment')
             $orderType = 'full';
         if ($orderType === 'savings_completion')
             $orderType = 'full';
-        // Keep deposit and installment as-is
+        
+        // ✅ FIX: If ENUM doesn't support deposit/savings, use 'full' for DB but keep original for logic
+        if (!in_array($orderType, $allowedPaymentTypes)) {
+            error_log("[CREATE_ORDER] payment_type '{$orderType}' not in ENUM, using 'full' for DB. Original: {$originalOrderType}");
+            $orderType = 'full';
+        }
     }
 
     // Determine initial status based on order type
+    // IMPORTANT: orders.status ENUM on production only has:
+    // 'pending', 'processing', 'shipped', 'delivered', 'cancelled', 'paid'
+    // Use order_type to distinguish deposit/installment, not status
     $initialStatus = 'pending';
     $paidAmount = 0;
     $paymentStatus = 'unpaid';
 
-    if ($orderType === 'deposit') {
+    // ✅ Use originalOrderType for logic (deposit/installment handling)
+    // because $orderType may have been mapped to 'full' for old ENUM compatibility
+    if ($originalOrderType === 'deposit') {
         // Deposit order: partially paid, waiting for balance
-        $initialStatus = 'pending_balance';
-        $paidAmount = $depositAmount;
-        $paymentStatus = $depositAmount > 0 ? 'partial' : 'unpaid';
-        // Append deposit info to notes
-        $depositInfo = "\n\n--- มัดจำ ---\nยอดมัดจำ: " . number_format($depositAmount, 2) . " บาท";
-        if ($depositExpiry) {
-            $depositInfo .= "\nกันสินค้าถึง: " . $depositExpiry;
-        }
-        $note .= $depositInfo;
-    } elseif ($orderType === 'installment') {
+        // ✅ Now ENUM supports 'deposit' - use it directly
+        $orderType = 'deposit';
+        $initialStatus = 'pending'; // Use 'pending' (production ENUM compatible)
+        $paidAmount = 0; // Will be updated when payment is approved
+        $paymentStatus = 'unpaid';
+        // Note: deposit_amount and deposit_expiry are now saved in their own columns
+    } elseif ($originalOrderType === 'installment') {
         // Installment order: down payment received, waiting for installments
-        $initialStatus = 'pending_installment';
+        // Status stays 'pending', order_type = 'installment' distinguishes it
+        $initialStatus = 'pending';
         $paidAmount = $downPayment;
         $paymentStatus = $downPayment > 0 ? 'partial' : 'unpaid';
     }
@@ -566,6 +948,13 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
             $insertVals = ['?', '?', '?', '?', '?', '?', '?'];
             $insertParams = [$orderNumber, $user_id, $orderType, $quantity, $unitPrice, $totalAmount, $initialStatus];
 
+            // ✅ Add shop_owner_id for data isolation (logged-in user = shop owner)
+            if (isset($columns['shop_owner_id'])) {
+                $insertCols[] = 'shop_owner_id';
+                $insertVals[] = '?';
+                $insertParams[] = $user_id;
+            }
+
             // ✅ Add product_name to orders table (for backward compatibility & search)
             if (isset($columns['product_name'])) {
                 $insertCols[] = 'product_name';
@@ -576,6 +965,32 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
                 $insertCols[] = 'product_code';
                 $insertVals[] = '?';
                 $insertParams[] = $productCode ?: null;
+            }
+
+            // ✅ Add customer_profile_id for payment auto-matching
+            if (isset($columns['customer_profile_id']) && $customerProfileId > 0) {
+                $insertCols[] = 'customer_profile_id';
+                $insertVals[] = '?';
+                $insertParams[] = $customerProfileId;
+                error_log("[CREATE_ORDER] Adding customer_profile_id={$customerProfileId} to INSERT");
+            }
+
+            // ✅ Add platform_user_id and platform for joining with customer_profiles
+            if (isset($columns['platform_user_id']) && !empty($platformUserIdInput)) {
+                $insertCols[] = 'platform_user_id';
+                $insertVals[] = '?';
+                $insertParams[] = $platformUserIdInput;
+            }
+            if (isset($columns['platform']) && !empty($platformForDb)) {
+                $insertCols[] = 'platform';
+                $insertVals[] = '?';
+                $insertParams[] = $platformForDb;
+            }
+            // Also add source column if it exists (older schema)
+            if (isset($columns['source'])) {
+                $insertCols[] = 'source';
+                $insertVals[] = '?';
+                $insertParams[] = $platformInput ?: 'chatbot';
             }
 
             // Add optional columns if they exist
@@ -605,21 +1020,37 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
                 $insertParams[] = $customerPhone ?: null;
             }
             // Installment-specific columns
-            if (isset($columns['installment_months']) && $orderType === 'installment') {
+            if (isset($columns['installment_months']) && $originalOrderType === 'installment') {
                 $insertCols[] = 'installment_months';
                 $insertVals[] = '?';
                 $insertParams[] = $installmentMonths;
             }
-            if (isset($columns['down_payment']) && $orderType === 'installment') {
+            if (isset($columns['down_payment']) && $originalOrderType === 'installment') {
                 $insertCols[] = 'down_payment';
                 $insertVals[] = '?';
                 $insertParams[] = $downPayment;
+            }
+            // Deposit-specific columns
+            if (isset($columns['deposit_amount']) && $originalOrderType === 'deposit') {
+                $insertCols[] = 'deposit_amount';
+                $insertVals[] = '?';
+                $insertParams[] = $depositAmount;
+            }
+            if (isset($columns['deposit_expiry']) && $originalOrderType === 'deposit' && $depositExpiry) {
+                $insertCols[] = 'deposit_expiry';
+                $insertVals[] = '?';
+                $insertParams[] = $depositExpiry;
             }
             // Shipping-specific columns
             if (isset($columns['shipping_method'])) {
                 $insertCols[] = 'shipping_method';
                 $insertVals[] = '?';
                 $insertParams[] = $shippingMethod;
+            }
+            if (isset($columns['shipping_address_id']) && $shippingAddressId > 0) {
+                $insertCols[] = 'shipping_address_id';
+                $insertVals[] = '?';
+                $insertParams[] = $shippingAddressId;
             }
             if (isset($columns['shipping_address']) && $shippingMethod !== 'pickup') {
                 $insertCols[] = 'shipping_address';
@@ -650,20 +1081,67 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
 
             $orderId = $pdo->lastInsertId();
 
-            // Insert order item
-            $stmt = $pdo->prepare("
-                INSERT INTO order_items (
-                    order_id, product_name, product_code, quantity, unit_price, discount, total_price, created_at
-                ) VALUES (?, ?, ?, ?, ?, 0, ?, NOW())
-            ");
-            $stmt->execute([
-                $orderId,
-                $productName,
-                $productCode ?: null,
-                $quantity,
-                $unitPrice,
-                $totalAmount
+            // Insert order item with product image
+            $productMetadata = json_encode([
+                'image_url' => $productImage ?: null,
+                'product_code' => $productCode ?: null,
+                'original_name' => $productName,
+                'captured_at' => date('Y-m-d H:i:s')
             ]);
+
+            // Check which columns exist for product image
+            $itemColCheck = $pdo->query("SHOW COLUMNS FROM order_items LIKE 'product_image'");
+            $hasImageCol = $itemColCheck->rowCount() > 0;
+            
+            $metaColCheck = $pdo->query("SHOW COLUMNS FROM order_items LIKE 'product_metadata'");
+            $hasMetadataCol = $metaColCheck->rowCount() > 0;
+
+            if ($hasImageCol) {
+                // ✅ Use product_image column directly (production schema)
+                $stmt = $pdo->prepare("
+                    INSERT INTO order_items (
+                        order_id, product_name, product_code, quantity, unit_price, discount, total, product_image, created_at
+                    ) VALUES (?, ?, ?, ?, ?, 0, ?, ?, NOW())
+                ");
+                $stmt->execute([
+                    $orderId,
+                    $productName,
+                    $productCode ?: null,
+                    $quantity,
+                    $unitPrice,
+                    $totalAmount,
+                    $productImage ?: null
+                ]);
+            } elseif ($hasMetadataCol) {
+                $stmt = $pdo->prepare("
+                    INSERT INTO order_items (
+                        order_id, product_name, product_code, quantity, unit_price, discount, total, product_metadata, created_at
+                    ) VALUES (?, ?, ?, ?, ?, 0, ?, ?, NOW())
+                ");
+                $stmt->execute([
+                    $orderId,
+                    $productName,
+                    $productCode ?: null,
+                    $quantity,
+                    $unitPrice,
+                    $totalAmount,
+                    $productMetadata
+                ]);
+            } else {
+                $stmt = $pdo->prepare("
+                    INSERT INTO order_items (
+                        order_id, product_name, product_code, quantity, unit_price, discount, total, created_at
+                    ) VALUES (?, ?, ?, ?, ?, 0, ?, NOW())
+                ");
+                $stmt->execute([
+                    $orderId,
+                    $productName,
+                    $productCode ?: null,
+                    $quantity,
+                    $unitPrice,
+                    $totalAmount
+                ]);
+            }
         } else {
             // No order_items table - product info in orders table directly
             // IMPORTANT: unit_price is required (no default value on production)
@@ -700,6 +1178,24 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
                 $insertParams[] = $productCode ?: null;
             }
 
+            // ✅ Add platform_user_id and platform for joining with customer_profiles
+            if (isset($columns['platform_user_id']) && !empty($platformUserIdInput)) {
+                $insertCols[] = 'platform_user_id';
+                $insertVals[] = '?';
+                $insertParams[] = $platformUserIdInput;
+            }
+            if (isset($columns['platform']) && !empty($platformForDb)) {
+                $insertCols[] = 'platform';
+                $insertVals[] = '?';
+                $insertParams[] = $platformForDb;
+            }
+            // Also add source column if it exists (older schema)
+            if (isset($columns['source'])) {
+                $insertCols[] = 'source';
+                $insertVals[] = '?';
+                $insertParams[] = $platformInput ?: 'chatbot';
+            }
+
             $sql = "INSERT INTO orders (" . implode(', ', $insertCols) . ") VALUES (" . implode(', ', $insertVals) . ")";
             $stmt = $pdo->prepare($sql);
             $stmt->execute($insertParams);
@@ -708,90 +1204,166 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
         }
 
         // =========================================================================
-        // Create Installment Records (if installment order)
-        // Spec: 3 งวด, ค่าดำเนินการ 3% ตลอดสัญญา (ไม่ใช่ต่อเดือน)
+        // Create Installment Contract (if installment order)
+        // ใช้ installment_contracts table (ใหม่) แทน installments (เก่า)
+        // Spec: 3 งวด ภายใน 60 วัน, ค่าธรรมเนียม 3% ตลอดสัญญา
         // 
         // ตัวอย่าง 10,000 บาท:
-        // - งวดที่ 1: 3,500 + 300 (3%) = 3,800 บาท
-        // - งวดที่ 2: 3,500 บาท
-        // - งวดที่ 3: 3,000 บาท (ยอดคงเหลือ)
+        // - งวด 1 (Day 0): floor(10000/3) + 300 = 3,633 บาท
+        // - งวด 2 (Day 30): floor(10000/3) = 3,333 บาท
+        // - งวด 3 (Day 60): 3,334 บาท (เศษ + รับของ)
         // =========================================================================
-        $installmentId = null;
-        if ($orderType === 'installment' && $orderId) {
+        $contractId = null;
+        if ($originalOrderType === 'installment' && $orderId) {
             try {
-                // Check if installments table exists
-                $hasInstallments = false;
+                // Check if installment_contracts table exists
+                $hasContracts = false;
                 try {
-                    $stmtCheck = $pdo->query("SHOW TABLES LIKE 'installments'");
-                    $hasInstallments = $stmtCheck->rowCount() > 0;
+                    $stmtCheck = $pdo->query("SHOW TABLES LIKE 'installment_contracts'");
+                    $hasContracts = $stmtCheck->rowCount() > 0;
                 } catch (Exception $e) {
                 }
 
-                if ($hasInstallments) {
-                    $remaining = $totalAmount - $downPayment;
-
-                    // Service fee: 3% TOTAL (not per month!)
+                if ($hasContracts) {
+                    // ไม่มีดาวน์ - ผ่อนเต็มจำนวน
+                    // Service fee: 3% รวมในงวดแรก
                     $serviceFeeRate = 0.03;
-                    $serviceFee = round($remaining * $serviceFeeRate);
-                    $months = 3;
+                    $serviceFee = round($totalAmount * $serviceFeeRate);
+                    $totalPeriods = 3;
 
-                    // Calculate installment amounts following spec:
-                    // - Period 1 & 2: equal amounts (rounded up to nearest 500)
-                    // - Period 3: remaining balance
-                    // - Service fee added to period 1
-                    $baseAmount = $remaining / 3;
-                    $p1 = ceil($baseAmount / 500) * 500;  // Round up to nearest 500
-                    $p2 = $p1;
-                    $p3 = $remaining - $p1 - $p2;
+                    // Calculate installment amounts:
+                    // ตัวอย่าง 10,000 บาท:
+                    // งวด 1 = floor(10000/3) + 3% = 3,333 + 300 = 3,633 บาท
+                    // งวด 2 = floor(10000/3) = 3,333 บาท
+                    // งวด 3 = floor(10000/3) + เศษ = 3,333 + 1 = 3,334 บาท
+                    $basePerPeriod = floor($totalAmount / $totalPeriods);
+                    $remainder = $totalAmount - ($basePerPeriod * $totalPeriods);
 
-                    // Adjust if period 3 becomes negative
-                    if ($p3 < 0) {
-                        $p1 = ceil($remaining / 3);
-                        $p2 = ceil($remaining / 3);
-                        $p3 = $remaining - $p1 - $p2;
-                        if ($p3 < 0) {
-                            $p2 += $p3;
-                            $p3 = 0;
-                        }
+                    $p1 = $basePerPeriod + $serviceFee;  // Period 1: includes service fee
+                    $p2 = $basePerPeriod;                 // Period 2: base amount
+                    $p3 = $basePerPeriod + $remainder;    // Period 3: base + remainder
+
+                    $grandTotal = $totalAmount + $serviceFee;
+                    $avgPerPeriod = $grandTotal / $totalPeriods;
+
+                    // Generate contract number
+                    $contractNo = 'INS-' . date('Ymd') . '-' . strtoupper(substr(bin2hex(random_bytes(3)), 0, 5));
+
+                    // Get customer info for the contract
+                    $customerNameForContract = $customerName ?: '';
+                    $customerPhoneForContract = $customerPhone ?: '';
+
+                    // Due dates: Day 0, 30, 60
+                    $startDate = date('Y-m-d');
+                    $nextDueDate = date('Y-m-d'); // งวดแรก = วันนี้
+
+                    // ✅ FIX: channel_id is NOT NULL in DB, must have a value
+                    // Get channelId - already set from case lookup or fallback above
+                    $contractChannelId = $channelId ?? null;
+                    if (!$contractChannelId) {
+                        // Fallback: get first active channel for this platform
+                        $stmtCh = $pdo->prepare("SELECT id FROM customer_channels WHERE status = 'active' ORDER BY id ASC LIMIT 1");
+                        $stmtCh->execute();
+                        $chRow = $stmtCh->fetch(PDO::FETCH_ASSOC);
+                        $contractChannelId = $chRow ? (int)$chRow['id'] : 1; // Ultimate fallback to 1
                     }
 
-                    // Period 1 includes service fee
-                    $period1Total = $p1 + $serviceFee;
-                    $grandTotal = $remaining + $serviceFee;
-
-                    // For installments table compatibility
-                    $avgPayment = $grandTotal / $months;  // Average for monthly_payment field
-
-                    // Generate installment number
-                    $installmentNo = 'INS-' . date('Ymd') . '-' . strtoupper(substr(bin2hex(random_bytes(3)), 0, 5));
-
-                    // Insert main installment record
-                    $stmt = $pdo->prepare("
-                        INSERT INTO installments (
-                            installment_no, order_id, customer_id, tenant_id,
-                            product_name, product_code, total_amount, down_payment,
-                            remaining_amount, total_terms, interest_rate,
-                            monthly_payment, total_interest, grand_total,
-                            status, created_at, updated_at
-                        ) VALUES (?, ?, ?, 'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NOW(), NOW())
-                    ");
-                    $stmt->execute([
-                        $installmentNo,
+                    // Insert into installment_contracts
+                    // down_payment = 0 (ไม่มีดาวน์), financed_amount = grandTotal (ยอดผ่อน + fee)
+                    // ✅ FIX: Match columns with actual table schema from dump
+                    // Schema has: contract_no, customer_id, order_id, tenant_id, product_ref_id, product_name, product_price,
+                    //             customer_name, customer_phone, customer_avatar, platform, down_payment, financed_amount,
+                    //             total_periods, paid_periods, amount_per_period, paid_amount, status, start_date, next_due_date,
+                    //             last_payment_date, completed_at, admin_notes, created_at, updated_at, 
+                    //             platform_user_id, channel_id, external_user_id
+                    
+                    // Check which columns exist
+                    $contractCols = [];
+                    $colStmt = $pdo->query("SHOW COLUMNS FROM installment_contracts");
+                    while ($col = $colStmt->fetch(PDO::FETCH_ASSOC)) {
+                        $contractCols[$col['Field']] = true;
+                    }
+                    
+                    // Build dynamic INSERT based on available columns
+                    $insertCols = ['contract_no', 'tenant_id', 'customer_id', 'order_id', 'product_name', 'product_price', 
+                                   'down_payment', 'financed_amount', 'total_periods', 'amount_per_period', 
+                                   'paid_periods', 'paid_amount', 'status', 'start_date', 'next_due_date', 'created_at', 'updated_at'];
+                    $insertVals = ['?', "'default'", '?', '?', '?', '?', 
+                                   '0', '?', '?', '?', 
+                                   '0', '0', "'active'", '?', '?', 'NOW()', 'NOW()'];
+                    $insertParams = [
+                        $contractNo,
+                        $user_id,  // customer_id = shop owner (for FK constraint)
                         $orderId,
-                        $user_id,
                         $productName,
-                        $productCode ?: null,
                         $totalAmount,
-                        $downPayment,
-                        $remaining,
-                        $months,
-                        $serviceFeeRate * 100, // Store as percentage (3%)
-                        $avgPayment,
-                        $serviceFee,  // Total service fee (not monthly interest)
-                        $grandTotal
-                    ]);
+                        $grandTotal,
+                        $totalPeriods,
+                        $avgPerPeriod,
+                        $startDate,
+                        $nextDueDate
+                    ];
+                    
+                    // Add optional columns if they exist
+                    if (isset($contractCols['product_ref_id'])) {
+                        $insertCols[] = 'product_ref_id';
+                        $insertVals[] = '?';
+                        $insertParams[] = $productCode ?: '';
+                    }
+                    if (isset($contractCols['customer_name'])) {
+                        $insertCols[] = 'customer_name';
+                        $insertVals[] = '?';
+                        $insertParams[] = $customerNameForContract ?: '';
+                    }
+                    if (isset($contractCols['customer_phone'])) {
+                        $insertCols[] = 'customer_phone';
+                        $insertVals[] = '?';
+                        $insertParams[] = $customerPhoneForContract ?: '';
+                    }
+                    if (isset($contractCols['platform'])) {
+                        $insertCols[] = 'platform';
+                        $insertVals[] = '?';
+                        $insertParams[] = $platformForDb ?: 'web';
+                    }
+                    if (isset($contractCols['platform_user_id'])) {
+                        $insertCols[] = 'platform_user_id';
+                        $insertVals[] = '?';
+                        $insertParams[] = $platformUserIdInput ?: '';
+                    }
+                    if (isset($contractCols['external_user_id'])) {
+                        $insertCols[] = 'external_user_id';
+                        $insertVals[] = '?';
+                        $insertParams[] = $platformUserIdInput ?: '';
+                    }
+                    if (isset($contractCols['channel_id']) && $contractChannelId) {
+                        $insertCols[] = 'channel_id';
+                        $insertVals[] = '?';
+                        $insertParams[] = $contractChannelId;
+                    }
+                    
+                    // ✅ Add interest/fee info for audit trail
+                    if (isset($contractCols['interest_rate'])) {
+                        $insertCols[] = 'interest_rate';
+                        $insertVals[] = '?';
+                        $insertParams[] = $serviceFeeRate * 100; // 0.03 -> 3
+                    }
+                    if (isset($contractCols['interest_type'])) {
+                        $insertCols[] = 'interest_type';
+                        $insertVals[] = '?';
+                        $insertParams[] = 'flat'; // one-time fee
+                    }
+                    if (isset($contractCols['total_interest'])) {
+                        $insertCols[] = 'total_interest';
+                        $insertVals[] = '?';
+                        $insertParams[] = $serviceFee; // total fee amount
+                    }
+                    
+                    $sql = "INSERT INTO installment_contracts (" . implode(', ', $insertCols) . ") VALUES (" . implode(', ', $insertVals) . ")";
+                    error_log("[CREATE_ORDER] Installment contract SQL: " . $sql);
+                    $stmt = $pdo->prepare($sql);
+                    $stmt->execute($insertParams);
 
-                    $installmentId = $pdo->lastInsertId();
+                    $contractId = $pdo->lastInsertId();
 
                     // Check if installment_payments table exists for payment schedule
                     $hasPayments = false;
@@ -803,31 +1375,63 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
 
                     if ($hasPayments) {
                         // Create 3 payment schedule records with correct amounts
+                        // นโยบายร้าน ฮ.เฮง เฮง: งวด 1 = Day 0, งวด 2 = Day 30, งวด 3 = Day 60 (รับของ)
+                        $dueDateDays = [1 => 0, 2 => 30, 3 => 60];
                         $payments = [
-                            1 => $period1Total,  // Period 1: includes service fee
-                            2 => $p2,            // Period 2: base amount
-                            3 => $p3             // Period 3: remaining
+                            1 => $p1,  // Period 1: includes service fee
+                            2 => $p2,  // Period 2: base amount
+                            3 => $p3   // Period 3: base + remainder
                         ];
 
-                        foreach ($payments as $termNum => $amount) {
-                            $dueDate = date('Y-m-d', strtotime("+{$termNum} month"));
-                            $stmt = $pdo->prepare("
-                                INSERT INTO installment_payments (
-                                    installment_id, term_number, amount, due_date, status, created_at
-                                ) VALUES (?, ?, ?, ?, 'pending', NOW())
-                            ");
-                            $stmt->execute([$installmentId, $termNum, $amount, $dueDate]);
+                        // Check if payment_no column exists in installment_payments
+                        $hasPaymentNoCol = false;
+                        try {
+                            $colCheck = $pdo->query("SHOW COLUMNS FROM installment_payments LIKE 'payment_no'");
+                            $hasPaymentNoCol = $colCheck->rowCount() > 0;
+                        } catch (Exception $e) {}
+
+                        // Generate payment records
+                        foreach ($payments as $periodNum => $amount) {
+                            $daysToAdd = $dueDateDays[$periodNum] ?? 0;
+                            $dueDate = date('Y-m-d', strtotime("+{$daysToAdd} days"));
+
+                            if ($hasPaymentNoCol) {
+                                $paymentNo = $contractNo . '-P' . $periodNum;
+                                $stmt = $pdo->prepare("
+                                    INSERT INTO installment_payments (
+                                        contract_id, payment_no, period_number, amount, due_date, status, created_at
+                                    ) VALUES (?, ?, ?, ?, ?, 'pending', NOW())
+                                ");
+                                $stmt->execute([$contractId, $paymentNo, $periodNum, $amount, $dueDate]);
+                            } else {
+                                // ✅ FIX: Schema doesn't have payment_no - use minimal columns
+                                $stmt = $pdo->prepare("
+                                    INSERT INTO installment_payments (
+                                        contract_id, period_number, amount, due_date, status, created_at
+                                    ) VALUES (?, ?, ?, ?, 'pending', NOW())
+                                ");
+                                $stmt->execute([$contractId, $periodNum, $amount, $dueDate]);
+                            }
                         }
+
+                        error_log("[CREATE_ORDER] Created {$totalPeriods} installment_payments for contract #{$contractId}");
                     }
 
-                    // Update order with installment_id
+                    // Update order with contract_id
                     if (isset($columns['installment_id'])) {
                         $stmt = $pdo->prepare("UPDATE orders SET installment_id = ? WHERE id = ?");
-                        $stmt->execute([$installmentId, $orderId]);
+                        $stmt->execute([$contractId, $orderId]);
                     }
+
+                    error_log("[CREATE_ORDER] Created installment_contract #{$contractId} ({$contractNo}) for order #{$orderId}");
+
+                    // ✅ FIX: Store period amounts for push notification
+                    $period1Total = $p1;  // Period 1 amount with service fee
+                    $period2Amount = $p2; // Period 2 base amount
+                    $period3Amount = $p3; // Period 3 with remainder
                 }
             } catch (Exception $instEx) {
-                error_log("Installment creation error for order {$orderNumber}: " . $instEx->getMessage());
+                error_log("Installment contract creation error for order {$orderNumber}: " . $instEx->getMessage());
                 // Don't fail the order if installment creation fails
             }
         }
@@ -841,65 +1445,93 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
         $messageSent = false;
         $customerId = $input['customer_id'] ?? null;
 
-        // Only send if customer_id provided (has platform info)
-        if ($customerId) {
+        // Determine platform info - use platformUserIdInput from cases if available
+        $pushPlatformUserId = $platformUserIdInput;
+        $pushPlatform = $platformForDb;
+
+        // Get channel_id for push message
+        $channelId = null;
+        if ($fromCaseId > 0) {
+            // Get channel_id from the case
+            $stmtChannel = $pdo->prepare("SELECT channel_id FROM cases WHERE id = ?");
+            $stmtChannel->execute([$fromCaseId]);
+            $caseChannel = $stmtChannel->fetch(PDO::FETCH_ASSOC);
+            $channelId = $caseChannel['channel_id'] ?? null;
+            error_log("[CREATE_ORDER] Got channel_id from case {$fromCaseId}: " . ($channelId ?? 'NULL'));
+        }
+
+        // Fallback: get first active channel for this platform if no channel from case
+        if (!$channelId && !empty($pushPlatform)) {
+            $stmt = $pdo->prepare("SELECT id FROM customer_channels WHERE type = ? AND status = 'active' LIMIT 1");
+            $stmt->execute([$pushPlatform]);
+            $channel = $stmt->fetch(PDO::FETCH_ASSOC);
+            $channelId = $channel ? (int) $channel['id'] : null;
+            error_log("[CREATE_ORDER] Fallback channel lookup for {$pushPlatform}: " . ($channelId ?? 'NULL'));
+        }
+
+        // Debug: log push variables
+        error_log("[CREATE_ORDER] PUSH DEBUG: pushPlatformUserId={$pushPlatformUserId}, pushPlatform={$pushPlatform}, channelId=" . ($channelId ?? 'NULL') . ", fromCaseId={$fromCaseId}");
+
+        // ✅ Check if custom message is provided - skip auto push and use custom message instead
+        $hasCustomMessage = !empty(trim($input['customer_message'] ?? '')) && !empty($input['send_message']);
+        
+        // Send push if we have platform_user_id AND no custom message provided
+        if (!empty($pushPlatformUserId) && !empty($pushPlatform) && $channelId && !$hasCustomMessage) {
+            error_log("[CREATE_ORDER] PUSH: Sending push notification to {$pushPlatform}:{$pushPlatformUserId} via channel {$channelId}");
             try {
-                // Get customer's platform info
-                $stmt = $pdo->prepare("SELECT platform, platform_user_id FROM customer_profiles WHERE id = ?");
-                $stmt->execute([(int) $customerId]);
-                $customer = $stmt->fetch(PDO::FETCH_ASSOC);
+                require_once __DIR__ . '/../../includes/services/PushNotificationService.php';
+                require_once __DIR__ . '/../../includes/Database.php';
+                $pushService = new PushNotificationService(Database::getInstance());
 
-                if ($customer && !empty($customer['platform_user_id'])) {
-                    // Get channel_id from customer_services
-                    $stmt = $pdo->prepare("SELECT id FROM customer_services WHERE user_id = ? AND platform = ? LIMIT 1");
-                    $stmt->execute([$user_id, $customer['platform']]);
-                    $channel = $stmt->fetch(PDO::FETCH_ASSOC);
-                    $channelId = $channel ? (int) $channel['id'] : null;
+                // Build notification data based on order type
+                $notificationData = [
+                    'product_name' => $productName,
+                    'total_amount' => number_format($totalAmount, 0),
+                    'order_number' => $orderNumber,
+                    'bank_account' => $bankAccount,
+                ];
 
-                    require_once __DIR__ . '/../../includes/services/PushNotificationService.php';
-                    $pushService = new PushNotificationService(Database::getInstance());
+                // Add type-specific data
+                if ($originalOrderType === 'installment' && isset($period1Total)) {
+                    // Calculate due dates - นโยบาย ฮ.เฮง เฮง: Day 0, Day 30, Day 60 (รับของ)
+                    $period1Due = date('d/m/Y'); // Day 0 (วันนี้)
+                    $period2Due = date('d/m/Y', strtotime('+30 days')); // Day 30
+                    $period3Due = date('d/m/Y', strtotime('+60 days')); // Day 60 -> รับของ
 
-                    // Build notification data based on order type
-                    $notificationData = [
-                        'product_name' => $productName,
-                        'total_amount' => number_format($totalAmount, 0),
-                        'order_number' => $orderNumber,
-                    ];
+                    $notificationData['total_periods'] = 3;
+                    $notificationData['period_1_amount'] = number_format($period1Total, 0);
+                    $notificationData['period_1_due'] = $period1Due;
+                    $notificationData['period_2_amount'] = number_format($period2Amount ?? 0, 0);
+                    $notificationData['period_2_due'] = $period2Due;
+                    $notificationData['period_3_amount'] = number_format($period3Amount ?? 0, 0);
+                    $notificationData['period_3_due'] = $period3Due;
+                } elseif (in_array($originalOrderType, ['savings', 'savings_completion'])) {
+                    $notificationData['target_amount'] = number_format($totalAmount, 0);
+                    $notificationData['current_balance'] = '0';
+                } elseif ($originalOrderType === 'deposit') {
+                    $notificationData['deposit_amount'] = number_format($depositAmount, 0);
+                    // ✅ FIX: Always provide deposit_expiry (use default if not set)
+                    $notificationData['deposit_expiry'] = $depositExpiry ?: date('d/m/Y', strtotime('+7 days'));
+                }
 
-                    // Add type-specific data
-                    if ($orderType === 'installment' && isset($period1Total)) {
-                        // Calculate due dates
-                        $period1Due = date('d/m/Y', strtotime('+1 month'));
+                // ✅ DEBUG: Log notification data being sent
+                error_log("[CREATE_ORDER] PUSH NOTIFICATION: orderType={$originalOrderType}, templateKey=order_created_{$originalOrderType}");
+                error_log("[CREATE_ORDER] PUSH DATA: " . json_encode($notificationData));
 
-                        $notificationData['total_periods'] = 3;
-                        $notificationData['period_1_amount'] = number_format($period1Total, 0);
-                        $notificationData['period_1_due'] = $period1Due;
-                        $notificationData['period_2_amount'] = number_format($p2 ?? 0, 0);
-                        $notificationData['period_3_amount'] = number_format($p3 ?? 0, 0);
-                    } elseif (in_array($orderType, ['savings', 'savings_completion'])) {
-                        $notificationData['target_amount'] = number_format($totalAmount, 0);
-                        $notificationData['current_balance'] = '0';
-                    } elseif ($orderType === 'deposit') {
-                        $notificationData['deposit_amount'] = number_format($depositAmount, 0);
-                        if ($depositExpiry) {
-                            $notificationData['deposit_expiry'] = $depositExpiry;
-                        }
-                    }
+                // Send notification using template
+                // ✅ Use originalOrderType for push template selection
+                $result = $pushService->sendOrderCreated(
+                    $pushPlatform,
+                    $pushPlatformUserId,
+                    $originalOrderType,  // Use original type for correct template
+                    $notificationData,
+                    (int) $channelId
+                );
 
-                    // Send notification using template
-                    $result = $pushService->sendOrderCreated(
-                        $customer['platform'],
-                        $customer['platform_user_id'],
-                        $orderType,
-                        $notificationData,
-                        $channelId
-                    );
+                $messageSent = $result['success'] ?? false;
 
-                    $messageSent = $result['success'] ?? false;
-
-                    if (!$messageSent) {
-                        error_log("Auto push failed for order {$orderNumber}: " . ($result['error'] ?? 'Unknown error'));
-                    }
+                if (!$messageSent) {
+                    error_log("Auto push failed for order {$orderNumber}: " . ($result['error'] ?? 'Unknown error'));
                 }
             } catch (Exception $pushEx) {
                 // Don't fail the order if push fails
@@ -911,32 +1543,29 @@ function createOrder($pdo, $user_id, $userColumn = 'user_id')
         $customMessageSent = false;
         $sendMessage = !empty($input['send_message']);
         $customerMessage = trim($input['customer_message'] ?? '');
+        
+        // ✅ Replace {{ORDER_NUMBER}} placeholder with actual order number
+        if (!empty($customerMessage)) {
+            $customerMessage = str_replace('{{ORDER_NUMBER}}', $orderNumber, $customerMessage);
+        }
 
-        if ($sendMessage && !empty($customerMessage) && $customerId && !$messageSent) {
+        // ✅ FIX: Send custom message if provided (removed !$messageSent condition - custom message takes priority)
+        if ($sendMessage && !empty($customerMessage) && !empty($pushPlatformUserId) && $channelId) {
             try {
-                $stmt = $pdo->prepare("SELECT platform, platform_user_id FROM customer_profiles WHERE id = ?");
-                $stmt->execute([(int) $customerId]);
-                $customer = $stmt->fetch(PDO::FETCH_ASSOC);
+                require_once __DIR__ . '/../../includes/services/PushMessageService.php';
+                $pushMsgService = new \App\Services\PushMessageService($pdo);
 
-                if ($customer && !empty($customer['platform_user_id'])) {
-                    // Get channel_id
-                    $stmt = $pdo->prepare("SELECT id FROM customer_services WHERE user_id = ? AND platform = ? LIMIT 1");
-                    $stmt->execute([$user_id, $customer['platform']]);
-                    $channelRow = $stmt->fetch(PDO::FETCH_ASSOC);
+                $result = $pushMsgService->send(
+                    $pushPlatform,
+                    $pushPlatformUserId,
+                    $customerMessage,
+                    (int) $channelId
+                );
 
-                    if ($channelRow) {
-                        require_once __DIR__ . '/../../includes/services/PushMessageService.php';
-                        $pushService = new \App\Services\PushMessageService($pdo);
+                $customMessageSent = $result['success'] ?? false;
 
-                        $result = $pushService->send(
-                            $customer['platform'],
-                            $customer['platform_user_id'],
-                            $customerMessage,
-                            (int) $channelRow['id']
-                        );
-
-                        $customMessageSent = $result['success'] ?? false;
-                    }
+                if (!$customMessageSent) {
+                    error_log("Custom push message failed for order {$orderNumber}: " . ($result['error'] ?? 'Unknown error'));
                 }
             } catch (Exception $pushEx) {
                 error_log("Custom push message error for order {$orderNumber}: " . $pushEx->getMessage());
@@ -1044,6 +1673,11 @@ function updateOrder($pdo, $user_id, $tenant_id)
     $validStatuses = ['draft', 'pending', 'pending_payment', 'paid', 'processing', 'shipped', 'delivered', 'cancelled', 'refunded'];
 
     foreach ($allowedFields as $field => $type) {
+        // ✅ Only update fields that exist in the table
+        if (!isset($columns[$field])) {
+            continue;
+        }
+        
         if (isset($_POST[$field])) {
             // Validate status
             if ($field === 'status' && !in_array($_POST[$field], $validStatuses)) {

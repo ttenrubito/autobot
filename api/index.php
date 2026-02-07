@@ -250,18 +250,6 @@ try {
         require __DIR__ . '/customer/cases.php';
     }
 
-    // Customer Deposits routes (มัดจำ)
-    elseif ($path === '/customer/deposits' && in_array($method, ['GET', 'POST'])) {
-        require __DIR__ . '/customer/deposits.php';
-    } elseif (preg_match('#^/customer/deposits/(\d+)$#', $path, $matches) && $method === 'GET') {
-        $_GET['id'] = $matches[1];
-        require __DIR__ . '/customer/deposits.php';
-    } elseif (preg_match('#^/customer/deposits/(\d+)/pay$#', $path, $matches) && $method === 'POST') {
-        $_GET['id'] = $matches[1];
-        $_GET['action'] = 'pay';
-        require __DIR__ . '/customer/deposits.php';
-    }
-
     // Customer Pawns routes (ฝากจำนำ)
     elseif ($path === '/customer/pawns' && in_array($method, ['GET', 'POST'])) {
         require __DIR__ . '/customer/pawns.php';
@@ -496,6 +484,11 @@ try {
     } elseif (preg_match('#^/admin/installments/(\d+)/cancel$#', $path, $matches) && $method === 'POST') {
         $_GET['contract_id'] = $matches[1];
         $_GET['action'] = 'cancel';
+        require __DIR__ . '/admin/installments/index.php';
+    } elseif (preg_match('#^/admin/installments/(\d+)/close-period$#', $path, $matches) && $method === 'POST') {
+        // ✅ NEW: Manual close period endpoint
+        $_GET['contract_id'] = $matches[1];
+        $_GET['action'] = 'close-period';
         require __DIR__ . '/admin/installments/index.php';
     }
 

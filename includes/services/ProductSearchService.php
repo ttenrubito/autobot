@@ -54,6 +54,69 @@ class ProductSearchService
     }
 
     /**
+     * Search products by category and/or material (Filter-first approach)
+     * Used for broad queries like "มีแหวนไหม", "ทอง"
+     * 
+     * @param string|null $category Category filter (e.g., 'ring', 'watch', 'necklace')
+     * @param string|null $material Material filter (e.g., 'gold', 'silver', 'diamond')
+     * @param int $limit Maximum results
+     * @return array Products array
+     */
+    public static function searchByCategory(?string $category, ?string $material = null, int $limit = 5): array
+    {
+        $products = self::getBasicMockProducts();
+        $results = [];
+        
+        foreach ($products as $product) {
+            $match = true;
+            
+            // Filter by category
+            if ($category) {
+                $productCategory = strtolower($product['category'] ?? '');
+                if ($productCategory !== strtolower($category)) {
+                    $match = false;
+                }
+            }
+            
+            // Filter by material (check in title/description)
+            if ($material && $match) {
+                $searchText = strtolower(
+                    ($product['title'] ?? '') . ' ' .
+                    ($product['description'] ?? '')
+                );
+                
+                // Map material keywords to search terms
+                $materialSearchTerms = [
+                    'gold' => ['ทอง', 'gold', 'yellow gold', 'ทองคำ'],
+                    'silver' => ['เงิน', 'silver'],
+                    'diamond' => ['เพชร', 'diamond'],
+                    'platinum' => ['แพลทินัม', 'platinum'],
+                ];
+                
+                $terms = $materialSearchTerms[strtolower($material)] ?? [$material];
+                $materialMatch = false;
+                
+                foreach ($terms as $term) {
+                    if (mb_strpos($searchText, strtolower($term)) !== false) {
+                        $materialMatch = true;
+                        break;
+                    }
+                }
+                
+                if (!$materialMatch) {
+                    $match = false;
+                }
+            }
+            
+            if ($match) {
+                $results[] = $product;
+            }
+        }
+        
+        return array_slice($results, 0, $limit);
+    }
+
+    /**
      * Internal search method
      * 
      * @param array $params Search parameters
@@ -101,97 +164,98 @@ class ProductSearchService
     }
 
     /**
-     * Get mock products data
+     * Get mock products data - Load ALL products from API file
+     * @return array All mock products from the API
      */
     private static function getMockProducts(): array
     {
-        // Include mock data from v1 API file
-        $apiFile = __DIR__ . '/../../api/v1/products/search.php';
+        // Call the actual mock API to get all products
+        // Store original server state
+        $originalMethod = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
-        // Read the file and extract mock data
-        $content = file_get_contents($apiFile);
+        try {
+            // Simulate a search that returns all products (empty search)
+            // We'll use keyword search with a very broad term or get all
+            $_SERVER['REQUEST_METHOD'] = 'POST';
 
-        // For now, return a subset that matches what the API has
-        // This is a simplified version - in production, you'd call the actual API
+            // Create request body that will match all products
+            $requestBody = json_encode([
+                'keyword' => '',  // Empty to get structure
+                'page' => ['limit' => 100]
+            ]);
+
+            // Read and parse the API file to extract $mockProducts array
+            $apiFile = __DIR__ . '/../../api/v1/products/search.php';
+            $content = file_get_contents($apiFile);
+
+            // Extract the mockProducts array using regex
+            if (preg_match('/\$mockProducts\s*=\s*\[(.*?)\];\s*\/\/ =+\s*\/\/ SEARCH LOGIC/s', $content, $matches)) {
+                // Parse the PHP array - use eval carefully (this is internal code only)
+                $arrayCode = '$mockProducts = [' . $matches[1] . '];';
+                eval ($arrayCode);
+                return $mockProducts ?? [];
+            }
+
+            // Fallback: Make HTTP request to the API
+            $apiUrl = 'http://localhost/autobot/api/v1/products/search.php';
+            $ch = curl_init($apiUrl);
+            curl_setopt_array($ch, [
+                CURLOPT_POST => true,
+                CURLOPT_POSTFIELDS => json_encode(['keyword' => 'ทอง', 'page' => ['limit' => 100]]),
+                CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_TIMEOUT => 5
+            ]);
+            $response = curl_exec($ch);
+            curl_close($ch);
+
+            if ($response) {
+                $data = json_decode($response, true);
+                if (!empty($data['data'])) {
+                    return $data['data'];
+                }
+            }
+
+            // Ultimate fallback - return basic products
+            return self::getBasicMockProducts();
+
+        } catch (Exception $e) {
+            error_log("[ProductSearchService] getMockProducts error: " . $e->getMessage());
+            return self::getBasicMockProducts();
+        } finally {
+            $_SERVER['REQUEST_METHOD'] = $originalMethod;
+        }
+    }
+
+    /**
+     * Basic fallback mock products (subset)
+     * IMPORTANT: Must match ref_ids from api/v1/products/search.php
+     * 
+     * Updated 2026-02-02: Added amulet (พระเลี่ยมทอง) products
+     */
+    private static function getBasicMockProducts(): array
+    {
         return [
-            [
-                'ref_id' => 'P-2026-000001',
-                'product_code' => 'ROL-DAY-001',
-                'title' => 'Rolex Day-Date 36mm Yellow Gold',
-                'brand' => 'Rolex',
-                'category' => 'watch',
-                'description' => 'นาฬิกา Rolex Day-Date ทองคำแท้ 18K สภาพสวย 95% อุปกรณ์ครบกล่อง ใบเซอร์',
-                'price' => 850000,
-                'currency' => 'THB',
-                'availability' => 'in_stock',
-                'thumbnail_url' => 'https://images.unsplash.com/photo-1547996160-81dfa63595aa?w=400',
-                'image_count' => 6,
-            ],
-            [
-                'ref_id' => 'P-2026-000002',
-                'product_code' => 'ROL-SUB-002',
-                'title' => 'Rolex Submariner Date Black Dial',
-                'brand' => 'Rolex',
-                'category' => 'watch',
-                'description' => 'Rolex Submariner หน้าปัดดำ สายเหล็ก สภาพสวย 90% กล่องใบ',
-                'price' => 420000,
-                'currency' => 'THB',
-                'availability' => 'in_stock',
-                'thumbnail_url' => 'https://images.unsplash.com/photo-1523170335258-f5ed11844a49?w=400',
-                'image_count' => 5,
-            ],
-            [
-                'ref_id' => 'P-2026-000010',
-                'product_code' => 'DIA-RNG-001',
-                'title' => 'แหวนเพชรแท้ 1 กะรัต ทองขาว',
-                'brand' => 'เพชรวิบวับ',
-                'category' => 'ring',
-                'description' => 'แหวนเพชรแท้ น้ำหนัก 1.05 ct น้ำ D VVS1 ตัวเรือนทองขาว 18K',
-                'price' => 289000,
-                'currency' => 'THB',
-                'availability' => 'in_stock',
-                'thumbnail_url' => 'https://images.unsplash.com/photo-1605100804763-247f67b3557e?w=400',
-                'image_count' => 8,
-            ],
-            [
-                'ref_id' => 'P-2026-000020',
-                'product_code' => 'DIA-NCK-001',
-                'title' => 'สร้อยคอเพชร Tennis Necklace',
-                'brand' => 'เพชรวิบวับ',
-                'category' => 'necklace',
-                'description' => 'สร้อยคอเพชรแท้ รวม 5 กะรัต ตัวเรือนทองขาว 18K ความยาว 16 นิ้ว',
-                'price' => 450000,
-                'currency' => 'THB',
-                'availability' => 'reserved',
-                'thumbnail_url' => 'https://images.unsplash.com/photo-1515562141207-7a88fb7ce338?w=400',
-                'image_count' => 5,
-            ],
-            [
-                'ref_id' => 'P-2026-000030',
-                'product_code' => 'GLD-BRC-001',
-                'title' => 'กำไลทองคำแท้ 96.5% ลายโซ่',
-                'brand' => 'Thai Gold',
-                'category' => 'bracelet',
-                'description' => 'กำไลทองคำแท้ 96.5% น้ำหนัก 2 บาท ลายโซ่คลาสสิก',
-                'price' => 68000,
-                'currency' => 'THB',
-                'availability' => 'in_stock',
-                'thumbnail_url' => 'https://images.unsplash.com/photo-1611591437281-460bfbe1220a?w=400',
-                'image_count' => 4,
-            ],
-            [
-                'ref_id' => 'P-2026-000100',
-                'product_code' => 'GUC-MAR-001',
-                'title' => 'GUCCI Marmont Mini Bag Black',
-                'brand' => 'GUCCI',
-                'category' => 'bag',
-                'description' => 'กระเป๋า GUCCI Marmont Mini หนังแท้สีดำ สภาพสวย 90%',
-                'price' => 45900,
-                'currency' => 'THB',
-                'availability' => 'in_stock',
-                'thumbnail_url' => 'https://images.unsplash.com/photo-1584917865442-de89df76afd3?w=400',
-                'image_count' => 5,
-            ],
+            // Watches
+            ['ref_id' => 'P-2026-000001', 'product_code' => 'ROL-DAY-001', 'title' => 'Rolex Day-Date 36mm Yellow Gold', 'brand' => 'Rolex', 'category' => 'watch', 'price' => 850000, 'availability' => 'in_stock', 'thumbnail_url' => 'https://images.unsplash.com/photo-1547996160-81dfa63595aa?w=400'],
+            ['ref_id' => 'P-2026-000002', 'product_code' => 'ROL-SUB-002', 'title' => 'Rolex Submariner Date Black Dial', 'brand' => 'Rolex', 'category' => 'watch', 'price' => 420000, 'availability' => 'in_stock', 'thumbnail_url' => 'https://images.unsplash.com/photo-1523170335258-f5ed11844a49?w=400'],
+            ['ref_id' => 'P-2026-000003', 'product_code' => 'TAG-CAR-001', 'title' => 'Tag Heuer Carrera Chronograph', 'brand' => 'Tag Heuer', 'category' => 'watch', 'price' => 89000, 'availability' => 'in_stock', 'thumbnail_url' => 'https://images.unsplash.com/photo-1524592094714-0f0654e20314?w=400'],
+            ['ref_id' => 'P-2026-000004', 'product_code' => 'OMG-SEA-001', 'title' => 'Omega Seamaster Planet Ocean 600M', 'brand' => 'Omega', 'category' => 'watch', 'price' => 195000, 'availability' => 'in_stock', 'thumbnail_url' => 'https://images.unsplash.com/photo-1548171915-e79a380a2a4b?w=400'],
+            // Rings
+            ['ref_id' => 'P-2026-000010', 'product_code' => 'DIA-RNG-001', 'title' => 'แหวนเพชรแท้ 1 กะรัต ทองขาว', 'brand' => 'เพชรวิบวับ', 'category' => 'ring', 'price' => 289000, 'availability' => 'in_stock', 'thumbnail_url' => 'https://images.unsplash.com/photo-1605100804763-247f67b3557e?w=400'],
+            ['ref_id' => 'P-2026-000012', 'product_code' => 'GLD-RNG-001', 'title' => 'แหวนทองคำ 96.5% ลายดอกไม้', 'brand' => 'Thai Gold', 'category' => 'ring', 'price' => 9500, 'availability' => 'in_stock', 'thumbnail_url' => 'https://images.unsplash.com/photo-1515377905703-c4788e51af15?w=400'],
+            // Necklaces
+            ['ref_id' => 'P-2026-000021', 'product_code' => 'GLD-NCK-001', 'title' => 'สร้อยคอทองคำ 96.5% ลายสี่เสา', 'brand' => 'Thai Gold', 'category' => 'necklace', 'price' => 68000, 'availability' => 'in_stock', 'thumbnail_url' => 'https://images.unsplash.com/photo-1599643478518-a784e5dc4c8f?w=400'],
+            ['ref_id' => 'P-2026-000022', 'product_code' => 'GLD-NCK-002', 'title' => 'สร้อยคอทองคำ ลายโซ่ 1 บาท', 'brand' => 'Thai Gold', 'category' => 'necklace', 'price' => 34000, 'availability' => 'in_stock', 'thumbnail_url' => 'https://images.unsplash.com/photo-1611085583191-a3b181a88401?w=400'],
+            // Bracelets
+            ['ref_id' => 'P-2026-000030', 'product_code' => 'GLD-BRC-001', 'title' => 'กำไลทองคำแท้ 96.5% ลายโซ่', 'brand' => 'Thai Gold', 'category' => 'bracelet', 'price' => 68000, 'availability' => 'in_stock', 'thumbnail_url' => 'https://images.unsplash.com/photo-1611591437281-460bfbe1220a?w=400'],
+            // Bags
+            ['ref_id' => 'P-2026-000100', 'product_code' => 'GUC-MAR-001', 'title' => 'GUCCI Marmont Mini Bag Black', 'brand' => 'GUCCI', 'category' => 'bag', 'price' => 45900, 'availability' => 'in_stock', 'thumbnail_url' => 'https://images.unsplash.com/photo-1584917865442-de89df76afd3?w=400'],
+            // Amulets (พระเลี่ยมทอง)
+            ['ref_id' => 'P-2026-000200', 'product_code' => 'AMU-LP-001', 'title' => 'พระหลวงปู่ทวด เลี่ยมทองคำแท้', 'brand' => 'วัดช้างให้', 'category' => 'amulet', 'price' => 35000, 'availability' => 'in_stock', 'thumbnail_url' => 'https://images.unsplash.com/photo-1617791160505-6f00504e3519?w=400'],
+            ['ref_id' => 'P-2026-000201', 'product_code' => 'AMU-SG-001', 'title' => 'พระสมเด็จ วัดระฆัง เลี่ยมทอง', 'brand' => 'วัดระฆัง', 'category' => 'amulet', 'price' => 89000, 'availability' => 'in_stock', 'thumbnail_url' => 'https://images.unsplash.com/photo-1617791160505-6f00504e3519?w=400'],
+            ['ref_id' => 'P-2026-000202', 'product_code' => 'AMU-NK-001', 'title' => 'พระนางกวัก เนื้อทองคำ เลี่ยมทอง', 'brand' => 'วัดหนองแขม', 'category' => 'amulet', 'price' => 125000, 'availability' => 'in_stock', 'thumbnail_url' => 'https://images.unsplash.com/photo-1617791160505-6f00504e3519?w=400'],
+            ['ref_id' => 'P-2026-000203', 'product_code' => 'AMU-JT-001', 'title' => 'พระจตุคามรามเทพ เลี่ยมทองกรอบเพชร', 'brand' => 'วัดพระมหาธาตุ', 'category' => 'amulet', 'price' => 250000, 'availability' => 'in_stock', 'thumbnail_url' => 'https://images.unsplash.com/photo-1617791160505-6f00504e3519?w=400'],
         ];
     }
 
@@ -222,21 +286,44 @@ class ProductSearchService
                 }
             }
 
-            // Match by keyword
+            // Match by keyword - using scoring (more words matched = higher score)
             if (!empty($params['keyword'])) {
                 $searchText = strtolower(
-                    $product['title'] . ' ' .
-                    $product['brand'] . ' ' .
-                    $product['description'] . ' ' .
-                    $product['product_code']
+                    ($product['title'] ?? '') . ' ' .
+                    ($product['brand'] ?? '') . ' ' .
+                    ($product['description'] ?? '') . ' ' .
+                    ($product['product_code'] ?? '')
                 );
                 $keywordLower = strtolower($params['keyword']);
 
-                $words = explode(' ', $keywordLower);
-                foreach ($words as $word) {
-                    if (strlen($word) >= 2 && strpos($searchText, $word) !== false) {
+                // Filter out common short words (stopwords)
+                $stopwords = ['the', 'a', 'an', 'and', 'or', 'in', 'on', 'at', 'to', 'for', 'of', 'with'];
+                $words = array_filter(explode(' ', $keywordLower), function($word) use ($stopwords) {
+                    return strlen($word) >= 2 && !in_array($word, $stopwords);
+                });
+                
+                if (!empty($words)) {
+                    $matchedWords = 0;
+                    $totalWords = count($words);
+                    
+                    foreach ($words as $word) {
+                        if (strpos($searchText, $word) !== false) {
+                            $matchedWords++;
+                        }
+                    }
+                    
+                    // Calculate match ratio
+                    $matchRatio = $matchedWords / $totalWords;
+                    
+                    // Require at least 50% of words to match, OR all words if <= 2 words
+                    // This prevents "black" alone matching everything with "black"
+                    $minMatchRatio = ($totalWords <= 2) ? 1.0 : 0.5;
+                    
+                    if ($matchRatio >= $minMatchRatio) {
                         $match = true;
-                        break;
+                        // Store score for sorting later
+                        $product['_match_score'] = $matchRatio;
+                        $product['_matched_words'] = $matchedWords;
                     }
                 }
             }
@@ -245,6 +332,13 @@ class ProductSearchService
                 $results[] = $product;
             }
         }
+
+        // Sort by match score (highest first)
+        usort($results, function($a, $b) {
+            $scoreA = $a['_match_score'] ?? 0;
+            $scoreB = $b['_match_score'] ?? 0;
+            return $scoreB <=> $scoreA;
+        });
 
         return $results;
     }
@@ -274,7 +368,8 @@ class ProductSearchService
             "🏷️ รหัส: {$code}\n" .
             ($brand ? "🏢 แบรนด์: {$brand}\n" : "") .
             "💰 ราคา: ฿{$price}\n" .
-            "{$statusEmoji}";
+            "{$statusEmoji}\n\n" .
+            "💡 พิมพ์ 'สนใจ' หรือ 'จอง' เพื่อทำรายการได้เลยค่ะ 😊";
     }
 
     /**
@@ -291,20 +386,36 @@ class ProductSearchService
         }
 
         $count = count($products);
+
+        // ✅ ถ้าเจอแค่ 1 รายการ → ใช้ format เดี่ยว
+        if ($count === 1) {
+            return self::formatForChat($products[0]);
+        }
+
         $showing = min($count, $max);
 
         $lines = ["🔍 พบสินค้า {$count} รายการค่ะ\n"];
 
         for ($i = 0; $i < $showing; $i++) {
-            $lines[] = self::formatForChat($products[$i]);
+            $num = $i + 1;
+            $product = $products[$i];
+            $name = $product['title'] ?? $product['name'] ?? 'สินค้า';
+            $code = $product['product_code'] ?? $product['sku'] ?? '-';
+            $price = number_format($product['price'] ?? 0);
+
+            $lines[] = "{$num}️⃣ {$name}";
+            $lines[] = "   🏷️ {$code} | 💰 ฿{$price}";
             if ($i < $showing - 1) {
-                $lines[] = "---";
+                $lines[] = "";
             }
         }
 
         if ($count > $max) {
             $lines[] = "\n📝 และอีก " . ($count - $max) . " รายการ";
         }
+
+        // Add checkout prompt - ถ้ามีหลายรายการให้เลือก
+        $lines[] = "\n💡 สนใจตัวไหน พิมพ์เลข (1/2/3) หรือรหัสสินค้าได้เลยค่ะ 😊";
 
         return implode("\n", $lines);
     }

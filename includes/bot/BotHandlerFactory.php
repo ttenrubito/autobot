@@ -5,6 +5,8 @@ require_once __DIR__ . '/BotHandlerInterface.php';
 require_once __DIR__ . '/RouterV1Handler.php';
 require_once __DIR__ . '/RouterV2BoxDesignHandler.php';
 require_once __DIR__ . '/RouterV3LineAppHandler.php';
+require_once __DIR__ . '/RouterV4Handler.php';
+require_once __DIR__ . '/RouterV5Handler.php';
 require_once __DIR__ . '/../Logger.php';
 
 class BotHandlerFactory
@@ -21,6 +23,20 @@ class BotHandlerFactory
         ]);
 
         switch ($key) {
+            case 'router_v5':
+            case 'v5':
+                Logger::info('[FACTORY] ✅ Instantiating RouterV5Handler', [
+                    'handler_class' => 'RouterV5Handler',
+                ]);
+                return new RouterV5Handler();
+
+            case 'router_v4':
+            case 'v4':
+                Logger::info('[FACTORY] ✅ Instantiating RouterV4Handler', [
+                    'handler_class' => 'RouterV4Handler',
+                ]);
+                return new RouterV4Handler();
+
             case 'router_v2_boxdesign':
             case 'boxdesign_v2':
                 Logger::info('[FACTORY] ✅ Instantiating RouterV2BoxDesignHandler', [

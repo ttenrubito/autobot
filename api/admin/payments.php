@@ -7,20 +7,47 @@
  * PUT /api/admin/payments/{id}/reject - Reject payment
  * POST /api/admin/payments/{id}/verify - Verify payment with push notification
  * POST /api/admin/payments/manual - Add manual payment entry
+ * 
+ * NOTE: This API accepts both admin_token and auth_token (customer token)
+ * to allow shop owners/staff to manage payments from customer portal
  */
 
 header('Content-Type: application/json');
 require_once __DIR__ . '/../../config.php';
 require_once __DIR__ . '/../../includes/AdminAuth.php';
+require_once __DIR__ . '/../../includes/JWT.php';
 require_once __DIR__ . '/../../includes/Database.php';
 require_once __DIR__ . '/../../includes/Logger.php';
 require_once __DIR__ . '/../../includes/services/PushNotificationService.php';
 
-// Verify admin authentication
+// Try admin auth first, then customer auth
 $adminData = AdminAuth::verify();
+$userId = null;
+
+if (!$adminData) {
+    // Try customer token (auth_token)
+    $headers = getallheaders();
+    $authHeader = $headers['Authorization'] ?? $headers['authorization'] ?? '';
+    
+    if (preg_match('/Bearer\s+(.*)$/i', $authHeader, $matches)) {
+        $token = $matches[1];
+        $decoded = JWT::verify($token);
+        
+        if ($decoded && isset($decoded['user_id'])) {
+            // Valid customer token - allow access
+            $userId = $decoded['user_id'];
+            $adminData = [
+                'id' => $userId,
+                'type' => 'user',
+                'email' => $decoded['email'] ?? null
+            ];
+        }
+    }
+}
+
 if (!$adminData) {
     http_response_code(401);
-    echo json_encode(['success' => false, 'message' => 'Unauthorized']);
+    echo json_encode(['success' => false, 'message' => 'Unauthorized - กรุณา Login ใหม่']);
     exit;
 }
 
@@ -154,8 +181,18 @@ try {
                     p.slip_image,
                     p.payment_details,
                     p.created_at,
-                    o.order_no,
-                    o.product_name,
+                    o.order_number as order_no,
+                    o.total_amount as order_total_amount,
+                    o.paid_amount as order_paid_amount,
+                    (SELECT oi.product_name FROM order_items oi WHERE oi.order_id = o.id LIMIT 1) as product_name,
+                    (SELECT oi.product_code FROM order_items oi WHERE oi.order_id = o.id LIMIT 1) as product_code,
+                    (SELECT oi.quantity FROM order_items oi WHERE oi.order_id = o.id LIMIT 1) as order_quantity,
+                    (SELECT COALESCE(
+                        JSON_UNQUOTE(JSON_EXTRACT(oi.product_metadata, '$.image_url')),
+                        pr.image_url
+                    ) FROM order_items oi 
+                     LEFT JOIN products pr ON pr.product_code = oi.product_code
+                     WHERE oi.order_id = o.id LIMIT 1) as product_image_url,
                     COALESCE(cp.display_name, cp.full_name) as customer_name,
                     cp.email as customer_email,
                     COALESCE(cp.avatar_url, cp.profile_pic_url) as customer_avatar,
@@ -292,30 +329,31 @@ function verifyPayment($db, $pdo, int $paymentId, $adminId)
     $installmentData = null;
 
     if ($payment['payment_type'] === 'installment' && $payment['order_id']) {
-        // Try to get installment info from installments table
+        // Try new table first (installment_contracts)
+        // Note: installment_payments uses 'paid' status, not 'verified'
         $installmentData = $db->queryOne("
-            SELECT i.*, 
-                   (SELECT COUNT(*) FROM installment_payments ip WHERE ip.installment_id = i.id AND ip.status = 'paid') as paid_count
-            FROM installments i 
-            WHERE i.order_id = ?
+            SELECT c.*, 
+                   (SELECT COUNT(*) FROM installment_payments ip WHERE ip.contract_id = c.id AND ip.status = 'paid') as paid_count
+            FROM installment_contracts c 
+            WHERE c.order_id = ?
         ", [$payment['order_id']]);
 
         if ($installmentData) {
-            $totalPeriods = (int) ($installmentData['total_terms'] ?? 3);
+            $totalPeriods = (int) ($installmentData['total_periods'] ?? 3);
             $paidPeriods = (int) ($installmentData['paid_count'] ?? 0);
 
             // Auto-detect current period from installment_payments
             if (!$currentPeriod) {
                 $unpaidPeriod = $db->queryOne("
-                    SELECT term_number, amount 
+                    SELECT period_number, amount 
                     FROM installment_payments 
-                    WHERE installment_id = ? AND status = 'pending'
-                    ORDER BY term_number ASC 
+                    WHERE contract_id = ? AND status = 'pending'
+                    ORDER BY period_number ASC 
                     LIMIT 1
                 ", [$installmentData['id']]);
 
                 if ($unpaidPeriod) {
-                    $currentPeriod = (int) $unpaidPeriod['term_number'];
+                    $currentPeriod = (int) $unpaidPeriod['period_number'];
                 }
             }
 
@@ -327,10 +365,10 @@ function verifyPayment($db, $pdo, int $paymentId, $adminId)
 
             // Get next period info
             $nextPeriod = $db->queryOne("
-                SELECT term_number, amount, due_date 
+                SELECT period_number, amount, due_date 
                 FROM installment_payments 
-                WHERE installment_id = ? AND term_number > ? AND status = 'pending'
-                ORDER BY term_number ASC 
+                WHERE contract_id = ? AND period_number > ? AND status = 'pending'
+                ORDER BY period_number ASC 
                 LIMIT 1
             ", [$installmentData['id'], $currentPeriod ?? 0]);
 
@@ -394,29 +432,152 @@ function verifyPayment($db, $pdo, int $paymentId, $adminId)
         }
     }
 
-    // If installment payment, update schedule
-    if ($payment['payment_type'] === 'installment' && $currentPeriod && $installmentData) {
-        // Update installment_payments
+    // If installment payment, update contract paid_amount and auto-close period if amount sufficient
+    if ($payment['payment_type'] === 'installment' && $installmentData) {
+        $contractId = $installmentData['id'];
+        
+        // Update installment_contracts.paid_amount (accumulate)
         $stmt = $pdo->prepare("
-            UPDATE installment_payments
-            SET status = 'paid',
-                paid_at = NOW(),
-                payment_id = ?
-            WHERE installment_id = ? AND term_number = ?
-        ");
-        $stmt->execute([$paymentId, $installmentData['id'], $currentPeriod]);
-
-        // Also update installments.paid_terms
-        $stmt = $pdo->prepare("
-            UPDATE installments
-            SET paid_terms = paid_terms + 1,
-                status = CASE WHEN paid_terms + 1 >= total_terms THEN 'completed' ELSE status END,
+            UPDATE installment_contracts
+            SET paid_amount = paid_amount + ?,
+                last_payment_date = CURDATE(),
                 updated_at = NOW()
             WHERE id = ?
         ");
-        $stmt->execute([$installmentData['id']]);
+        $stmt->execute([$payment['amount'], $contractId]);
 
-        $paidPeriods++;
+        // ✅ FIX: Get the NEW paid_amount AFTER update (not before!)
+        $updatedContract = $db->queryOne("
+            SELECT paid_amount FROM installment_contracts WHERE id = ?
+        ", [$contractId]);
+        $newPaidAmount = floatval($updatedContract['paid_amount'] ?? 0);
+
+        // Link this payment to the contract
+        $stmt = $pdo->prepare("
+            UPDATE payments 
+            SET installment_contract_id = ?,
+                admin_notes = CONCAT(COALESCE(admin_notes, ''), '\n[AUTO] Linked to contract #', ?)
+            WHERE id = ?
+        ");
+        $stmt->execute([$contractId, $contractId, $paymentId]);
+
+        Logger::info('Payment accumulated to installment contract', [
+            'payment_id' => $paymentId,
+            'contract_id' => $contractId,
+            'amount' => $payment['amount'],
+            'new_paid_amount' => $newPaidAmount
+        ]);
+
+        // =========================================================================
+        // ✅ AUTO-CLOSE: Check if accumulated amount is sufficient for current period
+        // =========================================================================
+        $periodsClosed = 0;
+        $remainingAmount = $newPaidAmount;
+        
+        // Get all pending periods ordered by period_number
+        $pendingPeriods = $db->query("
+            SELECT id, period_number, amount, status 
+            FROM installment_payments 
+            WHERE contract_id = ? AND status = 'pending'
+            ORDER BY period_number ASC
+        ", [$contractId]);
+        
+        foreach ($pendingPeriods as $period) {
+            $periodAmount = floatval($period['amount']);
+            
+            // Check if we have enough accumulated amount for this period
+            if ($remainingAmount >= $periodAmount) {
+                // Close this period
+                // ✅ FIX: Use correct column names from schema: paid_date (not paid_at), no paid_amount column
+                $stmt = $pdo->prepare("
+                    UPDATE installment_payments 
+                    SET status = 'paid', 
+                        paid_date = CURDATE(),
+                        updated_at = NOW()
+                    WHERE id = ?
+                ");
+                $stmt->execute([$period['id']]);
+                
+                $remainingAmount -= $periodAmount;
+                $periodsClosed++;
+                
+                Logger::info('Auto-closed installment period', [
+                    'contract_id' => $contractId,
+                    'period_number' => $period['period_number'],
+                    'period_amount' => $periodAmount,
+                    'remaining_balance' => $remainingAmount
+                ]);
+            } else {
+                // Not enough for this period, stop
+                break;
+            }
+        }
+        
+        // Update contract if any periods were closed
+        if ($periodsClosed > 0) {
+            // Get new paid_periods count
+            $newPaidCount = $db->queryOne("
+                SELECT COUNT(*) as cnt FROM installment_payments 
+                WHERE contract_id = ? AND status = 'paid'
+            ", [$contractId])['cnt'];
+            
+            // Get next pending period for next_due_date
+            $nextPending = $db->queryOne("
+                SELECT due_date FROM installment_payments 
+                WHERE contract_id = ? AND status = 'pending'
+                ORDER BY period_number ASC LIMIT 1
+            ", [$contractId]);
+            
+            $totalPeriods = $installmentData['total_periods'] ?? 3;
+            
+            if ($newPaidCount >= $totalPeriods) {
+                // All periods complete!
+                $stmt = $pdo->prepare("
+                    UPDATE installment_contracts 
+                    SET paid_periods = ?,
+                        status = 'completed',
+                        next_due_date = NULL,
+                        completed_at = NOW(),
+                        updated_at = NOW()
+                    WHERE id = ?
+                ");
+                $stmt->execute([$newPaidCount, $contractId]);
+                
+                // Also update order status
+                $stmt = $pdo->prepare("
+                    UPDATE orders 
+                    SET payment_status = 'paid',
+                        status = 'processing',
+                        updated_at = NOW()
+                    WHERE id = ?
+                ");
+                $stmt->execute([$payment['order_id']]);
+                
+                $isInstallmentComplete = true;
+                
+                Logger::info('Installment contract completed!', [
+                    'contract_id' => $contractId,
+                    'total_paid' => $newPaidAmount
+                ]);
+            } else {
+                // Update paid_periods and next_due_date
+                $stmt = $pdo->prepare("
+                    UPDATE installment_contracts 
+                    SET paid_periods = ?,
+                        next_due_date = ?,
+                        updated_at = NOW()
+                    WHERE id = ?
+                ");
+                $stmt->execute([
+                    $newPaidCount, 
+                    $nextPending ? $nextPending['due_date'] : null, 
+                    $contractId
+                ]);
+            }
+            
+            // Update paidPeriods for notification
+            $paidPeriods = $newPaidCount;
+        }
     }
 
     Logger::info('Payment verified', [
@@ -695,16 +856,25 @@ function verifyPaymentLegacy($pdo, int $paymentId)
     ");
     $stmt->execute([$paymentId]);
 
-    if ($payment['payment_type'] === 'installment' && $payment['current_period']) {
-        $stmt = $pdo->prepare("
-            UPDATE installment_schedules
-            SET status = 'paid',
-                paid_amount = amount,
-                paid_at = NOW(),
-                payment_id = ?
-            WHERE order_id = ? AND period_number = ?
-        ");
-        $stmt->execute([$paymentId, $payment['order_id'], $payment['current_period']]);
+    // Update installment_payments if this is an installment payment
+    if ($payment['payment_type'] === 'installment' && $payment['current_period'] && $payment['order_id']) {
+        // Find contract for this order
+        $stmtContract = $pdo->prepare("SELECT id FROM installment_contracts WHERE order_id = ?");
+        $stmtContract->execute([$payment['order_id']]);
+        $contract = $stmtContract->fetch(PDO::FETCH_ASSOC);
+        
+        if ($contract) {
+            $stmt = $pdo->prepare("
+                UPDATE installment_payments
+                SET status = 'paid',
+                    paid_amount = amount,
+                    paid_date = CURDATE(),
+                    payment_id = ?,
+                    updated_at = NOW()
+                WHERE contract_id = ? AND period_number = ?
+            ");
+            $stmt->execute([$paymentId, $contract['id'], $payment['current_period']]);
+        }
     }
 
     echo json_encode(['success' => true, 'message' => 'Payment approved']);

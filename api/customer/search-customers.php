@@ -38,63 +38,51 @@ try {
     // Search customer profiles
     $searchTerm = '%' . $query . '%';
     
-    // Check if customer_profiles has channel_id or user_id to filter by tenant
-    $colCheck = $pdo->query("SHOW COLUMNS FROM customer_profiles LIKE 'channel_id'");
-    $hasChannelId = $colCheck->rowCount() > 0;
+    // ✅ Filter by user's channels (customer_channels table)
+    // Get user's channel IDs first
+    $channelStmt = $pdo->prepare("SELECT id FROM customer_channels WHERE user_id = ? AND status = 'active'");
+    $channelStmt->execute([$user_id]);
+    $userChannels = $channelStmt->fetchAll(PDO::FETCH_COLUMN);
     
-    if ($hasChannelId) {
-        // Filter by channel's owner (same tenant)
-        $stmt = $pdo->prepare("
-            SELECT 
-                cp.id,
-                cp.platform,
-                cp.platform_user_id,
-                cp.display_name,
-                cp.full_name,
-                COALESCE(cp.avatar_url, cp.profile_pic_url) as avatar_url,
-                cp.phone,
-                cp.email,
-                cp.last_active_at
-            FROM customer_profiles cp
-            INNER JOIN channels ch ON cp.channel_id = ch.id
-            WHERE ch.user_id = ?
-            AND (
-                cp.display_name LIKE ? 
-                OR cp.full_name LIKE ?
-                OR cp.phone LIKE ?
-                OR cp.platform_user_id LIKE ?
-                OR cp.email LIKE ?
-            )
-            ORDER BY cp.last_active_at DESC
-            LIMIT 10
-        ");
-        $stmt->execute([$user_id, $searchTerm, $searchTerm, $searchTerm, $searchTerm, $searchTerm]);
-    } else {
-        // Fallback: search all (no tenant filter - for backward compatibility)
-        $stmt = $pdo->prepare("
-            SELECT 
-                cp.id,
-                cp.platform,
-                cp.platform_user_id,
-                cp.display_name,
-                cp.full_name,
-                COALESCE(cp.avatar_url, cp.profile_pic_url) as avatar_url,
-                cp.phone,
-                cp.email,
-                cp.last_active_at
-            FROM customer_profiles cp
-            WHERE (
-                cp.display_name LIKE ? 
-                OR cp.full_name LIKE ?
-                OR cp.phone LIKE ?
-                OR cp.platform_user_id LIKE ?
-                OR cp.email LIKE ?
-            )
-            ORDER BY cp.last_active_at DESC
-            LIMIT 10
-        ");
-        $stmt->execute([$searchTerm, $searchTerm, $searchTerm, $searchTerm, $searchTerm]);
+    if (empty($userChannels)) {
+        // User has no channels - return empty
+        echo json_encode(['success' => true, 'data' => [], 'message' => 'No channels configured']);
+        exit;
     }
+    
+    // Build placeholders for IN clause
+    $placeholders = implode(',', array_fill(0, count($userChannels), '?'));
+    
+    // Filter customer_profiles by user's channel_ids
+    $sql = "
+        SELECT 
+            cp.id,
+            cp.platform,
+            cp.platform_user_id,
+            cp.display_name,
+            cp.full_name,
+            COALESCE(cp.avatar_url, cp.profile_pic_url) as avatar_url,
+            cp.phone,
+            cp.email,
+            cp.last_active_at,
+            cp.channel_id
+        FROM customer_profiles cp
+        WHERE cp.channel_id IN ($placeholders)
+        AND (
+            cp.display_name LIKE ? 
+            OR cp.full_name LIKE ?
+            OR cp.phone LIKE ?
+            OR cp.platform_user_id LIKE ?
+            OR cp.email LIKE ?
+        )
+        ORDER BY cp.last_active_at DESC
+        LIMIT 10
+    ";
+    
+    // Combine params: channel_ids + search terms
+    $params = array_merge($userChannels, [$searchTerm, $searchTerm, $searchTerm, $searchTerm, $searchTerm]);
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
     
     $customers = $stmt->fetchAll(PDO::FETCH_ASSOC);
     

@@ -1,4 +1,8 @@
 <?php
+// Suppress display errors to prevent HTML in JSON response
+ini_set('display_errors', '0');
+error_reporting(E_ALL);
+
 require_once __DIR__ . '/../../includes/Database.php';
 require_once __DIR__ . '/../../includes/Response.php';
 require_once __DIR__ . '/../../includes/Auth.php';
@@ -17,6 +21,23 @@ try {
         if (!$user) {
             Response::error('User not found', 404);
         }
+        
+        // Get active subscription - wrapped in try-catch to prevent errors
+        $subscription = null;
+        try {
+            $sql = "SELECT s.id, s.status, s.current_period_start, s.current_period_end, sp.name as plan_name
+                    FROM subscriptions s
+                    JOIN subscription_plans sp ON s.plan_id = sp.id
+                    WHERE s.user_id = ? AND s.status IN ('active', 'trial')
+                    ORDER BY s.current_period_end DESC
+                    LIMIT 1";
+            $subscription = $db->queryOne($sql, [$userId]);
+        } catch (Exception $e) {
+            error_log('Subscription query error: ' . $e->getMessage());
+            $subscription = null;
+        }
+        
+        $user['subscription'] = $subscription;
         
         Response::success(['user' => $user]);
         

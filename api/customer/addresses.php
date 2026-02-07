@@ -29,19 +29,32 @@ $uri = $_SERVER['REQUEST_URI'];
 $uri_parts = explode('/', trim(parse_url($uri, PHP_URL_PATH), '/'));
 // Expected: api/customer/addresses[/{id}[/set-default]]
 
+// ✅ FIX: Also check query string for id (for .php?id=X format)
+$address_id_from_query = isset($_GET['id']) && is_numeric($_GET['id']) ? (int)$_GET['id'] : null;
+
 try {
     $pdo = getDB();
+    
+    // Check if user wants to see all addresses (for admin/staff)
+    // In customer portal, show all addresses since it's for store management
+    $showAll = isset($_GET['all']) || true; // Default to show all for this portal
     
     if ($method === 'GET') {
         if (isset($uri_parts[3]) && is_numeric($uri_parts[3])) {
             // GET /api/customer/addresses/{id}
             $address_id = (int)$uri_parts[3];
             
+            // For single address, allow viewing any address (admin access)
             $stmt = $pdo->prepare("
-                SELECT * FROM customer_addresses
-                WHERE id = ? AND customer_id = ?
+                SELECT ca.*, 
+                       COALESCE(cp.display_name, cp.full_name) as customer_name,
+                       cp.profile_pic_url as customer_avatar
+                FROM customer_addresses ca
+                LEFT JOIN customer_profiles cp ON ca.platform_user_id = cp.platform_user_id 
+                    AND ca.platform = cp.platform
+                WHERE ca.id = ?
             ");
-            $stmt->execute([$address_id, $user_id]);
+            $stmt->execute([$address_id]);
             $address = $stmt->fetch(PDO::FETCH_ASSOC);
             
             if (!$address) {
@@ -61,23 +74,31 @@ try {
             $limit = isset($_GET['limit']) ? min(100, max(1, (int)$_GET['limit'])) : 20;
             $offset = ($page - 1) * $limit;
             
-            // Get total count
-            $countStmt = $pdo->prepare("SELECT COUNT(*) FROM customer_addresses WHERE customer_id = ?");
-            $countStmt->execute([$user_id]);
+            // Get total count - show all addresses for store management
+            $countStmt = $pdo->query("SELECT COUNT(*) FROM customer_addresses");
             $total = (int)$countStmt->fetchColumn();
             
+            // Get addresses with customer profile info
             $stmt = $pdo->prepare("
-                SELECT * FROM customer_addresses
-                WHERE customer_id = ?
-                ORDER BY is_default DESC, created_at DESC
+                SELECT ca.*, 
+                       COALESCE(cp.display_name, cp.full_name) as customer_name,
+                       cp.profile_pic_url as customer_avatar
+                FROM customer_addresses ca
+                LEFT JOIN customer_profiles cp ON ca.platform_user_id = cp.platform_user_id 
+                    AND ca.platform = cp.platform
+                ORDER BY ca.created_at DESC
                 LIMIT ? OFFSET ?
             ");
-            $stmt->execute([$user_id, $limit, $offset]);
+            $stmt->execute([$limit, $offset]);
             $addresses = $stmt->fetchAll(PDO::FETCH_ASSOC);
             
             foreach ($addresses as &$addr) {
                 $addr['additional_info'] = $addr['additional_info'] ? 
                     json_decode($addr['additional_info'], true) : null;
+                // Fallback to recipient_name if no customer profile
+                if (empty($addr['customer_name']) && !empty($addr['recipient_name'])) {
+                    $addr['customer_name'] = $addr['recipient_name'];
+                }
             }
             
             echo json_encode([
@@ -239,8 +260,15 @@ try {
         }
         
     } elseif ($method === 'DELETE') {
+        // ✅ FIX: Support both path-based and query string ID
+        $address_id = null;
         if (isset($uri_parts[3]) && is_numeric($uri_parts[3])) {
             $address_id = (int)$uri_parts[3];
+        } elseif ($address_id_from_query) {
+            $address_id = $address_id_from_query;
+        }
+        
+        if ($address_id) {
             
             // Verify address belongs to user
             $stmt = $pdo->prepare("SELECT is_default FROM customer_addresses WHERE id = ? AND customer_id = ?");
@@ -281,6 +309,9 @@ try {
             }
             
             echo json_encode(['success' => true, 'message' => 'Address deleted successfully']);
+        } else {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'Address ID required']);
         }
         
     } else {

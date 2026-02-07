@@ -150,6 +150,7 @@ gcloud run deploy ${SERVICE_NAME} \
   --port=8080 \
   --add-cloudsql-instances="${CLOUD_SQL_INSTANCE}" \
   --set-env-vars="APP_ENV=production,FACEBOOK_VERIFY_TOKEN=autobot_verify_2024,APP_URL=https://autobot.boxdesign.in.th" \
+  --update-secrets="FIREBASE_SERVICE_ACCOUNT=firebase-service-account:latest" \
   --project=${PROJECT_ID} || {
     echo -e "${RED}❌ Deployment failed!${NC}"
     exit 1

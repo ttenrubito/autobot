@@ -205,14 +205,24 @@ function submitPayment($db)
         $customerProfileId = $profile ? $profile['id'] : null;
     }
 
+    // ✅ Get shop_owner_id from channel_id for data isolation
+    $shopOwnerId = null;
+    if (!empty($input['channel_id'])) {
+        $channel = $db->queryOne(
+            "SELECT user_id FROM customer_channels WHERE id = ? LIMIT 1",
+            [(int) $input['channel_id']]
+        );
+        $shopOwnerId = $channel ? $channel['user_id'] : null;
+    }
+
     $sql = "INSERT INTO payments (
-        payment_no, order_id, customer_id, tenant_id,
+        payment_no, order_id, customer_id, tenant_id, shop_owner_id,
         platform_user_id, platform,
         amount, payment_type, payment_method,
         status, slip_image, payment_details,
         payment_date, source, created_at, updated_at
     ) VALUES (
-        ?, ?, ?, ?,
+        ?, ?, ?, ?, ?,
         ?, ?,
         ?, ?, ?,
         'pending', ?, ?,
@@ -224,6 +234,7 @@ function submitPayment($db)
         $orderIdForInsert,
         $customerProfileId,                   // customer_id (FK to customer_profiles)
         $input['tenant_id'] ?? 'default',
+        $shopOwnerId,                          // ✅ shop_owner_id for data isolation
         $input['external_user_id'] ?? null,   // platform_user_id
         $input['platform'] ?? null,           // platform
         $amount,
@@ -307,14 +318,24 @@ function createDraftOrderInternal($db, array $data): array
     $totalAmount = (float) ($data['total_amount'] ?? 0);
     $unitPrice = $totalAmount; // unit_price = total_amount for single item
 
+    // ✅ Get shop_owner_id from channel_id for data isolation
+    $shopOwnerId = null;
+    if (!empty($data['channel_id'])) {
+        $channel = $db->queryOne(
+            "SELECT user_id FROM customer_channels WHERE id = ? LIMIT 1",
+            [(int) $data['channel_id']]
+        );
+        $shopOwnerId = $channel ? $channel['user_id'] : null;
+    }
+
     $sql = "INSERT INTO orders (
-        order_no, user_id, platform_user_id, customer_id, tenant_id,
+        order_no, user_id, platform_user_id, customer_id, tenant_id, shop_owner_id,
         product_name, product_code, product_ref_id,
         quantity, unit_price, total_amount,
         payment_type, status, source, notes,
         created_at, updated_at
     ) VALUES (
-        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?,
         ?, ?, ?,
         1, ?, ?,
         ?, 'pending', ?, ?,
@@ -327,6 +348,7 @@ function createDraftOrderInternal($db, array $data): array
         $data['external_user_id'] ?? null, // platform_user_id for JOIN
         $customerId,
         $data['tenant_id'] ?? 'default',
+        $shopOwnerId,                       // ✅ shop_owner_id for data isolation
         $data['product_name'] ?? 'สินค้า (รอระบุ)',
         $data['product_code'] ?? null,
         $data['product_ref_id'] ?? null,

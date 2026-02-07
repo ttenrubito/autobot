@@ -154,6 +154,24 @@ class PaymentService
             $tenantId = $context['tenant_id'] ?? 'default';
             $channelId = $context['channel']['id'] ?? ($context['channel_id'] ?? null);
             
+            // ✅ FIX: Resolve user_id (shop owner) from channel
+            // Priority: context['user_id'] -> context['channel']['user_id'] -> lookup from channel_id
+            $userId = $context['user_id'] 
+                ?? ($context['channel']['user_id'] ?? null)
+                ?? ($context['bot_profile']['user_id'] ?? null)
+                ?? ($context['tenant_user_id'] ?? null);
+            
+            // If still null, try to get from channel_id
+            if (!$userId && $channelId) {
+                $userId = $this->getUserIdFromChannel((int) $channelId);
+            }
+            
+            $this->log('INFO', 'PaymentService - User ID resolution', [
+                'user_id' => $userId,
+                'channel_id' => $channelId,
+                'source' => $userId ? 'resolved' : 'null'
+            ]);
+            
             // Find or create customer_profile for this chatbot user
             $customer = $this->findOrCreateCustomerProfile($externalUserId, $platform, $tenantId, $senderName);
             // Now payments.customer_id -> customer_profiles.id (after schema migration)
@@ -212,16 +230,55 @@ class PaymentService
                 'original_image_url' => $imageUrl, // Keep original for reference
             ], JSON_UNESCAPED_UNICODE);
             
-            // 7. Determine order_id (NULL if no match)
+            // 7. Determine order_id and payment_type (NULL if no match)
             $orderId = $matchedOrder['id'] ?? null;
+            // ✅ FIX: Use payment_type from matched order (installment/full), default to 'full'
+            $paymentType = $matchedOrder['payment_type'] ?? 'full';
+            
+            // 7.5 Calculate installment_period and current_period for installment payments
+            $installmentPeriod = null;
+            $currentPeriod = null;
+            
+            if ($paymentType === 'installment' && $orderId) {
+                // Get installment_months from order
+                $installmentPeriod = (int)($matchedOrder['installment_months'] ?? 3);
+                
+                // Count verified payments for this order to determine current period
+                $countStmt = $this->pdo->prepare("
+                    SELECT COUNT(*) as paid_count 
+                    FROM payments 
+                    WHERE order_id = ? 
+                    AND status = 'verified' 
+                    AND payment_type = 'installment'
+                ");
+                $countStmt->execute([$orderId]);
+                $countResult = $countStmt->fetch(PDO::FETCH_ASSOC);
+                $paidCount = (int)($countResult['paid_count'] ?? 0);
+                
+                // Current period is paid_count + 1 (the next installment)
+                $currentPeriod = $paidCount + 1;
+                
+                // Cap at max installment_period
+                if ($currentPeriod > $installmentPeriod) {
+                    $currentPeriod = $installmentPeriod;
+                }
+                
+                $this->log('INFO', 'PaymentService - Calculated installment period', [
+                    'order_id' => $orderId,
+                    'installment_period' => $installmentPeriod,
+                    'paid_count' => $paidCount,
+                    'current_period' => $currentPeriod,
+                ]);
+            }
             
             // 8. INSERT using ACTUAL production schema
-            // Columns: user_id, platform_user_id, payment_no, order_id, customer_id, tenant_id, amount,
+            // Columns: user_id, shop_owner_id, platform_user_id, payment_no, order_id, customer_id, tenant_id, amount,
             //          payment_type, payment_method, status, slip_image,
             //          payment_details, payment_date, source, created_at, updated_at
             $sql = "
                 INSERT INTO payments (
                     user_id,
+                    shop_owner_id,
                     platform_user_id,
                     payment_no,
                     order_id,
@@ -229,6 +286,8 @@ class PaymentService
                     tenant_id,
                     amount,
                     payment_type,
+                    installment_period,
+                    current_period,
                     payment_method,
                     status,
                     slip_image,
@@ -239,13 +298,16 @@ class PaymentService
                     updated_at
                 ) VALUES (
                     :user_id,
+                    :shop_owner_id,
                     :platform_user_id,
                     :payment_no,
                     :order_id,
                     :customer_id,
                     :tenant_id,
                     :amount,
-                    'full',
+                    :payment_type,
+                    :installment_period,
+                    :current_period,
                     'bank_transfer',
                     'pending',
                     :slip_image,
@@ -258,13 +320,17 @@ class PaymentService
             ";
             
             $params = [
-                ':user_id' => $context['user_id'] ?? null, // Shop owner's user_id
+                ':user_id' => $userId, // ✅ FIX: Shop owner's user_id (resolved above)
+                ':shop_owner_id' => $userId, // ✅ FIX: Also set shop_owner_id for API filtering
                 ':platform_user_id' => $externalUserId, // Customer's platform ID for JOIN
                 ':payment_no' => $paymentNo,
                 ':order_id' => $orderId,
                 ':customer_id' => $customerId, // Legacy FK to customer_profiles.id
                 ':tenant_id' => $tenantId,
                 ':amount' => $amount,
+                ':payment_type' => $paymentType, // ✅ FIX: installment or full from order
+                ':installment_period' => $installmentPeriod, // ✅ Total installments from order
+                ':current_period' => $currentPeriod, // ✅ Which installment this payment is for
                 ':slip_image' => $finalImageUrl, // Use GCS URL if upload succeeded, else original
                 ':payment_details' => $paymentDetails,
                 ':payment_date' => $transferTime ?: date('Y-m-d H:i:s'),
@@ -275,7 +341,7 @@ class PaymentService
                 'customer_id' => $customerId,
                 'order_id' => $orderId,
                 'amount' => $amount,
-                'sql_full' => $sql,
+                'payment_type' => $paymentType, // ✅ For debugging installment payments
                 'params_keys' => array_keys($params)
             ]);
             
@@ -288,6 +354,7 @@ class PaymentService
                 'payment_id' => $paymentId,
                 'payment_no' => $paymentNo,
                 'amount' => $amount,
+                'payment_type' => $paymentType, // ✅ For debugging installment payments
                 'matched_order_id' => $orderId
             ]);
             
@@ -435,48 +502,55 @@ class PaymentService
             return null;
         }
         
-        // Try to match by customer_id first (orders.customer_id = customer_profiles.id)
+        // Strategy 1: Exact amount match by customer_profile_id (via platform_user_id from customer_profiles)
+        // Note: orders table has platform_user_id, not customer_profile_id
         if ($customerId > 0) {
-            $sql = "
-                SELECT id, order_number, total_amount, status
-                FROM orders
-                WHERE customer_id = :customer_id
-                AND status IN ('pending_payment', 'awaiting_payment')
-                AND total_amount = :amount
-                AND created_at > DATE_SUB(NOW(), INTERVAL 7 DAY)
-                ORDER BY created_at DESC
-                LIMIT 1
-            ";
+            // First get platform_user_id from customer_profiles
+            $stmt = $this->pdo->prepare("SELECT platform_user_id FROM customer_profiles WHERE id = ?");
+            $stmt->execute([$customerId]);
+            $profile = $stmt->fetch(PDO::FETCH_ASSOC);
             
-            $stmt = $this->pdo->prepare($sql);
-            $stmt->execute([
-                ':customer_id' => $customerId,
-                ':amount' => $amount
-            ]);
-            $order = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-            if ($order) {
-                $this->log('INFO', 'PaymentService - Matched order by customer_id', [
-                    'customer_id' => $customerId,
-                    'order_id' => $order['id'],
-                    'order_number' => $order['order_number']
+            if ($profile && !empty($profile['platform_user_id'])) {
+                $sql = "
+                    SELECT id, order_number, total_amount, status, payment_type, installment_months
+                    FROM orders
+                    WHERE platform_user_id = :platform_user_id
+                    AND status IN ('pending_payment', 'awaiting_payment', 'pending', 'draft')
+                    AND total_amount = :amount
+                    AND created_at > DATE_SUB(NOW(), INTERVAL 7 DAY)
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                ";
+                
+                $stmt = $this->pdo->prepare($sql);
+                $stmt->execute([
+                    ':platform_user_id' => $profile['platform_user_id'],
+                    ':amount' => $amount
                 ]);
-                return $order;
+                $order = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                if ($order) {
+                    $this->log('INFO', 'PaymentService - Matched order by exact amount + customer_profile_id->platform_user_id', [
+                        'customer_profile_id' => $customerId,
+                        'platform_user_id' => $profile['platform_user_id'],
+                        'order_id' => $order['id'],
+                        'order_number' => $order['order_number']
+                    ]);
+                    return $order;
+                }
             }
         }
         
-        // Try to match by external_user_id via customer_profiles
+        // Strategy 2: Exact amount match by platform_user_id (direct column in orders)
         if ($externalUserId) {
-            // orders.customer_id links to customer_profiles.id (not user_id)
             $sql = "
-                SELECT o.id, o.order_number, o.total_amount, o.status
-                FROM orders o
-                JOIN customer_profiles cp ON o.customer_id = cp.id
-                WHERE cp.platform_user_id = :external_id
-                AND o.status IN ('pending_payment', 'awaiting_payment')
-                AND o.total_amount = :amount
-                AND o.created_at > DATE_SUB(NOW(), INTERVAL 7 DAY)
-                ORDER BY o.created_at DESC
+                SELECT id, order_number, total_amount, status, payment_type, installment_months
+                FROM orders
+                WHERE platform_user_id = :external_id
+                AND status IN ('pending_payment', 'awaiting_payment', 'pending', 'draft')
+                AND total_amount = :amount
+                AND created_at > DATE_SUB(NOW(), INTERVAL 7 DAY)
+                ORDER BY created_at DESC
                 LIMIT 1
             ";
             
@@ -488,12 +562,129 @@ class PaymentService
             $order = $stmt->fetch(PDO::FETCH_ASSOC);
             
             if ($order) {
-                $this->log('INFO', 'PaymentService - Matched order by external_user_id', [
-                    'external_user_id' => $externalUserId,
+                $this->log('INFO', 'PaymentService - Matched order by exact amount + platform_user_id', [
+                    'platform_user_id' => $externalUserId,
                     'order_id' => $order['id'],
                     'order_number' => $order['order_number']
                 ]);
                 return $order;
+            }
+        }
+        
+        // Strategy 3: If customer has exactly ONE pending order, auto-match regardless of amount
+        // This helps when customers pay slightly different amount (shipping, rounding, etc.)
+        if ($externalUserId) {
+            $sql = "
+                SELECT id, order_number, total_amount, status, payment_type, COUNT(*) OVER() as cnt
+                FROM orders
+                WHERE platform_user_id = :external_id
+                AND status IN ('pending_payment', 'awaiting_payment', 'pending', 'draft')
+                AND created_at > DATE_SUB(NOW(), INTERVAL 7 DAY)
+                ORDER BY created_at DESC
+                LIMIT 1
+            ";
+            
+            $stmt = $this->pdo->prepare($sql);
+            $stmt->execute([':external_id' => $externalUserId]);
+            $result = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            // Only auto-match if exactly 1 pending order exists
+            if ($result && (int)$result['cnt'] === 1 && $result['id']) {
+                $this->log('INFO', 'PaymentService - Matched ONLY pending order for customer (amount mismatch)', [
+                    'external_user_id' => $externalUserId,
+                    'order_id' => $result['id'],
+                    'order_number' => $result['order_number'],
+                    'order_amount' => $result['total_amount'],
+                    'payment_amount' => $amount,
+                    'amount_diff' => abs($result['total_amount'] - $amount)
+                ]);
+                return $result;
+            }
+            
+            // Strategy 3b: If customer has multiple pending orders, match the LATEST one
+            // This is the fallback when amount doesn't match any specific order
+            if ($result && (int)$result['cnt'] > 1 && $result['id']) {
+                $this->log('INFO', 'PaymentService - Matched LATEST pending order for customer (multiple orders exist)', [
+                    'external_user_id' => $externalUserId,
+                    'order_id' => $result['id'],
+                    'order_number' => $result['order_number'],
+                    'order_amount' => $result['total_amount'],
+                    'payment_amount' => $amount,
+                    'total_pending_orders' => $result['cnt']
+                ]);
+                return $result;
+            }
+        }
+        
+        // Strategy 4: Match deposit order by deposit_amount OR calculated 10% deposit
+        // For deposit orders, customer pays deposit_amount (not total_amount)
+        if ($externalUserId) {
+            $sql = "
+                SELECT id, order_number, total_amount, status, payment_type, deposit_amount, deposit_percent
+                FROM orders
+                WHERE platform_user_id = :external_id
+                AND payment_type = 'deposit'
+                AND status IN ('pending_payment', 'awaiting_payment', 'pending', 'draft')
+                AND created_at > DATE_SUB(NOW(), INTERVAL 7 DAY)
+                AND (
+                    -- Match by deposit_amount if set
+                    (deposit_amount > 0 AND deposit_amount = :amount)
+                    -- Or match by calculated deposit (default 10%)
+                    OR (deposit_amount = 0 AND ROUND(total_amount * COALESCE(deposit_percent, 10) / 100) = :amount2)
+                )
+                ORDER BY created_at DESC
+                LIMIT 1
+            ";
+            
+            $stmt = $this->pdo->prepare($sql);
+            $stmt->execute([
+                ':external_id' => $externalUserId,
+                ':amount' => $amount,
+                ':amount2' => $amount
+            ]);
+            $order = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($order) {
+                $this->log('INFO', 'PaymentService - Matched DEPOSIT order by deposit amount', [
+                    'external_user_id' => $externalUserId,
+                    'order_id' => $order['id'],
+                    'order_number' => $order['order_number'],
+                    'total_amount' => $order['total_amount'],
+                    'deposit_amount' => $order['deposit_amount'],
+                    'payment_amount' => $amount
+                ]);
+                return $order;
+            }
+        }
+        
+        // Strategy 5: If customer has active installment contract, match to that order
+        // This allows partial payments to accumulate for installment orders
+        if ($externalUserId) {
+            $sql = "
+                SELECT o.id, o.order_number, o.total_amount, o.status, o.payment_type,
+                       ic.id as installment_contract_id, ic.paid_amount, ic.status as contract_status
+                FROM orders o
+                JOIN installment_contracts ic ON ic.order_id = o.id
+                WHERE o.platform_user_id = :external_id
+                AND ic.status = 'active'
+                ORDER BY ic.created_at DESC
+                LIMIT 1
+            ";
+            
+            $stmt = $this->pdo->prepare($sql);
+            $stmt->execute([':external_id' => $externalUserId]);
+            $result = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($result && $result['id']) {
+                $this->log('INFO', 'PaymentService - Matched INSTALLMENT order for customer', [
+                    'external_user_id' => $externalUserId,
+                    'order_id' => $result['id'],
+                    'order_number' => $result['order_number'],
+                    'contract_id' => $result['installment_contract_id'],
+                    'payment_amount' => $amount,
+                    'current_paid' => $result['paid_amount']
+                ]);
+                return $result;
             }
         }
         
@@ -536,6 +727,40 @@ class PaymentService
         // Try Thai date format: "12 ม.ค. 69, 17:54"
         // This is complex, just return current time for now
         return date('Y-m-d H:i:s');
+    }
+    
+    /**
+     * Get user_id (shop owner) from channel_id
+     * 
+     * @param int $channelId The customer_channels.id
+     * @return int|null The user_id (shop owner) or null
+     */
+    private function getUserIdFromChannel(int $channelId): ?int
+    {
+        try {
+            $stmt = $this->pdo->prepare('SELECT user_id FROM customer_channels WHERE id = ? LIMIT 1');
+            $stmt->execute([$channelId]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($row && !empty($row['user_id'])) {
+                $this->log('INFO', 'PaymentService - Found user_id from channel', [
+                    'channel_id' => $channelId,
+                    'user_id' => $row['user_id']
+                ]);
+                return (int) $row['user_id'];
+            }
+            
+            $this->log('WARNING', 'PaymentService - No user_id found for channel', [
+                'channel_id' => $channelId
+            ]);
+            return null;
+        } catch (Exception $e) {
+            $this->log('ERROR', 'PaymentService - Error getting user_id from channel', [
+                'channel_id' => $channelId,
+                'error' => $e->getMessage()
+            ]);
+            return null;
+        }
     }
     
     /**

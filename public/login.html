@@ -6,6 +6,70 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>เข้าสู่ระบบ - AI Automation</title>
 
+    <!-- Critical inline CSS to prevent FOUC (Flash of Unstyled Content) -->
+    <style id="criticalCSS">
+        /* Hide body initially until CSS loads */
+        body {
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.3s ease, visibility 0.3s ease;
+        }
+
+        body.css-ready {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        /* Loading overlay */
+        .page-loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            transition: opacity 0.4s ease, visibility 0.4s ease;
+        }
+
+        .page-loading-overlay.hidden {
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+        }
+
+        .loading-spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-top-color: #fff;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        /* Critical layout styles (minimal for login page) */
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            min-height: 100vh;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+    </style>
+
     <!-- Load path-config in a way that works in BOTH localhost (/autobot) and production (root) -->
     <script>
         (function () {
@@ -16,11 +80,39 @@
             // Keep as single source of truth for path-config
             window.BASE_PATH_OVERRIDE = base;
 
+            // Track CSS loading
+            var cssLoaded = 0;
+            var totalCSS = 2;
+
+            function onCSSReady() {
+                cssLoaded++;
+                if (cssLoaded >= totalCSS) {
+                    // All CSS loaded - show body
+                    document.body.classList.add('css-ready');
+
+                    // Hide loading overlay
+                    var overlay = document.getElementById('pageLoadingOverlay');
+                    if (overlay) {
+                        overlay.classList.add('hidden');
+                        // Remove from DOM after animation
+                        setTimeout(function () {
+                            if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+                        }, 500);
+                    }
+                    console.log('✅ [LOGIN] CSS loaded, page ready!');
+                }
+            }
+
             function loadScript(src, onload) {
                 var s = document.createElement('script');
                 s.src = src;
                 s.onload = onload;
-                s.onerror = function () { console.error('[login] Failed to load script:', src); };
+                s.onerror = function () {
+                    console.error('[login] Failed to load script:', src);
+                    // Still show page on error
+                    onCSSReady();
+                    onCSSReady();
+                };
                 document.head.appendChild(s);
             }
 
@@ -29,9 +121,28 @@
                 // Apply CSS after PATH is ready
                 var style = document.getElementById('appStyle');
                 var fixes = document.getElementById('responsiveFixes');
-                if (style && window.PATH) style.href = PATH.asset('assets/css/style.css');
-                if (fixes && window.PATH) fixes.href = PATH.asset('assets/css/responsive-fixes.css');
+
+                if (style && window.PATH) {
+                    style.href = PATH.asset('assets/css/style.css');
+                    style.onload = onCSSReady;
+                    style.onerror = onCSSReady;
+                }
+                if (fixes && window.PATH) {
+                    fixes.href = PATH.asset('assets/css/responsive-fixes.css');
+                    fixes.onload = onCSSReady;
+                    fixes.onerror = onCSSReady;
+                }
             });
+
+            // Fallback: show page after 3 seconds even if CSS hasn't loaded
+            setTimeout(function () {
+                if (!document.body.classList.contains('css-ready')) {
+                    console.warn('⚠️ [LOGIN] CSS load timeout, showing page anyway');
+                    document.body.classList.add('css-ready');
+                    var overlay = document.getElementById('pageLoadingOverlay');
+                    if (overlay) overlay.classList.add('hidden');
+                }
+            }, 3000);
         })();
     </script>
 
@@ -53,6 +164,11 @@
 </head>
 
 <body>
+    <!-- Loading overlay - shown until CSS fully loads -->
+    <div class="page-loading-overlay" id="pageLoadingOverlay">
+        <div class="loading-spinner"></div>
+    </div>
+
     <div class="login-container">
         <div class="login-card fade-in">
             <div class="login-header">

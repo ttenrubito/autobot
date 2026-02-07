@@ -426,8 +426,17 @@ try {
     // without modifying every return point in handlers
     $replyText = $result['reply_text'] ?? null;
     $replyTexts = [];
-
-    if ($replyText !== null && $replyText !== '') {
+    
+    // ✅ First, check if handler already provided reply_texts
+    if (!empty($result['reply_texts']) && is_array($result['reply_texts'])) {
+        $replyTexts = $result['reply_texts'];
+        Logger::info('[GATEWAY] Handler provided reply_texts', [
+            'trace_id' => $traceId,
+            'count' => count($replyTexts),
+        ]);
+    }
+    // Otherwise, try to parse from reply_text
+    elseif ($replyText !== null && $replyText !== '') {
         // Check if response contains split delimiter
         if (strpos($replyText, '||SPLIT||') !== false) {
             // Split and clean
@@ -453,20 +462,40 @@ try {
     $payload = [
         'reply_text' => $replyText,  // Keep original for backward compatibility
         'reply_texts' => $replyTexts, // ✅ NEW: Array for multi-message support
+        'reply_messages' => $result['reply_messages'] ?? [], // ✅ Flex/Rich messages
         'actions' => $result['actions'] ?? [],
         'meta' => $result['meta'] ?? [],
     ];
 
-    // ✅ NEW: Add image_url from handler result to actions for LINE/Facebook
+    // ✅ FIX: Add image_url from handler result to actions ONLY if not already present
+    // This prevents duplicate images when handler returns both actions[] with images AND image_url
     if (!empty($result['image_url'])) {
-        $payload['actions'][] = [
-            'type' => 'image',
-            'url' => $result['image_url']
-        ];
-        Logger::info('[GATEWAY] Added product image to actions', [
-            'trace_id' => $traceId,
-            'image_url' => $result['image_url']
-        ]);
+        $imageUrl = $result['image_url'];
+        
+        // Check if this image is already in actions
+        $imageAlreadyExists = false;
+        foreach ($payload['actions'] as $existingAction) {
+            if (($existingAction['type'] ?? '') === 'image' && ($existingAction['url'] ?? '') === $imageUrl) {
+                $imageAlreadyExists = true;
+                break;
+            }
+        }
+        
+        if (!$imageAlreadyExists) {
+            $payload['actions'][] = [
+                'type' => 'image',
+                'url' => $imageUrl
+            ];
+            Logger::info('[GATEWAY] Added product image to actions', [
+                'trace_id' => $traceId,
+                'image_url' => $imageUrl
+            ]);
+        } else {
+            Logger::info('[GATEWAY] Skipped duplicate image_url (already in actions)', [
+                'trace_id' => $traceId,
+                'image_url' => $imageUrl
+            ]);
+        }
     }
 
     // Always include trace_id in final response meta for cross-service correlation

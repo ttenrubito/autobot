@@ -32,7 +32,10 @@ if ($env_base !== false && $env_base !== null && trim($env_base) !== '') {
 if (!defined('BASE_PATH')) define('BASE_PATH', $base_path);
 if (!defined('ASSETS_PATH')) define('ASSETS_PATH', BASE_PATH . '/assets');
 if (!defined('API_PATH')) define('API_PATH', BASE_PATH . '/api');
-if (!defined('PUBLIC_PATH')) define('PUBLIC_PATH', BASE_PATH . '/public');
+// Note: On Cloud Run, /public is the docroot, so public URLs don't need /public prefix
+// On localhost, /autobot/public/ pages are accessed at /autobot/xxx.php via Apache alias or symlink
+// So PUBLIC_PATH should be same as BASE_PATH
+if (!defined('PUBLIC_PATH')) define('PUBLIC_PATH', BASE_PATH);
 
 // Helper function for asset URLs
 function asset($path) {

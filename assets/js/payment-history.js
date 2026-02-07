@@ -5,8 +5,30 @@ let currentPage = 1;
 const ITEMS_PER_PAGE = 20;
 let searchQuery = '';
 let currentFilter = '';
-let dateRangeFilter = { start: null, end: null }; // NEW: Date range filter
+let dateRangeFilter = { start: null, end: null }; // Date range filter
 let targetOrderNoFromQuery = '';
+let targetPaymentIdFromQuery = null; // URL param: ?id=xxx
+let targetCustomerIdFromQuery = null; // URL param: ?customer_id=xxx
+let urlParamStatus = ''; // URL param: ?status=pending|verified|rejected
+let urlParamType = ''; // URL param: ?type=full|installment|savings
+let orderSearchModalTimeout = null; // Debounce timeout for order search
+
+/**
+ * Position a fixed dropdown relative to its input element
+ * This allows dropdowns to escape parent overflow:hidden containers
+ */
+function positionFixedDropdown(inputElement, dropdownElement) {
+    if (!inputElement || !dropdownElement) return;
+
+    const rect = inputElement.getBoundingClientRect();
+    dropdownElement.style.position = 'fixed';
+    dropdownElement.style.top = `${rect.bottom + 2}px`;
+    dropdownElement.style.left = `${rect.left}px`;
+    dropdownElement.style.width = `${rect.width}px`;
+    dropdownElement.style.minWidth = '300px';
+    dropdownElement.style.maxWidth = '400px';
+    dropdownElement.style.zIndex = '999999';
+}
 
 function getQueryParam(name) {
     try {
@@ -25,20 +47,111 @@ function pageUrlSafe(pageWithExt) {
 
 // Load payments on page load
 document.addEventListener('DOMContentLoaded', () => {
-    // Deep-link from orders -> payment-history
+    // Parse URL params for filtering
+    parseUrlParams();
+
+    loadPayments();
+    setupSearchAndFilters();
+    setupKeyboardShortcuts();
+    setupDateFilter();
+});
+
+/**
+ * Parse URL parameters for filtering and deep-linking
+ * Supported params:
+ *   - id: Open specific payment detail (e.g., ?id=57)
+ *   - order_no: Filter by order number (deep link from orders page)
+ *   - status: Filter by status (pending, verified, rejected)
+ *   - type: Filter by payment type (full, installment, savings)
+ *   - customer_id: Filter by customer profile ID
+ *   - start_date, end_date: Date range filter (YYYY-MM-DD format)
+ *   - action=create: Auto-open Add Payment modal (from pawns page)
+ *   - pawn_id, pawn_no, amount, description: Pre-fill values for create
+ */
+function parseUrlParams() {
+    // Payment ID - will auto-open modal after loading
+    targetPaymentIdFromQuery = getQueryParam('id') ? parseInt(getQueryParam('id'), 10) : null;
+
+    // Order number - filter and search
     targetOrderNoFromQuery = getQueryParam('order_no') || '';
     if (targetOrderNoFromQuery) {
-        // Push into search box + filter logic after DOM is ready
         const searchInput = document.getElementById('paymentSearch');
         if (searchInput) searchInput.value = targetOrderNoFromQuery;
         searchQuery = String(targetOrderNoFromQuery).trim().toLowerCase();
     }
 
-    loadPayments();
-    setupSearchAndFilters();
-    setupKeyboardShortcuts();
-    setupDateFilter(); // NEW: Setup date filter
-});
+    // Customer ID - filter by customer
+    targetCustomerIdFromQuery = getQueryParam('customer_id') ? parseInt(getQueryParam('customer_id'), 10) : null;
+
+    // Status filter from URL (overrides default)
+    urlParamStatus = getQueryParam('status') || '';
+    if (urlParamStatus && ['pending', 'verified', 'rejected'].includes(urlParamStatus)) {
+        // Set as current filter if it matches status-based filter
+        if (urlParamStatus === 'pending') {
+            currentFilter = 'pending';
+            activateFilterChip('pending');
+        }
+    }
+
+    // Type filter from URL
+    urlParamType = getQueryParam('type') || '';
+    if (urlParamType && ['full', 'installment', 'savings'].includes(urlParamType)) {
+        currentFilter = urlParamType;
+        activateFilterChip(urlParamType);
+    }
+
+    // Date range from URL
+    const startDateParam = getQueryParam('start_date');
+    const endDateParam = getQueryParam('end_date');
+    if (startDateParam || endDateParam) {
+        const startDateInput = document.getElementById('startDate');
+        const endDateInput = document.getElementById('endDate');
+
+        if (startDateParam && startDateInput) {
+            startDateInput.value = startDateParam;
+            dateRangeFilter.start = startDateParam;
+        }
+        if (endDateParam && endDateInput) {
+            endDateInput.value = endDateParam;
+            dateRangeFilter.end = endDateParam;
+        }
+    }
+
+    console.log('📍 URL Params parsed:', {
+        id: targetPaymentIdFromQuery,
+        order_no: targetOrderNoFromQuery,
+        customer_id: targetCustomerIdFromQuery,
+        status: urlParamStatus,
+        type: urlParamType,
+        dateRange: dateRangeFilter
+    });
+
+    // Handle action=create from pawns page (auto-open create modal)
+    const actionParam = getQueryParam('action');
+    if (actionParam === 'create') {
+        // Delay to ensure DOM is ready
+        setTimeout(() => {
+            openAddPaymentModalWithPrefill({
+                type: getQueryParam('type') || 'deposit_interest',
+                pawn_id: getQueryParam('pawn_id') || '',
+                pawn_no: getQueryParam('pawn_no') || '',
+                amount: getQueryParam('amount') || '',
+                description: getQueryParam('description') || '',
+                customer_profile_id: getQueryParam('customer_profile_id') || ''
+            });
+        }, 500);
+    }
+}
+
+/**
+ * Activate a filter chip by its data-filter value
+ */
+function activateFilterChip(filterValue) {
+    document.querySelectorAll('.filter-tab, .filter-chip').forEach(tab => tab.classList.remove('active'));
+    const chip = document.querySelector(`.filter-chip[data-filter="${filterValue}"]`)
+        || document.querySelector(`.filter-tab[data-filter="${filterValue}"]`);
+    if (chip) chip.classList.add('active');
+}
 
 // Load payments from API
 async function loadPayments() {
@@ -73,7 +186,26 @@ async function loadPayments() {
 
             filteredPayments = allPayments;
             currentPage = 1;
-            renderPayments();
+
+            // Apply filters (including URL params like order_no)
+            applyAllFilters();
+
+            // Auto-open modal if ?id=xxx is in URL
+            if (targetPaymentIdFromQuery) {
+                const paymentExists = allPayments.some(p => parseInt(p.id, 10) === targetPaymentIdFromQuery);
+                if (paymentExists) {
+                    console.log('📍 Auto-opening payment detail for ID:', targetPaymentIdFromQuery);
+                    // Small delay to ensure DOM is ready
+                    setTimeout(() => {
+                        viewPaymentDetail(targetPaymentIdFromQuery);
+                        // Scroll to and highlight the row
+                        highlightPaymentRow(targetPaymentIdFromQuery);
+                    }, 100);
+                } else {
+                    console.warn('⚠️ Payment ID not found:', targetPaymentIdFromQuery);
+                    showToast(`ไม่พบรายการชำระเงิน ID: ${targetPaymentIdFromQuery}`, 'warning');
+                }
+            }
         } else {
             showError('ไม่สามารถโหลดข้อมูลได้', result?.message || 'Unknown error', true);
         }
@@ -138,12 +270,18 @@ function renderPayments() {
                 payment.status === 'pending' ? 'รอตรวจสอบ' : 'ปฏิเสธ';
 
             const typeClass = payment.payment_type === 'full' ? 'full' :
-                payment.payment_type === 'savings' ? 'savings' : 'installment';
+                payment.payment_type === 'savings' ? 'savings' :
+                    payment.payment_type === 'deposit' ? 'deposit' :
+                        payment.payment_type === 'deposit_interest' ? 'deposit-interest' : 'installment';
             const typeIcon = payment.payment_type === 'full' ? '💳' :
-                payment.payment_type === 'savings' ? '🐷' : '📅';
+                payment.payment_type === 'savings' ? '🐷' :
+                    payment.payment_type === 'deposit' ? '📦' :
+                        payment.payment_type === 'deposit_interest' ? '💵' : '📅';
             const typeText = payment.payment_type === 'full' ? 'จ่ายเต็ม' :
                 payment.payment_type === 'savings' ? 'ออมเงิน' :
-                    `งวด ${payment.current_period || 1}/${payment.installment_period || 1}`;
+                    payment.payment_type === 'deposit' ? 'มัดจำ' :
+                        payment.payment_type === 'deposit_interest' ? 'ต่อดอกฝาก' :
+                            `งวด ${payment.current_period || 1}/${payment.installment_period || 1}`;
 
             const orderNo = payment.order_no || '';
             const isHighlighted = targetOrderNoFromQuery && String(orderNo) === String(targetOrderNoFromQuery);
@@ -161,7 +299,10 @@ function renderPayments() {
 
             return `
                 <tr class="${highlightClass}" onclick="viewPaymentDetail(${payment.id})" tabindex="0" role="button">
-                    <td><span class="payment-no-link">${payment.payment_no}</span></td>
+                    <td>
+                        <span class="payment-no-link">${payment.payment_no}</span>
+                        ${payment.order_no ? `<div class="order-ref-sm" style="font-size:0.75rem;color:#6b7280;margin-top:2px;"><i class="fas fa-shopping-cart" style="font-size:0.65rem;margin-right:3px;"></i>${payment.order_no}</div>` : ''}
+                    </td>
                     <td class="payment-date-cell">${formatDate(payment.payment_date)}</td>
                     <td>
                         <div class="customer-cell">
@@ -192,12 +333,18 @@ function renderPayments() {
                 payment.status === 'pending' ? 'รอตรวจสอบ' : 'ปฏิเสธ';
 
             const typeClass = payment.payment_type === 'full' ? 'full' :
-                payment.payment_type === 'savings' ? 'savings' : 'installment';
+                payment.payment_type === 'savings' ? 'savings' :
+                    payment.payment_type === 'deposit' ? 'deposit' :
+                        payment.payment_type === 'deposit_interest' ? 'deposit-interest' : 'installment';
             const typeIcon = payment.payment_type === 'full' ? '💳' :
-                payment.payment_type === 'savings' ? '🐷' : '📅';
+                payment.payment_type === 'savings' ? '🐷' :
+                    payment.payment_type === 'deposit' ? '📦' :
+                        payment.payment_type === 'deposit_interest' ? '💵' : '📅';
             const typeText = payment.payment_type === 'full' ? 'จ่ายเต็ม' :
                 payment.payment_type === 'savings' ? 'ออมเงิน' :
-                    `งวด ${payment.current_period || 1}/${payment.installment_period || 1}`;
+                    payment.payment_type === 'deposit' ? 'มัดจำ' :
+                        payment.payment_type === 'deposit_interest' ? 'ต่อดอกฝาก' :
+                            `งวด ${payment.current_period || 1}/${payment.installment_period || 1}`;
 
             // Customer profile
             const customerName = payment.customer_name || 'ลูกค้า';
@@ -212,7 +359,10 @@ function renderPayments() {
             return `
                 <div class="payment-mobile-card" onclick="viewPaymentDetail(${payment.id})">
                     <div class="payment-mobile-header">
-                        <span class="payment-mobile-no">${payment.payment_no}</span>
+                        <div>
+                            <span class="payment-mobile-no">${payment.payment_no}</span>
+                            ${payment.order_no ? `<div style="font-size:0.7rem;color:#6b7280;margin-top:1px;"><i class="fas fa-shopping-cart" style="font-size:0.6rem;margin-right:2px;"></i>${payment.order_no}</div>` : ''}
+                        </div>
                         <span class="payment-mobile-amount">฿${formatNumber(payment.amount)}</span>
                     </div>
                     <div class="payment-mobile-customer">
@@ -575,6 +725,36 @@ function renderPaymentDetails(payment) {
                 ` : ''}
             </div>
             
+            <!-- PRODUCT INFO (if linked to order) -->
+            ${payment.order_id && payment.product_name ? `
+            <div class="product-info-section" style="display: flex; align-items: center; gap: 1rem; padding: 0.75rem; background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); border-radius: 8px; margin-bottom: 1rem; border: 1px solid #bae6fd;">
+                ${payment.product_image_url ? `
+                <div class="product-thumb" style="flex-shrink: 0;">
+                    <img src="${payment.product_image_url}" alt="${payment.product_name}" 
+                         style="width: 60px; height: 60px; object-fit: cover; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.1);"
+                         onerror="this.style.display='none';">
+                </div>
+                ` : `
+                <div class="product-thumb-placeholder" style="flex-shrink: 0; width: 60px; height: 60px; background: #e0f2fe; border-radius: 8px; display: flex; align-items: center; justify-content: center;">
+                    <i class="fas fa-box" style="color: #0284c7; font-size: 1.5rem;"></i>
+                </div>
+                `}
+                <div class="product-details" style="flex: 1; min-width: 0;">
+                    <div style="font-weight: 600; color: #0369a1; font-size: 0.95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                        ${payment.product_name}
+                    </div>
+                    <div style="font-size: 0.8rem; color: #64748b; margin-top: 2px;">
+                        ${payment.product_code ? `<span style="background: #e2e8f0; padding: 2px 6px; border-radius: 4px; font-family: monospace;">${payment.product_code}</span>` : ''}
+                        ${payment.order_quantity > 1 ? `<span style="margin-left: 0.5rem;">x${payment.order_quantity}</span>` : ''}
+                    </div>
+                    <div style="font-size: 0.85rem; color: #0369a1; margin-top: 4px; font-weight: 500;">
+                        ยอดสั่งซื้อ: ฿${formatNumber(payment.order_total_amount || 0)}
+                        ${payment.order_paid_amount > 0 ? `<span style="color: #16a34a; margin-left: 0.5rem;">(ชำระแล้ว ฿${formatNumber(payment.order_paid_amount)})</span>` : ''}
+                    </div>
+                </div>
+            </div>
+            ` : ''}
+            
             <!-- SLIP IMAGE (Most Important) -->
             ${payment.slip_image ? (() => {
             const slipSrc = normalizeSlipUrl(payment.slip_image);
@@ -676,6 +856,40 @@ function renderPaymentDetails(payment) {
                 </div>
             </div>
 
+            <!-- ✅ Link to Pawn with Autocomplete -->
+            <div class="detail-section">
+                <h3>💎 อ้างอิงจำนำ</h3>
+                <div class="order-reference-container">
+                    ${payment.pawn_id && payment.pawn_no ? `
+                        <div class="current-order-link">
+                            <span class="order-badge" style="background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);">
+                                <i class="fas fa-gem"></i> ${payment.pawn_no}
+                            </span>
+                            <a class="btn btn-outline btn-sm" href="${pageUrlSafe('pawns.php')}?id=${payment.pawn_id}">
+                                <i class="fas fa-external-link-alt"></i> ดูจำนำ
+                            </a>
+                            <button class="btn btn-outline btn-sm" onclick="unlinkPawnFromPayment(${payment.id})" title="ยกเลิกการเชื่อมโยง">
+                                <i class="fas fa-unlink"></i>
+                            </button>
+                        </div>
+                    ` : `
+                        <div class="order-search-inline">
+                            <div class="autocomplete-wrapper" style="flex:1;">
+                                <input type="text" id="pawnSearchModal-${payment.id}" class="form-control" 
+                                       placeholder="ค้นหาเลขจำนำเพื่อเชื่อมโยง (เช่น PWN-xxx, ค่าดอก)..." 
+                                       autocomplete="off"
+                                       oninput="searchPawnsForPayment(${payment.id}, this.value)">
+                                <div id="pawnSuggestionsModal-${payment.id}" class="autocomplete-suggestions"></div>
+                            </div>
+                            <button class="btn btn-primary btn-sm" onclick="linkPawnToPayment(${payment.id})" id="linkPawnBtn-${payment.id}" disabled>
+                                <i class="fas fa-link"></i> เชื่อมโยง
+                            </button>
+                        </div>
+                        <input type="hidden" id="selectedPawnId-${payment.id}" value="">
+                    `}
+                </div>
+            </div>
+
             <div class="detail-section">
                 <h3>📄 ข้อมูลการชำระเงิน</h3>
                 <div class="detail-grid">
@@ -709,7 +923,7 @@ function renderPaymentDetails(payment) {
             </div>
 
             ${payment.source !== 'manual' ? `
-            <div class="detail-section slip-chat-box">
+            <div class="detail-section slip-chat-box" style="display: none;">
                 <h3>💬 ประวัติการสนทนา</h3>
                 <div class="slip-chat-bubbles">
                     ${renderChatMessages(payment.chat_messages, customerName, payment, reviewHint)}
@@ -728,13 +942,33 @@ function renderPaymentDetails(payment) {
             <div class="detail-section slip-approve-panel">
                 <h3>✅ ตรวจสอบและจัดประเภทการชำระเงิน</h3>
                 
-                <!-- Classification Section -->
+                ${payment.status === 'verified' ? `
+                <div class="classification-done" style="padding: 1rem; background: linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%); border-radius: 8px; margin-bottom: 1rem; border: 1px solid #86efac;">
+                    <div style="display: flex; align-items: center; gap: 0.75rem; color: #166534; font-weight: 600;">
+                        <i class="fas fa-check-circle" style="font-size: 1.5rem;"></i>
+                        <span>อนุมัติแล้ว</span>
+                    </div>
+                    <div style="margin-top: 0.5rem; color: #15803d; font-size: 0.9rem;">
+                        ประเภท: ${getPaymentTypeText(payment.payment_type)}
+                        ${payment.payment_type === 'installment' ? ` (งวดที่ ${payment.current_period || 1}/${payment.installment_period || 3})` : ''}
+                    </div>
+                </div>
+                ` : payment.status === 'rejected' ? `
+                <div class="classification-done" style="padding: 1rem; background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%); border-radius: 8px; margin-bottom: 1rem; border: 1px solid #fca5a5;">
+                    <div style="display: flex; align-items: center; gap: 0.75rem; color: #991b1b; font-weight: 600;">
+                        <i class="fas fa-times-circle" style="font-size: 1.5rem;"></i>
+                        <span>ปฏิเสธแล้ว</span>
+                    </div>
+                </div>
+                ` : `
+                <!-- Classification Section (only for pending payments) -->
                 <div class="classification-section">
                     <div class="classify-row">
                         <label for="paymentType-${payment.id}">ประเภทการชำระ</label>
                         <select id="paymentType-${payment.id}" class="classify-select" onchange="onPaymentTypeChange(${payment.id})">
                             <option value="">-- เลือกประเภท --</option>
                             <option value="full" ${payment.payment_type === 'full' ? 'selected' : ''}>💳 จ่ายเต็ม (Full Payment)</option>
+                            <option value="deposit" ${payment.payment_type === 'deposit' ? 'selected' : ''}>💎 มัดจำ (Deposit)</option>
                             <option value="installment" ${payment.payment_type === 'installment' ? 'selected' : ''}>📅 ผ่อนชำระ (Installment)</option>
                             <option value="savings_deposit" ${payment.payment_type === 'savings_deposit' ? 'selected' : ''}>🐷 ฝากออม (Savings)</option>
                         </select>
@@ -763,13 +997,14 @@ function renderPaymentDetails(payment) {
                 </div>
                 
                 <div class="action-row">
-                    <button class="btn btn-success" onclick="classifyAndApprovePayment(${payment.id})" ${payment.status === 'verified' ? 'disabled' : ''}>
+                    <button class="btn btn-success" onclick="classifyAndApprovePayment(${payment.id})">
                         ✅ อนุมัติและบันทึก
                     </button>
-                    <button class="btn btn-danger" onclick="rejectPayment(${payment.id})" ${payment.status === 'rejected' ? 'disabled' : ''}>
+                    <button class="btn btn-danger" onclick="rejectPayment(${payment.id})">
                         ❌ ปฏิเสธสลิป
                     </button>
                 </div>
+                `}
             </div>` : ''}
         </div>
     `;
@@ -790,11 +1025,8 @@ async function approvePayment(paymentId) {
         const result = await apiCall(url, { method: 'PUT' });
         if (result && result.success) {
             showToast('✅ อนุมัติสลิปเรียบร้อย', 'success');
+            closePaymentModal(); // ปิด popup
             await loadPayments();
-            const updated = allPayments.find(p => String(p.id) === String(paymentId));
-            if (updated) {
-                document.getElementById('paymentDetailsContent').innerHTML = renderPaymentDetails(updated);
-            }
         } else {
             showToast('❌ ไม่สามารถอนุมัติได้: ' + (result && result.message ? result.message : 'ไม่ทราบสาเหตุ'), 'error');
         }
@@ -820,10 +1052,15 @@ function onPaymentTypeChange(paymentId) {
  * ✅ Classify and approve payment with type selection
  */
 async function classifyAndApprovePayment(paymentId) {
+    console.log('[classifyAndApprovePayment] Called with paymentId:', paymentId);
+
     const typeSelect = document.getElementById(`paymentType-${paymentId}`);
     const noteInput = document.getElementById(`classifyNote-${paymentId}`);
     const currentPeriodInput = document.getElementById(`currentPeriod-${paymentId}`);
     const totalPeriodInput = document.getElementById(`totalPeriod-${paymentId}`);
+
+    console.log('[classifyAndApprovePayment] typeSelect:', typeSelect);
+    console.log('[classifyAndApprovePayment] typeSelect.value:', typeSelect ? typeSelect.value : 'N/A');
 
     const paymentType = typeSelect ? typeSelect.value : '';
     const note = noteInput ? noteInput.value.trim() : '';
@@ -832,6 +1069,8 @@ async function classifyAndApprovePayment(paymentId) {
 
     // Validate
     if (!paymentType) {
+        console.warn('[classifyAndApprovePayment] No payment type selected!');
+        alert('⚠️ กรุณาเลือกประเภทการชำระก่อน');
         showToast('⚠️ กรุณาเลือกประเภทการชำระก่อน', 'error');
         if (typeSelect) typeSelect.focus();
         return;
@@ -899,14 +1138,15 @@ async function rejectPayment(paymentId) {
         const url = (typeof API_ENDPOINTS !== 'undefined' && API_ENDPOINTS.ADMIN_PAYMENT_REJECT)
             ? API_ENDPOINTS.ADMIN_PAYMENT_REJECT(paymentId)
             : `/api/admin/payments/${paymentId}/reject`;
+
         const result = await apiCall(url, { method: 'PUT', body: { reason } });
         if (result && result.success) {
             showToast('✅ บันทึกการปฏิเสธสลิปแล้ว', 'success');
+            closePaymentModal(); // ปิด popup
             await loadPayments();
-            const updated = allPayments.find(p => String(p.id) === String(paymentId));
-            if (updated) {
-                document.getElementById('paymentDetailsContent').innerHTML = renderPaymentDetails(updated);
-            }
+        } else if (result && result.status === 401) {
+            // Token expired or invalid
+            showToast('❌ Token หมดอายุ กรุณา Login ใหม่', 'error');
         } else {
             showToast('❌ ไม่สามารถปฏิเสธได้: ' + (result && result.message ? result.message : 'ไม่ทราบสาเหตุ'), 'error');
         }
@@ -1034,6 +1274,16 @@ function getPaymentMethodText(method) {
     return methods[method] || method;
 }
 
+function getPaymentTypeText(type) {
+    const types = {
+        'full': '💳 จ่ายเต็ม',
+        'deposit': '💎 มัดจำ',
+        'installment': '📅 ผ่อนชำระ',
+        'savings_deposit': '🐷 ฝากออม'
+    };
+    return types[type] || type || '-';
+}
+
 /**
  * ✅ Render chat messages from database or show fallback
  */
@@ -1067,9 +1317,16 @@ function renderChatMessages(chatMessages, customerName, payment, reviewHint) {
                 } else {
                     content = '<em>[รูปภาพ]</em>';
                 }
-            } else if (msgText === '[image]' || msgText.trim().toLowerCase() === '[image]') {
-                // Handle [image] text placeholder - show slip image if available
-                if (slipImageUrl && !slipImageShown) {
+            } else if (msgText.startsWith('[image]')) {
+                // Handle [image] with optional URL following it
+                // Format: "[image] https://..." or just "[image]"
+                const urlMatch = msgText.match(/\[image\]\s*(https?:\/\/\S+)/i);
+                if (urlMatch && urlMatch[1]) {
+                    // Has URL after [image]
+                    const imageUrl = urlMatch[1].trim();
+                    content = `<img src="${imageUrl}" alt="รูปภาพ" style="max-width: 200px; border-radius: 8px; cursor: pointer;" onclick="window.open('${imageUrl}', '_blank')"><br><small style="color:#999;">📷 รูปภาพที่ส่ง</small>`;
+                } else if (slipImageUrl && !slipImageShown) {
+                    // Just [image] - show slip image if available
                     content = `<img src="${slipImageUrl}" alt="สลิปโอนเงิน" style="max-width: 200px; border-radius: 8px; cursor: pointer;" onclick="window.open('${slipImageUrl}', '_blank')"><br><small style="color:#999;">📷 สลิปโอนเงิน</small>`;
                     slipImageShown = true;
                 } else {
@@ -1134,8 +1391,8 @@ function escapeHtml(text) {
 /**
  * Search orders for payment modal autocomplete
  */
-let orderSearchModalTimeout = null;
 async function searchOrdersForPayment(paymentId, query) {
+    const input = document.getElementById(`orderSearchModal-${paymentId}`);
     const suggestions = document.getElementById(`orderSuggestionsModal-${paymentId}`);
     const linkBtn = document.getElementById(`linkOrderBtn-${paymentId}`);
 
@@ -1152,10 +1409,20 @@ async function searchOrdersForPayment(paymentId, query) {
         return;
     }
 
+    // Get payment to find customer's platform_user_id for filtering
+    const payment = allPayments.find(p => String(p.id) === String(paymentId));
+    const platformUserId = payment?.customer_platform_id || payment?.platform_user_id || '';
+
     // Debounce
     orderSearchModalTimeout = setTimeout(async () => {
         try {
-            const result = await apiCall(`${API_ENDPOINTS.SEARCH_ORDERS}?q=${encodeURIComponent(query)}`);
+            // Build URL with optional platform_user_id filter
+            let url = `${API_ENDPOINTS.SEARCH_ORDERS}?q=${encodeURIComponent(query)}`;
+            if (platformUserId) {
+                url += `&platform_user_id=${encodeURIComponent(platformUserId)}`;
+            }
+
+            const result = await apiCall(url);
 
             if (result.success && result.data && result.data.length > 0) {
                 suggestions.innerHTML = result.data.map(order => `
@@ -1173,9 +1440,12 @@ async function searchOrdersForPayment(paymentId, query) {
                         </div>
                     </div>
                 `).join('');
+                // Position dropdown using fixed positioning to escape overflow:hidden
+                positionFixedDropdown(input, suggestions);
                 suggestions.classList.add('show');
             } else {
                 suggestions.innerHTML = '<div class="autocomplete-item"><em style="color:#9ca3af;">ไม่พบคำสั่งซื้อ</em></div>';
+                positionFixedDropdown(input, suggestions);
                 suggestions.classList.add('show');
             }
         } catch (error) {
@@ -1507,7 +1777,8 @@ function applyAllFilters() {
                 payment.order_no,
                 payment.amount?.toString(),
                 payment.payment_method,
-                payment.status
+                payment.status,
+                payment.customer_name // Add customer name to search
             ].filter(Boolean);
 
             return searchFields.some(field =>
@@ -1516,14 +1787,33 @@ function applyAllFilters() {
         });
     }
 
-    // Apply payment type filter
+    // Apply customer_id filter from URL param
+    if (targetCustomerIdFromQuery) {
+        result = result.filter(p => {
+            const profileId = parseInt(p.customer_profile_id, 10);
+            return profileId === targetCustomerIdFromQuery;
+        });
+    }
+
+    // Apply status filter from URL param (if not already set by currentFilter)
+    if (urlParamStatus && !currentFilter) {
+        result = result.filter(p => p.status === urlParamStatus);
+    }
+
+    // Apply payment type filter (from chips or URL param)
     if (currentFilter) {
         if (currentFilter === 'full') {
             result = result.filter(p => p.payment_type === 'full');
         } else if (currentFilter === 'installment') {
             result = result.filter(p => p.payment_type === 'installment');
+        } else if (currentFilter === 'savings') {
+            result = result.filter(p => p.payment_type === 'savings');
         } else if (currentFilter === 'pending') {
             result = result.filter(p => p.status === 'pending');
+        } else if (currentFilter === 'verified') {
+            result = result.filter(p => p.status === 'verified');
+        } else if (currentFilter === 'rejected') {
+            result = result.filter(p => p.status === 'rejected');
         }
     }
 
@@ -1554,6 +1844,77 @@ function applyAllFilters() {
     renderPayments();
 }
 
+/**
+ * Highlight and scroll to a specific payment row by ID
+ */
+function highlightPaymentRow(paymentId) {
+    // Find the row in the table
+    const rows = document.querySelectorAll('#paymentsTableBody tr');
+    for (const row of rows) {
+        // Check if this row contains the payment ID
+        if (row.getAttribute('onclick')?.includes(`viewPaymentDetail(${paymentId})`)) {
+            row.classList.add('highlighted');
+            row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+            // Flash effect
+            row.style.transition = 'background-color 0.3s ease';
+            row.style.backgroundColor = '#eef2ff';
+            setTimeout(() => {
+                row.style.backgroundColor = '';
+            }, 2000);
+            break;
+        }
+    }
+
+    // Also check mobile cards
+    const cards = document.querySelectorAll('.payment-mobile-card');
+    for (const card of cards) {
+        if (card.getAttribute('onclick')?.includes(`viewPaymentDetail(${paymentId})`)) {
+            card.classList.add('highlighted');
+            card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+            card.style.transition = 'box-shadow 0.3s ease';
+            card.style.boxShadow = '0 0 0 3px rgba(99, 102, 241, 0.5)';
+            setTimeout(() => {
+                card.style.boxShadow = '';
+            }, 2000);
+            break;
+        }
+    }
+}
+
+/**
+ * Update URL with current filter state (without page reload)
+ */
+function updateUrlWithFilters() {
+    const url = new URL(window.location);
+
+    // Clear old params
+    url.searchParams.delete('status');
+    url.searchParams.delete('type');
+    url.searchParams.delete('start_date');
+    url.searchParams.delete('end_date');
+
+    // Add current filters
+    if (currentFilter) {
+        if (['full', 'installment', 'savings'].includes(currentFilter)) {
+            url.searchParams.set('type', currentFilter);
+        } else if (['pending', 'verified', 'rejected'].includes(currentFilter)) {
+            url.searchParams.set('status', currentFilter);
+        }
+    }
+
+    if (dateRangeFilter.start) {
+        url.searchParams.set('start_date', dateRangeFilter.start);
+    }
+    if (dateRangeFilter.end) {
+        url.searchParams.set('end_date', dateRangeFilter.end);
+    }
+
+    // Update URL without reload
+    window.history.replaceState({}, '', url);
+}
+
 function goToOrderFromPayment(orderNo) {
     if (!orderNo) return;
     const q = encodeURIComponent(String(orderNo));
@@ -1566,6 +1927,7 @@ function goToOrderFromPayment(orderNo) {
 
 let customerSearchTimeout = null;
 let orderSearchTimeout = null;
+let addPaymentEventsSetup = false; // Flag to prevent duplicate listeners
 
 function openAddPaymentModal() {
     const modal = document.getElementById('addPaymentModal');
@@ -1584,11 +1946,315 @@ function openAddPaymentModal() {
         document.getElementById('orderSearch').value = '';
         document.getElementById('customerProfileId').value = '';
         document.getElementById('referenceId').value = '';
+        document.getElementById('customerSuggestions').classList.remove('show');
+        document.getElementById('orderSuggestions').classList.remove('show');
+        
+        // Reset pawn selection
+        const pawnSearch = document.getElementById('pawnSearch');
+        const pawnId = document.getElementById('pawnId');
+        const selectedPawn = document.getElementById('selectedPawn');
+        const pawnSuggestions = document.getElementById('pawnSuggestions');
+        const pawnSearchGroup = document.getElementById('pawnSearchGroup');
+        const orderSearchGroup = document.getElementById('orderSearchGroup');
+        
+        if (pawnSearch) pawnSearch.value = '';
+        if (pawnId) pawnId.value = '';
+        if (selectedPawn) selectedPawn.style.display = 'none';
+        if (pawnSuggestions) pawnSuggestions.classList.remove('show');
+        if (pawnSearchGroup) pawnSearchGroup.style.display = 'none';
+        if (orderSearchGroup) orderSearchGroup.style.display = 'block';
+        
         removeSlipPreview();
 
-        // Setup event listeners
-        setupAddPaymentEvents();
+        // Setup event listeners only once
+        if (!addPaymentEventsSetup) {
+            setupAddPaymentEvents();
+            addPaymentEventsSetup = true;
+        }
     }
+}
+
+/**
+ * Open Add Payment Modal with pre-filled data (from pawns page)
+ * @param {Object} prefill - Prefill data {type, pawn_id, pawn_no, amount, description}
+ */
+function openAddPaymentModalWithPrefill(prefill = {}) {
+    // First open modal normally
+    openAddPaymentModal();
+
+    setTimeout(() => {
+        // Select payment type
+        if (prefill.type) {
+            const typeRadio = document.querySelector(`input[name="payment_type"][value="${prefill.type}"]`);
+            if (typeRadio) {
+                typeRadio.checked = true;
+                typeRadio.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        }
+
+        // Set amount
+        if (prefill.amount) {
+            const amountInput = document.getElementById('paymentAmount');
+            if (amountInput) {
+                amountInput.value = prefill.amount;
+            }
+        }
+
+        // Set description/note
+        if (prefill.description) {
+            const noteInput = document.getElementById('paymentNote');
+            if (noteInput) {
+                noteInput.value = prefill.description;
+            }
+        }
+
+        // For deposit_interest or pawn_redemption, show pawn section and prefill
+        if ((prefill.type === 'deposit_interest' || prefill.type === 'pawn_redemption') && prefill.pawn_id) {
+            const pawnSearchGroup = document.getElementById('pawnSearchGroup');
+            const orderSearchGroup = document.getElementById('orderSearchGroup');
+            const pawnId = document.getElementById('pawnId');
+            const selectedPawn = document.getElementById('selectedPawn');
+            const pawnSearch = document.getElementById('pawnSearch');
+
+            if (pawnSearchGroup) pawnSearchGroup.style.display = 'block';
+            if (orderSearchGroup) orderSearchGroup.style.display = 'none';
+            if (pawnId) pawnId.value = prefill.pawn_id;
+            
+            // Show selected pawn info
+            if (selectedPawn && prefill.pawn_no) {
+                selectedPawn.innerHTML = `
+                    <div class="selected-item-content">
+                        <i class="fas fa-store"></i>
+                        <span>รายการจำนำ: <strong>${prefill.pawn_no}</strong></span>
+                        <button type="button" class="remove-selection" onclick="clearPawnSelection()">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                `;
+                selectedPawn.style.display = 'block';
+                if (pawnSearch) pawnSearch.style.display = 'none';
+            }
+
+            console.log('📝 Pre-filled pawn data:', { pawn_id: prefill.pawn_id, pawn_no: prefill.pawn_no });
+        }
+
+        // Auto-fill customer if customer_profile_id provided
+        if (prefill.customer_profile_id) {
+            loadAndSelectCustomer(prefill.customer_profile_id);
+        }
+
+        console.log('📝 Modal opened with prefill:', prefill);
+    }, 100);
+}
+
+/**
+ * Clear pawn selection
+ */
+function clearPawnSelection() {
+    const pawnId = document.getElementById('pawnId');
+    const selectedPawn = document.getElementById('selectedPawn');
+    const pawnSearch = document.getElementById('pawnSearch');
+    
+    if (pawnId) pawnId.value = '';
+    if (selectedPawn) selectedPawn.style.display = 'none';
+    if (pawnSearch) {
+        pawnSearch.style.display = 'block';
+        pawnSearch.value = '';
+        pawnSearch.focus();
+    }
+}
+
+/**
+ * Load customer by ID and auto-select
+ */
+async function loadAndSelectCustomer(customerId) {
+    if (!customerId) return;
+    
+    try {
+        const response = await fetch(`/api/customer-profiles.php?id=${customerId}`, {
+            headers: { 'Authorization': 'Bearer ' + getToken() }
+        });
+        const data = await response.json();
+        
+        if (data.success && data.data) {
+            const customer = data.data;
+            selectCustomer({
+                id: customer.id,
+                display_name: customer.display_name || customer.name || 'ลูกค้า',
+                phone: customer.phone || '',
+                platform_user_id: customer.platform_user_id || ''
+            });
+            console.log('📝 Auto-selected customer:', customer.id, customer.display_name);
+        }
+    } catch (error) {
+        console.error('Error loading customer:', error);
+    }
+}
+
+// Inline handler for customer search input
+function handleCustomerSearchInput(query) {
+    clearTimeout(customerSearchTimeout);
+    const suggestions = document.getElementById('customerSuggestions');
+    
+    if (!query || query.trim().length < 2) {
+        suggestions.classList.remove('show');
+        return;
+    }
+    
+    customerSearchTimeout = setTimeout(() => {
+        searchCustomers(query.trim());
+    }, 300);
+}
+
+// Inline handler for customer search focus
+function handleCustomerSearchFocus(query) {
+    if (query && query.trim().length >= 2) {
+        searchCustomers(query.trim());
+    }
+}
+
+// Inline handler for order search input
+function handleOrderSearchInput(query) {
+    clearTimeout(orderSearchTimeout);
+    const suggestions = document.getElementById('orderSuggestions');
+    
+    if (!query || query.trim().length < 2) {
+        suggestions.classList.remove('show');
+        return;
+    }
+    
+    orderSearchTimeout = setTimeout(() => {
+        searchOrders(query.trim());
+    }, 300);
+}
+
+// Inline handler for pawn search input
+let pawnSearchTimeout = null;
+function handlePawnSearchInput(query) {
+    clearTimeout(pawnSearchTimeout);
+    const suggestions = document.getElementById('pawnSuggestions');
+    
+    if (!query || query.trim().length < 2) {
+        suggestions.classList.remove('show');
+        return;
+    }
+    
+    pawnSearchTimeout = setTimeout(() => {
+        searchPawnsForAddPayment(query.trim());
+    }, 300);
+}
+
+// Search pawns for Add Payment modal
+async function searchPawnsForAddPayment(query) {
+    const suggestions = document.getElementById('pawnSuggestions');
+    const inputEl = document.getElementById('pawnSearch');
+    
+    try {
+        const url = (typeof API_ENDPOINTS !== 'undefined' && API_ENDPOINTS.CUSTOMER_PAWNS)
+            ? `${API_ENDPOINTS.CUSTOMER_PAWNS}?action=search&q=${encodeURIComponent(query)}&limit=10`
+            : `/api/customer/pawns.php?action=search&q=${encodeURIComponent(query)}&limit=10`;
+        
+        const result = await apiCall(url);
+        
+        if (result.success && result.data && result.data.length > 0) {
+            suggestions.innerHTML = result.data.map(pawn => `
+                <div class="autocomplete-item" onclick="selectPawnForAddPayment(${JSON.stringify(pawn).replace(/"/g, '&quot;')})">
+                    <div class="autocomplete-item-avatar" style="background:#8b5cf6;color:white;">
+                        <i class="fas fa-gem"></i>
+                    </div>
+                    <div class="autocomplete-item-info">
+                        <div class="autocomplete-item-name">${escapeHtml(pawn.pawn_no)}</div>
+                        <div class="autocomplete-item-meta">
+                            ${escapeHtml(pawn.item_name || 'ไม่ระบุ')} • 
+                            ${pawn.loan_amount ? formatCurrency(pawn.loan_amount) : ''} • 
+                            ดอกเบี้ย ${pawn.interest_rate || 0}%
+                        </div>
+                        <div class="autocomplete-item-meta" style="color:#6b7280;">
+                            ${escapeHtml(pawn.customer_name || '')}
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+            positionFixedDropdown(inputEl, suggestions);
+            suggestions.classList.add('show');
+        } else {
+            suggestions.innerHTML = '<div class="autocomplete-item"><em>ไม่พบรายการจำนำ</em></div>';
+            positionFixedDropdown(inputEl, suggestions);
+            suggestions.classList.add('show');
+        }
+    } catch (error) {
+        console.error('Search pawns error:', error);
+        suggestions.classList.remove('show');
+    }
+}
+
+// Select pawn for Add Payment
+function selectPawnForAddPayment(pawn) {
+    const pawnSearch = document.getElementById('pawnSearch');
+    const pawnIdInput = document.getElementById('pawnId');
+    const selectedPawn = document.getElementById('selectedPawn');
+    const suggestions = document.getElementById('pawnSuggestions');
+    
+    pawnIdInput.value = pawn.id;
+    pawnSearch.value = '';
+    suggestions.classList.remove('show');
+    
+    // Calculate interest amount suggestion
+    const interestAmount = pawn.loan_amount && pawn.interest_rate 
+        ? (parseFloat(pawn.loan_amount) * parseFloat(pawn.interest_rate) / 100).toFixed(2)
+        : '';
+    
+    selectedPawn.innerHTML = `
+        <div class="autocomplete-item-avatar" style="background:#8b5cf6;color:white;">
+            <i class="fas fa-gem"></i>
+        </div>
+        <div class="autocomplete-item-info">
+            <div class="autocomplete-item-name">${escapeHtml(pawn.pawn_no)}</div>
+            <div class="autocomplete-item-meta">
+                ${escapeHtml(pawn.item_name || 'ไม่ระบุ')} • 
+                ยอดจำนำ ${formatCurrency(pawn.loan_amount || 0)} • 
+                ดอกเบี้ย ${pawn.interest_rate || 0}%
+            </div>
+        </div>
+        <span class="remove-btn" onclick="removeSelectedPawn()"><i class="fas fa-times"></i></span>
+    `;
+    selectedPawn.style.display = 'flex';
+    
+    // Auto-fill interest amount
+    if (interestAmount) {
+        const amountInput = document.getElementById('paymentAmount');
+        if (amountInput && !amountInput.value) {
+            amountInput.value = interestAmount;
+            amountInput.placeholder = `ดอกเบี้ย ${interestAmount} บาท/เดือน`;
+        }
+    }
+    
+    // Also set customer if available
+    if (pawn.customer_profile_id) {
+        document.getElementById('customerProfileId').value = pawn.customer_profile_id;
+        // Update customer display
+        const selectedCustomer = document.getElementById('selectedCustomer');
+        selectedCustomer.innerHTML = `
+            <div class="autocomplete-item-avatar">
+                <i class="fas fa-user"></i>
+            </div>
+            <div class="autocomplete-item-info">
+                <div class="autocomplete-item-name">${escapeHtml(pawn.customer_name || 'ลูกค้า')}</div>
+                <div class="autocomplete-item-meta">เชื่อมโยงจากรายการจำนำ</div>
+            </div>
+            <span class="remove-btn" onclick="removeSelectedCustomer()"><i class="fas fa-times"></i></span>
+        `;
+        selectedCustomer.style.display = 'flex';
+        document.getElementById('customerSearch').value = '';
+    }
+}
+
+// Remove selected pawn
+function removeSelectedPawn() {
+    document.getElementById('pawnId').value = '';
+    document.getElementById('selectedPawn').style.display = 'none';
+    document.getElementById('pawnSearch').value = '';
+    document.getElementById('paymentAmount').placeholder = '0.00';
 }
 
 function closeAddPaymentModal() {
@@ -1596,51 +2262,22 @@ function closeAddPaymentModal() {
     if (modal) {
         modal.style.display = 'none';
         document.body.style.overflow = '';
+        // Hide suggestions
+        const customerSuggestions = document.getElementById('customerSuggestions');
+        const orderSuggestions = document.getElementById('orderSuggestions');
+        const pawnSuggestions = document.getElementById('pawnSuggestions');
+        if (customerSuggestions) customerSuggestions.classList.remove('show');
+        if (orderSuggestions) orderSuggestions.classList.remove('show');
+        if (pawnSuggestions) pawnSuggestions.classList.remove('show');
     }
 }
 
 function setupAddPaymentEvents() {
-    // Customer search autocomplete
-    const customerSearch = document.getElementById('customerSearch');
+    // Note: Customer and order search are now handled via inline oninput/onfocus
+    // No need for addEventListener here for those inputs
+    
     const customerSuggestions = document.getElementById('customerSuggestions');
-
-    customerSearch.addEventListener('input', (e) => {
-        clearTimeout(customerSearchTimeout);
-        const query = e.target.value.trim();
-
-        if (query.length < 2) {
-            customerSuggestions.classList.remove('show');
-            return;
-        }
-
-        customerSearchTimeout = setTimeout(() => {
-            searchCustomers(query);
-        }, 300);
-    });
-
-    customerSearch.addEventListener('focus', () => {
-        if (customerSearch.value.length >= 2) {
-            searchCustomers(customerSearch.value.trim());
-        }
-    });
-
-    // Order search autocomplete  
-    const orderSearch = document.getElementById('orderSearch');
     const orderSuggestions = document.getElementById('orderSuggestions');
-
-    orderSearch.addEventListener('input', (e) => {
-        clearTimeout(orderSearchTimeout);
-        const query = e.target.value.trim();
-
-        if (query.length < 2) {
-            orderSuggestions.classList.remove('show');
-            return;
-        }
-
-        orderSearchTimeout = setTimeout(() => {
-            searchOrders(query);
-        }, 300);
-    });
 
     // Payment type change - update reference label
     const paymentTypeInputs = document.querySelectorAll('input[name="payment_type"]');
@@ -1660,14 +2297,15 @@ function setupAddPaymentEvents() {
     // Close suggestions when clicking outside
     document.addEventListener('click', (e) => {
         if (!e.target.closest('.autocomplete-wrapper')) {
-            customerSuggestions.classList.remove('show');
-            orderSuggestions.classList.remove('show');
+            if (customerSuggestions) customerSuggestions.classList.remove('show');
+            if (orderSuggestions) orderSuggestions.classList.remove('show');
         }
     });
 }
 
 async function searchCustomers(query) {
     const suggestions = document.getElementById('customerSuggestions');
+    const inputEl = document.getElementById('customerSearch');
 
     try {
         // Search customer profiles
@@ -1690,9 +2328,12 @@ async function searchCustomers(query) {
                     </div>
                 </div>
             `).join('');
+            // Position fixed dropdown to escape modal overflow
+            positionFixedDropdown(inputEl, suggestions);
             suggestions.classList.add('show');
         } else {
             suggestions.innerHTML = '<div class="autocomplete-item"><em>ไม่พบลูกค้า</em></div>';
+            positionFixedDropdown(inputEl, suggestions);
             suggestions.classList.add('show');
         }
     } catch (error) {
@@ -1737,6 +2378,7 @@ function removeSelectedCustomer() {
 
 async function searchOrders(query) {
     const suggestions = document.getElementById('orderSuggestions');
+    const inputEl = document.getElementById('orderSearch');
     const paymentType = document.querySelector('input[name="payment_type"]:checked')?.value || 'full';
 
     try {
@@ -1766,9 +2408,11 @@ async function searchOrders(query) {
                     </div>
                 </div>
             `).join('');
+            positionFixedDropdown(inputEl, suggestions);
             suggestions.classList.add('show');
         } else {
             suggestions.innerHTML = '<div class="autocomplete-item"><em>ไม่พบรายการ</em></div>';
+            positionFixedDropdown(inputEl, suggestions);
             suggestions.classList.add('show');
         }
     } catch (error) {
@@ -1814,8 +2458,24 @@ function removeSelectedOrder() {
 }
 
 function updateReferenceFieldLabel(paymentType) {
+    const orderGroup = document.getElementById('orderSearchGroup');
+    const pawnGroup = document.getElementById('pawnSearchGroup');
     const label = document.querySelector('#orderSearchGroup .form-label');
     const input = document.getElementById('orderSearch');
+
+    // Show/hide pawn search for deposit_interest or pawn_redemption
+    if (paymentType === 'deposit_interest' || paymentType === 'pawn_redemption') {
+        // Show pawn search, hide order search
+        if (orderGroup) orderGroup.style.display = 'none';
+        if (pawnGroup) pawnGroup.style.display = 'block';
+        removeSelectedOrder();
+        return;
+    } else {
+        // Show order search, hide pawn search
+        if (orderGroup) orderGroup.style.display = 'block';
+        if (pawnGroup) pawnGroup.style.display = 'none';
+        removeSelectedPawn();
+    }
 
     switch (paymentType) {
         case 'installment':
@@ -1974,6 +2634,7 @@ function escapeHtml(text) {
 let repairSearchTimeout = null;
 
 async function searchRepairsForPayment(paymentId, query) {
+    const inputEl = document.getElementById(`repairSearchModal-${paymentId}`);
     const suggestionsEl = document.getElementById(`repairSuggestionsModal-${paymentId}`);
     if (!suggestionsEl) return;
 
@@ -2007,9 +2668,12 @@ async function searchRepairsForPayment(paymentId, query) {
                         </div>
                     </div>
                 `).join('');
+                // Position dropdown using fixed positioning to escape overflow:hidden
+                positionFixedDropdown(inputEl, suggestionsEl);
                 suggestionsEl.classList.add('show');
             } else {
                 suggestionsEl.innerHTML = '<div class="autocomplete-item"><span style="color:#9ca3af;">ไม่พบงานซ่อม</span></div>';
+                positionFixedDropdown(inputEl, suggestionsEl);
                 suggestionsEl.classList.add('show');
             }
         } catch (e) {
@@ -2096,6 +2760,143 @@ async function unlinkRepairFromPayment(paymentId) {
         }
     } catch (e) {
         console.error('Error unlinking repair:', e);
+        showToast('❌ เกิดข้อผิดพลาด', 'error');
+    }
+}
+
+// ============================================
+// ✅ PAWN SEARCH & LINK FUNCTIONS
+// ============================================
+
+// pawnSearchTimeout is declared at top of ADD PAYMENT section
+
+async function searchPawnsForPayment(paymentId, query) {
+    const inputEl = document.getElementById(`pawnSearchModal-${paymentId}`);
+    const suggestionsEl = document.getElementById(`pawnSuggestionsModal-${paymentId}`);
+    if (!suggestionsEl) return;
+
+    // Clear previous timeout
+    if (pawnSearchTimeout) clearTimeout(pawnSearchTimeout);
+
+    if (!query || query.length < 1) {
+        suggestionsEl.classList.remove('show');
+        suggestionsEl.innerHTML = '';
+        return;
+    }
+
+    // Debounce
+    pawnSearchTimeout = setTimeout(async () => {
+        try {
+            const url = (typeof API_ENDPOINTS !== 'undefined' && API_ENDPOINTS.CUSTOMER_PAWNS)
+                ? `${API_ENDPOINTS.CUSTOMER_PAWNS}?action=search&q=${encodeURIComponent(query)}&limit=10`
+                : `/api/customer/pawns?action=search&q=${encodeURIComponent(query)}&limit=10`;
+
+            const result = await apiCall(url);
+
+            if (result && result.success && result.data && result.data.length > 0) {
+                suggestionsEl.innerHTML = result.data.map(pawn => `
+                    <div class="autocomplete-item" onclick="selectPawnForPayment(${paymentId}, ${pawn.id}, '${escapeHtml(pawn.pawn_no)}', '${escapeHtml(pawn.item_name || '')}')">
+                        <div class="autocomplete-item-avatar" style="background:linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);color:white;">
+                            <i class="fas fa-gem"></i>
+                        </div>
+                        <div class="autocomplete-item-info">
+                            <div class="autocomplete-item-name">${pawn.pawn_no}</div>
+                            <div class="autocomplete-item-meta">${pawn.item_name || 'สินค้าจำนำ'} - ฿${formatNumber(pawn.loan_amount || 0)}</div>
+                        </div>
+                    </div>
+                `).join('');
+                // Position dropdown using fixed positioning to escape overflow:hidden
+                positionFixedDropdown(inputEl, suggestionsEl);
+                suggestionsEl.classList.add('show');
+            } else {
+                suggestionsEl.innerHTML = '<div class="autocomplete-item"><span style="color:#9ca3af;">ไม่พบรายการจำนำ</span></div>';
+                positionFixedDropdown(inputEl, suggestionsEl);
+                suggestionsEl.classList.add('show');
+            }
+        } catch (e) {
+            console.error('Error searching pawns:', e);
+        }
+    }, 300);
+}
+
+function selectPawnForPayment(paymentId, pawnId, pawnNo, itemName) {
+    const inputEl = document.getElementById(`pawnSearchModal-${paymentId}`);
+    const hiddenEl = document.getElementById(`selectedPawnId-${paymentId}`);
+    const btnEl = document.getElementById(`linkPawnBtn-${paymentId}`);
+    const suggestionsEl = document.getElementById(`pawnSuggestionsModal-${paymentId}`);
+
+    if (inputEl) inputEl.value = `${pawnNo} - ${itemName || 'สินค้าจำนำ'}`;
+    if (hiddenEl) hiddenEl.value = pawnId;
+    if (btnEl) btnEl.disabled = false;
+    if (suggestionsEl) {
+        suggestionsEl.classList.remove('show');
+        suggestionsEl.innerHTML = '';
+    }
+}
+
+async function linkPawnToPayment(paymentId) {
+    const hiddenEl = document.getElementById(`selectedPawnId-${paymentId}`);
+    const pawnId = hiddenEl ? hiddenEl.value : null;
+
+    if (!pawnId) {
+        showToast('⚠️ กรุณาเลือกรายการจำนำก่อน', 'error');
+        return;
+    }
+
+    showToast('กำลังเชื่อมโยง...', 'info');
+
+    try {
+        const url = (typeof API_ENDPOINTS !== 'undefined' && API_ENDPOINTS.CUSTOMER_PAYMENTS)
+            ? `${API_ENDPOINTS.CUSTOMER_PAYMENTS}?action=link_pawn`
+            : `/api/customer/payments.php?action=link_pawn`;
+
+        const result = await apiCall(url, {
+            method: 'POST',
+            body: JSON.stringify({
+                payment_id: paymentId,
+                pawn_id: parseInt(pawnId)
+            })
+        });
+
+        if (result && result.success) {
+            showToast('✅ ' + (result.message || 'เชื่อมโยงจำนำเรียบร้อย'), 'success');
+            await loadPayments();
+            // Reload the modal
+            viewPaymentDetail(paymentId);
+        } else {
+            showToast('❌ ' + (result.message || 'ไม่สามารถเชื่อมโยงได้'), 'error');
+        }
+    } catch (e) {
+        console.error('Error linking pawn:', e);
+        showToast('❌ เกิดข้อผิดพลาด', 'error');
+    }
+}
+
+async function unlinkPawnFromPayment(paymentId) {
+    if (!confirm('ต้องการยกเลิกการเชื่อมโยงกับจำนำนี้ใช่หรือไม่?')) return;
+
+    showToast('กำลังยกเลิก...', 'info');
+
+    try {
+        const url = (typeof API_ENDPOINTS !== 'undefined' && API_ENDPOINTS.CUSTOMER_PAYMENTS)
+            ? `${API_ENDPOINTS.CUSTOMER_PAYMENTS}?action=unlink_pawn`
+            : `/api/customer/payments.php?action=unlink_pawn`;
+
+        const result = await apiCall(url, {
+            method: 'POST',
+            body: JSON.stringify({ payment_id: paymentId })
+        });
+
+        if (result && result.success) {
+            showToast('✅ ' + (result.message || 'ยกเลิกการเชื่อมโยงเรียบร้อย'), 'success');
+            await loadPayments();
+            // Reload the modal
+            viewPaymentDetail(paymentId);
+        } else {
+            showToast('❌ ' + (result.message || 'ไม่สามารถยกเลิกได้'), 'error');
+        }
+    } catch (e) {
+        console.error('Error unlinking pawn:', e);
         showToast('❌ เกิดข้อผิดพลาด', 'error');
     }
 }

@@ -19,9 +19,14 @@ include('../includes/customer/sidebar.php');
                 <h1 class="page-title">💎 จำนำ</h1>
                 <p class="page-subtitle">รายการจำนำและต่อดอกเบี้ย</p>
             </div>
-            <button class="btn btn-primary" onclick="openCreateModal()">
-                <i class="fas fa-plus"></i> <span class="btn-text">รับจำนำใหม่</span>
-            </button>
+            <div class="btn-group" style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+                <button class="btn btn-warning" onclick="sendReminders()" title="ส่งแจ้งเตือนลูกค้าใกล้ครบกำหนด">
+                    <i class="fas fa-bell"></i> <span class="btn-text">ส่งแจ้งเตือน</span>
+                </button>
+                <button class="btn btn-primary" onclick="openCreateModal()">
+                    <i class="fas fa-plus"></i> <span class="btn-text">รับจำนำใหม่</span>
+                </button>
+            </div>
         </div>
     </div>
 
@@ -32,7 +37,12 @@ include('../includes/customer/sidebar.php');
             <div class="summary-value" id="activeCount">0</div>
             <div class="summary-label">กำลังดำเนินการ</div>
         </div>
-        <div class="summary-card summary-card-warning">
+        <div class="summary-card summary-card-upcoming" style="cursor:pointer;" onclick="filterDueSoon()">
+            <div class="summary-icon">⏰</div>
+            <div class="summary-value" id="dueSoonCount">0</div>
+            <div class="summary-label">ใกล้ครบกำหนด</div>
+        </div>
+        <div class="summary-card summary-card-warning" style="cursor:pointer;" onclick="filterOverdue()">
             <div class="summary-icon">⚠️</div>
             <div class="summary-value" id="overdueCount">0</div>
             <div class="summary-label">เกินกำหนด</div>
@@ -56,6 +66,7 @@ include('../includes/customer/sidebar.php');
                 <select id="statusFilter" class="form-select" onchange="loadPawns()">
                     <option value="">ทั้งหมด</option>
                     <option value="active">กำลังดำเนินการ</option>
+                    <option value="due_soon">ใกล้ครบกำหนด (1-3 วัน)</option>
                     <option value="overdue">เกินกำหนด</option>
                     <option value="redeemed">ไถ่ถอนแล้ว</option>
                 </select>
@@ -68,9 +79,11 @@ include('../includes/customer/sidebar.php');
                     <thead>
                         <tr>
                             <th>รหัสจำนำ</th>
+                            <th>ลูกค้า</th>
                             <th>สินค้า</th>
                             <th style="text-align:right;">เงินต้น</th>
                             <th style="text-align:right;">ดอกเบี้ย/เดือน</th>
+                            <th style="text-align:right;">จ่ายดอกแล้ว</th>
                             <th>ครบกำหนด</th>
                             <th>สถานะ</th>
                             <th></th>
@@ -78,7 +91,7 @@ include('../includes/customer/sidebar.php');
                     </thead>
                     <tbody id="pawnsTableBody">
                         <tr>
-                            <td colspan="7" style="text-align:center;padding:2rem;">
+                            <td colspan="8" style="text-align:center;padding:2rem;">
                                 <div class="spinner" style="margin:0 auto 1rem;"></div>
                                 กำลังโหลดข้อมูล...
                             </td>
@@ -100,61 +113,6 @@ include('../includes/customer/sidebar.php');
         </div>
     </div>
 </main>
-
-<!-- Interest Payment Modal -->
-<div class="modal-overlay" id="paymentModal">
-    <div class="modal-container">
-        <div class="modal-header">
-            <h3 class="modal-title">💳 ชำระดอกเบี้ย (ต่อดอก)</h3>
-            <button class="modal-close" onclick="closePaymentModal()">&times;</button>
-        </div>
-        <div class="modal-body">
-            <div id="pawnInfo"></div>
-
-            <div class="form-group">
-                <label class="form-label">จำนวนเดือนที่ต้องการต่อ</label>
-                <select id="monthsSelect" class="form-select" onchange="updateInterestAmount()">
-                    <option value="1">1 เดือน</option>
-                    <option value="2">2 เดือน</option>
-                    <option value="3">3 เดือน</option>
-                    <option value="6">6 เดือน</option>
-                </select>
-            </div>
-
-            <div class="interest-summary">
-                <div class="interest-row">
-                    <span>ดอกเบี้ยต่อเดือน</span>
-                    <span id="monthlyInterest">฿0</span>
-                </div>
-                <div class="interest-row total">
-                    <span>ยอดรวมที่ต้องชำระ</span>
-                    <span id="totalInterest">฿0</span>
-                </div>
-            </div>
-
-            <div class="bank-accounts" id="bankAccountsList"></div>
-
-            <div class="form-group">
-                <label class="form-label">แนบสลิปโอนเงิน</label>
-                <div class="upload-area" id="slipUploadArea">
-                    <input type="file" id="slipInput" accept="image/*" style="display:none;"
-                        onchange="handleSlipUpload(this)">
-                    <div class="upload-placeholder" onclick="document.getElementById('slipInput').click()">
-                        <i class="fas fa-cloud-upload-alt"></i>
-                        <p>คลิกเพื่ออัพโหลดสลิป</p>
-                    </div>
-                    <img id="slipPreview" style="display:none; max-width:100%; border-radius:8px;">
-                </div>
-            </div>
-        </div>
-        <div class="modal-footer">
-            <button class="btn btn-secondary" onclick="closePaymentModal()">ยกเลิก</button>
-            <button class="btn btn-primary" id="submitPaymentBtn" onclick="submitInterestPayment()" disabled>
-                <i class="fas fa-paper-plane"></i> ส่งสลิป
-            </button>
-        </div>
-    </div>
-</div>
 
 <!-- Detail Modal -->
 <div class="modal-overlay" id="detailModal">
@@ -202,25 +160,18 @@ include('../includes/customer/sidebar.php');
                 </div>
             </div>
 
-            <div class="bank-accounts" id="redeemBankAccounts"></div>
-
-            <div class="form-group">
-                <label class="form-label">แนบสลิปโอนเงิน</label>
-                <div class="upload-area" id="redeemSlipUploadArea">
-                    <input type="file" id="redeemSlipInput" accept="image/*" style="display:none;"
-                        onchange="handleRedeemSlipUpload(this)">
-                    <div class="upload-placeholder" onclick="document.getElementById('redeemSlipInput').click()">
-                        <i class="fas fa-cloud-upload-alt"></i>
-                        <p>คลิกเพื่ออัพโหลดสลิป</p>
-                    </div>
-                    <img id="redeemSlipPreview" style="display:none; max-width:100%; border-radius:8px;">
-                </div>
+            <div class="info-box"
+                style="background:#fef3c7; border:1px solid #fcd34d; border-radius:8px; padding:1rem; margin-top:1rem;">
+                <p style="margin:0; color:#92400e;">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    กรุณาติดต่อเจ้าของร้านเพื่อยืนยันยอดไถ่ถอนและดำเนินการชำระเงิน
+                </p>
             </div>
         </div>
         <div class="modal-footer">
-            <button class="btn btn-secondary" onclick="closeRedeemModal()">ยกเลิก</button>
-            <button class="btn btn-success" id="submitRedeemBtn" onclick="submitRedeem()" disabled>
-                <i class="fas fa-check"></i> ส่งสลิปไถ่ถอน
+            <button class="btn btn-secondary" onclick="closeRedeemModal()">ปิด</button>
+            <button class="btn btn-success" onclick="goToPaymentHistoryForRedeem()">
+                <i class="fas fa-credit-card"></i> สร้างรายการชำระเงิน
             </button>
         </div>
     </div>
@@ -267,7 +218,8 @@ include('../includes/customer/sidebar.php');
                 <!-- ✅ Order Selection Section (Hybrid A+) -->
                 <div class="detail-section" id="orderSelectionSection" style="display:none;">
                     <h4 class="detail-section-title">🛍️ เลือกสินค้าที่เคยซื้อ</h4>
-                    <p class="form-hint" style="margin-bottom:1rem;">💡 สินค้าที่สามารถนำมาจำนำได้ต้องเป็นสินค้าที่ซื้อจากร้านและชำระเงินแล้ว</p>
+                    <p class="form-hint" style="margin-bottom:1rem;">💡
+                        สินค้าที่สามารถนำมาจำนำได้ต้องเป็นสินค้าที่ซื้อจากร้านและชำระเงินแล้ว</p>
                     <div id="eligibleItemsLoading" class="loading-placeholder" style="display:none;">
                         <div class="spinner"></div>
                         <p>กำลังโหลดรายการสินค้า...</p>
@@ -355,12 +307,46 @@ include('../includes/customer/sidebar.php');
                             placeholder="หมายเหตุเพิ่มเติม"></textarea>
                     </div>
                 </div>
+
+                <!-- Bank Account & Push Message Section -->
+                <div class="detail-section" id="pawnPushMessageSection">
+                    <h4 class="detail-section-title">💬 แจ้งลูกค้า</h4>
+                    <div class="form-group">
+                        <label for="pawnBankAccount">บัญชีรับโอน</label>
+                        <select id="pawnBankAccount" name="bank_account" class="form-input"
+                            onchange="updatePawnMessageTemplate()">
+                            <option value="">-- เลือกบัญชี --</option>
+                            <option value="scb_1" data-bank="ไทยพาณิชย์" data-name="บจก เพชรวิบวับ"
+                                data-number="1653014242">ไทยพาณิชย์ - 1653014242</option>
+                            <option value="kbank_1" data-bank="กสิกรไทย" data-name="บจก.เฮงเฮงโฮลดิ้ง"
+                                data-number="8000029282">กสิกรไทย - 8000029282</option>
+                            <option value="bay_1" data-bank="กรุงศรี" data-name="บจก.เฮงเฮงโฮลดิ้ง"
+                                data-number="8000029282">กรุงศรี - 8000029282</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="pawnCustomerMessage">ข้อความแจ้งลูกค้า</label>
+                        <textarea id="pawnCustomerMessage" name="customer_message" class="form-input" rows="8"
+                            placeholder="ข้อความที่จะส่งให้ลูกค้า..."></textarea>
+                        <small class="form-hint">💡 เลือกบัญชีเพื่อ auto-fill ข้อความ หรือพิมพ์เอง</small>
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" name="send_pawn_message" id="sendPawnMessageCheckbox" checked
+                                onchange="updatePawnSubmitButtonText()">
+                            <span>📤 ส่งข้อความแจ้งลูกค้าทันที</span>
+                        </label>
+                        <small id="sendPawnMessageWarning" class="form-hint" style="color: #f59e0b; display: none;">
+                            ⚠️ ต้องเลือกลูกค้าจากระบบที่มี LINE/Facebook ก่อนส่งได้
+                        </small>
+                    </div>
+                </div>
             </form>
         </div>
         <div class="modal-footer">
             <button class="btn btn-secondary" onclick="closeCreateModal()">ยกเลิก</button>
-            <button class="btn btn-primary" onclick="submitCreatePawn()">
-                <i class="fas fa-save"></i> บันทึก
+            <button class="btn btn-primary" id="submitPawnBtn" onclick="submitCreatePawn()">
+                <i class="fas fa-save"></i> บันทึก & ส่งข้อความ
             </button>
         </div>
     </div>
@@ -502,6 +488,14 @@ include('../includes/customer/sidebar.php');
 
     .summary-card-info .summary-value {
         color: var(--color-info);
+    }
+
+    .summary-card-upcoming {
+        border-left: 4px solid #f97316;
+    }
+
+    .summary-card-upcoming .summary-value {
+        color: #f97316;
     }
 
     .filter-group {
@@ -1102,6 +1096,13 @@ include('../includes/customer/sidebar.php');
     }
 
     @media (max-width: 768px) {
+
+        /* Prevent horizontal overflow from sidebar */
+        html,
+        body {
+            overflow-x: hidden !important;
+        }
+
         .summary-grid {
             grid-template-columns: repeat(2, 1fr);
         }
@@ -1129,6 +1130,141 @@ include('../includes/customer/sidebar.php');
         .form-select {
             width: 100%;
         }
+
+        /* Hide button text on mobile, show only icon */
+        .btn-text {
+            display: none;
+        }
+
+        .page-header-content .btn {
+            min-width: 48px;
+            padding: 0.75rem;
+        }
+
+        /* ✅ Stack page header on mobile */
+        .page-header-content {
+            flex-direction: column !important;
+            align-items: stretch !important;
+            gap: 0.75rem;
+        }
+
+        .page-header-content>div:first-child {
+            text-align: left;
+        }
+
+        .page-header-content .btn.btn-primary {
+            width: 100% !important;
+            max-width: 100% !important;
+            justify-content: center;
+            padding: 0.75rem 1rem;
+        }
+
+        /* Show button text on mobile for primary action */
+        .page-header-content .btn.btn-primary .btn-text {
+            display: inline !important;
+        }
+
+        /* Full-screen modal on mobile */
+        .modal-overlay {
+            padding: 0 !important;
+            align-items: flex-start;
+        }
+
+        .modal-container,
+        .modal-container.modal-lg,
+        #detailModal .modal-container,
+        #createModal .modal-container,
+        #redeemModal .modal-container {
+            width: 100% !important;
+            max-width: 100% !important;
+            min-height: 100vh !important;
+            max-height: 100vh !important;
+            margin: 0 !important;
+            border-radius: 0 !important;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .modal-header {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            background: white;
+            flex-shrink: 0;
+        }
+
+        .modal-body {
+            flex: 1;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            padding: 1rem;
+        }
+
+        .modal-footer {
+            position: sticky;
+            bottom: 0;
+            z-index: 10;
+            background: white;
+            flex-shrink: 0;
+            flex-wrap: wrap;
+        }
+
+        .modal-footer .btn {
+            flex: 1;
+            min-width: 45%;
+        }
+
+        .modal-close {
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.75rem;
+        }
+
+        /* Adjust page header for mobile */
+        .page-header {
+            margin-top: 4rem;
+        }
+
+        .page-title {
+            font-size: 1.25rem;
+        }
+
+        /* Mobile card adjustments */
+        .mobile-card-actions {
+            flex-wrap: wrap;
+        }
+
+        .mobile-card-actions .btn {
+            font-size: 0.85rem;
+            padding: 0.5rem 0.75rem;
+        }
+    }
+
+    @media (max-width: 480px) {
+        .summary-grid {
+            grid-template-columns: 1fr 1fr;
+            gap: 0.5rem;
+        }
+
+        .summary-card {
+            padding: 0.75rem;
+        }
+
+        .summary-icon {
+            font-size: 1.5rem;
+        }
+
+        .summary-value {
+            font-size: 1.1rem;
+        }
+
+        .modal-footer .btn {
+            font-size: 0.85rem;
+            padding: 0.5rem 0.75rem;
+        }
     }
 </style>
 
@@ -1136,7 +1272,41 @@ include('../includes/customer/sidebar.php');
     let currentPage = 1;
     let selectedPawnId = null;
     let selectedPawnData = null;
-    let slipUrl = null;
+
+    // ========================================
+    // ✅ Modal Functions (must be defined early for onclick handlers)
+    // ========================================
+
+    function openCreateModal() {
+        document.getElementById('createPawnForm').reset();
+        if (typeof clearSelectedCustomer === 'function') clearSelectedCustomer();
+        if (typeof clearSelectedOrder === 'function') clearSelectedOrder();
+        // Set default due date (3 months from now)
+        const dueDate = new Date();
+        dueDate.setMonth(dueDate.getMonth() + 3);
+        const dueDateEl = document.getElementById('dueDate');
+        if (dueDateEl) dueDateEl.value = dueDate.toISOString().split('T')[0];
+        document.getElementById('createModal').classList.add('active');
+        // Reset message template
+        const msgEl = document.getElementById('pawnCustomerMessage');
+        if (msgEl) msgEl.value = '';
+        const bankEl = document.getElementById('pawnBankAccount');
+        if (bankEl) bankEl.value = '';
+    }
+
+    function closeCreateModal() {
+        document.getElementById('createModal').classList.remove('active');
+        if (typeof clearSelectedOrder === 'function') clearSelectedOrder();
+    }
+
+    function getInitials(name) {
+        if (!name) return '-';
+        const parts = name.split(' ');
+        if (parts.length >= 2) {
+            return parts[0].charAt(0) + parts[1].charAt(0);
+        }
+        return name.substring(0, 2).toUpperCase();
+    }
 
     document.addEventListener('DOMContentLoaded', function () {
         loadPawns();
@@ -1153,6 +1323,10 @@ include('../includes/customer/sidebar.php');
             const response = await fetch(url, {
                 headers: { 'Authorization': 'Bearer ' + getToken() }
             });
+
+            // Check for 401 Unauthorized (session expired)
+            if (!checkAuthResponse(response)) return;
+
             const data = await response.json();
 
             if (data.success) {
@@ -1173,34 +1347,51 @@ include('../includes/customer/sidebar.php');
         const mobileCards = document.getElementById('pawnsMobileCards');
 
         if (!pawns || pawns.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:2rem;color:#6b7280;">ไม่มีรายการจำนำ</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:2rem;color:#6b7280;">ไม่มีรายการจำนำ</td></tr>';
             mobileCards.innerHTML = '<div class="empty-state"><p>ไม่มีรายการจำนำ</p></div>';
             return;
         }
 
         // Desktop table
-        tbody.innerHTML = pawns.map(p => `
-        <tr ${p.is_overdue ? 'style="background:#fef2f2;"' : ''}>
+        tbody.innerHTML = pawns.map(p => {
+            // Determine row style based on status
+            const isDueSoon = p.days_until_due >= 1 && p.days_until_due <= 3 && p.status === 'active';
+            let rowStyle = '';
+            if (p.is_overdue) rowStyle = 'background:#fef2f2;'; // red tint
+            else if (isDueSoon) rowStyle = 'background:#fffbeb;'; // yellow tint
+            
+            // Due date display with indicator
+            let dueDateHtml = p.next_interest_due ? formatDate(p.next_interest_due) : '-';
+            if (p.days_until_due < 0) {
+                dueDateHtml += ` <span style="color:#dc2626;font-weight:600;">(เกิน ${Math.abs(p.days_until_due)} วัน)</span>`;
+            } else if (isDueSoon) {
+                dueDateHtml += ` <span style="color:#f97316;font-weight:600;">(อีก ${p.days_until_due} วัน)</span>`;
+            }
+            
+            return `
+        <tr style="${rowStyle}">
             <td><strong>${p.pawn_no || '-'}</strong></td>
-            <td>${p.item_description || '-'}</td>
+            <td>
+                <div style="display:flex;align-items:center;gap:0.5rem;">
+                    ${p.customer_avatar ? `<img src="${p.customer_avatar}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;">` : '<div style="width:32px;height:32px;border-radius:50%;background:#e5e7eb;display:flex;align-items:center;justify-content:center;"><i class="fas fa-user" style="color:#9ca3af;"></i></div>'}
+                    <span>${p.customer_display_name || p.customer_name || '-'}</span>
+                </div>
+            </td>
+            <td>${p.item_name || p.item_description || '-'}</td>
             <td style="text-align:right;">฿${formatNumber(p.principal_amount)}</td>
             <td style="text-align:right;">฿${formatNumber(p.monthly_interest)} (${p.interest_rate_percent}%)</td>
-            <td>${p.next_interest_due ? formatDate(p.next_interest_due) : '-'} ${p.days_until_due < 0 ? '<span style="color:#dc2626;">(เกิน ' + Math.abs(p.days_until_due) + ' วัน)</span>' : ''}</td>
+            <td style="text-align:right;">${p.total_interest_paid > 0 ? '<span style="color:#16a34a;">฿' + formatNumber(p.total_interest_paid) + '</span> <small>(' + p.interest_payment_count + ' ครั้ง)</small>' : '<span style="color:#9ca3af;">-</span>'}</td>
+            <td>${dueDateHtml}</td>
             <td><span class="status-badge status-${p.status}">${p.status_display}</span></td>
             <td>
                 <div class="action-buttons">
-                    <button class="btn btn-sm btn-ghost" onclick="viewDetail(${p.id})" title="ดูรายละเอียด">
-                        <i class="fas fa-eye"></i>
-                    </button>
-                    ${['active', 'overdue'].includes(p.status) ? `
-                        <button class="btn btn-sm btn-primary" onclick="openPaymentModal(${p.id})" title="ต่อดอก">
-                            <i class="fas fa-credit-card"></i>
-                        </button>
-                    ` : ''}
+                    <button class="btn btn-sm btn-ghost" onclick="viewDetail(${p.id})" title="ต่อดอก">
+                        <i class="fas fa-credit-card"></i>
+                    </button>           
                 </div>
             </td>
         </tr>
-    `).join('');
+    `}).join('');
 
         // Mobile cards
         mobileCards.innerHTML = pawns.map(p => `
@@ -1209,10 +1400,17 @@ include('../includes/customer/sidebar.php');
                 <span class="mobile-card-title">${p.pawn_no || '-'}</span>
                 <span class="status-badge status-${p.status}">${p.status_display}</span>
             </div>
+            <!-- Customer info -->
+            <div class="mobile-card-row" style="padding:0.5rem 0;border-bottom:1px solid #e5e7eb;margin-bottom:0.5rem;">
+                <div style="display:flex;align-items:center;gap:0.5rem;">
+                    ${p.customer_avatar ? `<img src="${p.customer_avatar}" style="width:28px;height:28px;border-radius:50%;object-fit:cover;">` : '<div style="width:28px;height:28px;border-radius:50%;background:#e5e7eb;display:flex;align-items:center;justify-content:center;"><i class="fas fa-user" style="color:#9ca3af;font-size:0.75rem;"></i></div>'}
+                    <span style="font-weight:500;">${p.customer_display_name || p.customer_name || '-'}</span>
+                </div>
+            </div>
             ${p.is_overdue ? '<div class="overdue-warning"><i class="fas fa-exclamation-triangle"></i> เกินกำหนดชำระ</div>' : ''}
             <div class="mobile-card-row">
                 <span class="mobile-card-label">สินค้า</span>
-                <span class="mobile-card-value">${p.item_description || '-'}</span>
+                <span class="mobile-card-value">${p.item_name || p.item_description || '-'}</span>
             </div>
             <div class="mobile-card-row">
                 <span class="mobile-card-label">เงินต้น</span>
@@ -1221,6 +1419,10 @@ include('../includes/customer/sidebar.php');
             <div class="mobile-card-row">
                 <span class="mobile-card-label">ดอกเบี้ย/เดือน</span>
                 <span class="mobile-card-value">฿${formatNumber(p.monthly_interest)} (${p.interest_rate_percent}%)</span>
+            </div>
+            <div class="mobile-card-row">
+                <span class="mobile-card-label">จ่ายดอกแล้ว</span>
+                <span class="mobile-card-value" style="${p.total_interest_paid > 0 ? 'color:#16a34a;' : 'color:#9ca3af;'}">${p.total_interest_paid > 0 ? '฿' + formatNumber(p.total_interest_paid) + ' (' + p.interest_payment_count + ' ครั้ง)' : '-'}</span>
             </div>
             <div class="mobile-card-row">
                 <span class="mobile-card-label">ครบกำหนด</span>
@@ -1244,8 +1446,49 @@ include('../includes/customer/sidebar.php');
         if (!summary) return;
         document.getElementById('activeCount').textContent = summary.active_count || 0;
         document.getElementById('overdueCount').textContent = summary.overdue_count || 0;
+        document.getElementById('dueSoonCount').textContent = summary.due_soon_count || 0;
         document.getElementById('totalPrincipal').textContent = '฿' + formatNumber(summary.total_principal || 0);
         document.getElementById('totalRedeemed').textContent = '฿' + formatNumber(summary.total_redeemed || 0);
+    }
+
+    // Filter shortcuts
+    function filterDueSoon() {
+        document.getElementById('statusFilter').value = 'due_soon';
+        loadPawns();
+    }
+
+    function filterOverdue() {
+        document.getElementById('statusFilter').value = 'overdue';
+        loadPawns();
+    }
+
+    // ✅ Manual send reminders to customers with due_soon/overdue pawns
+    async function sendReminders() {
+        if (!confirm('ต้องการส่งแจ้งเตือนผ่าน LINE/Facebook ไปยังลูกค้าที่ใกล้ครบกำหนด (1-3 วัน) หรือไม่?')) return;
+
+        try {
+            const response = await fetch('/api/admin/pawns.php?action=send-reminders', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + getToken()
+                }
+            });
+
+            if (!checkAuthResponse(response)) return;
+
+            const data = await response.json();
+
+            if (data.success) {
+                showSuccess(data.message);
+                loadPawns(); // Reload to update overdue status
+            } else {
+                showError(data.message || 'เกิดข้อผิดพลาด');
+            }
+        } catch (error) {
+            console.error('Error sending reminders:', error);
+            showError('เกิดข้อผิดพลาดในการส่งแจ้งเตือน');
+        }
     }
 
     function renderPagination(pagination) {
@@ -1282,6 +1525,16 @@ include('../includes/customer/sidebar.php');
 
                 let html = `
                 ${p.is_overdue ? '<div class="overdue-warning"><i class="fas fa-exclamation-triangle"></i> รายการนี้เกินกำหนดชำระดอกเบี้ย</div>' : ''}
+                
+                <!-- Customer Info -->
+                <div class="pawn-info-card" style="display:flex;align-items:center;gap:1rem;padding:1rem;background:#f0f9ff;border-radius:12px;margin-bottom:1rem;">
+                    ${p.customer_avatar ? `<img src="${p.customer_avatar}" style="width:48px;height:48px;border-radius:50%;object-fit:cover;border:2px solid #60a5fa;">` : '<div style="width:48px;height:48px;border-radius:50%;background:#e5e7eb;display:flex;align-items:center;justify-content:center;border:2px solid #60a5fa;"><i class="fas fa-user" style="color:#9ca3af;font-size:1.25rem;"></i></div>'}
+                    <div>
+                        <div style="font-weight:600;color:#1e40af;">${p.customer_display_name || p.customer_name || 'ไม่ระบุชื่อ'}</div>
+                        <div style="font-size:0.85rem;color:#6b7280;">${p.customer_platform ? '<i class="fab fa-' + (p.customer_platform === 'facebook' ? 'facebook' : p.customer_platform === 'line' ? 'line' : 'globe') + '" style="margin-right:4px;"></i>' + p.customer_platform : ''}</div>
+                    </div>
+                </div>
+                
                 <div class="pawn-info-card">
                     <div class="pawn-info-row">
                         <span class="pawn-info-label">รหัสจำนำ</span>
@@ -1289,7 +1542,7 @@ include('../includes/customer/sidebar.php');
                     </div>
                     <div class="pawn-info-row">
                         <span class="pawn-info-label">สินค้า</span>
-                        <span class="pawn-info-value">${p.item_description || '-'}</span>
+                        <span class="pawn-info-value">${p.item_name || p.item_description || '-'}</span>
                     </div>
                     <div class="pawn-info-row">
                         <span class="pawn-info-label">ราคาประเมิน</span>
@@ -1330,7 +1583,7 @@ include('../includes/customer/sidebar.php');
                                 </div>
                                 <div style="text-align:right;">
                                     <div class="payment-item-amount">฿${formatNumber(pay.amount)}</div>
-                                    <span class="status-badge status-${pay.status === 'verified' ? 'active' : pay.status === 'pending' ? 'pending' : 'overdue'}">${pay.status_display}</span>
+                                    <span class="status-badge status-${pay.verified_at ? 'active' : 'pending'}">${pay.status_display}</span>
                                 </div>
                             </div>
                         `).join('')}
@@ -1363,135 +1616,22 @@ include('../includes/customer/sidebar.php');
         document.getElementById('detailModal').classList.remove('active');
     }
 
-    async function openPaymentModal(id) {
-        selectedPawnId = id;
-        slipUrl = null;
-        document.getElementById('slipPreview').style.display = 'none';
-        document.querySelector('.upload-placeholder').style.display = 'block';
-        document.getElementById('submitPaymentBtn').disabled = true;
-        document.getElementById('monthsSelect').value = '1';
-
-        try {
-            const response = await fetch(`/api/customer/pawns?id=${id}`, {
-                headers: { 'Authorization': 'Bearer ' + getToken() }
-            });
-            const data = await response.json();
-
-            if (data.success) {
-                selectedPawnData = data.data;
-                const p = data.data;
-
-                document.getElementById('pawnInfo').innerHTML = `
-                <div class="pawn-info-card">
-                    <div class="pawn-info-row">
-                        <span class="pawn-info-label">รหัสจำนำ</span>
-                        <span class="pawn-info-value">${p.pawn_no}</span>
-                    </div>
-                    <div class="pawn-info-row">
-                        <span class="pawn-info-label">สินค้า</span>
-                        <span class="pawn-info-value">${p.item_description || '-'}</span>
-                    </div>
-                    <div class="pawn-info-row">
-                        <span class="pawn-info-label">เงินต้น</span>
-                        <span class="pawn-info-value">฿${formatNumber(p.principal_amount)}</span>
-                    </div>
-                </div>
-            `;
-
-                document.getElementById('monthlyInterest').textContent = '฿' + formatNumber(p.monthly_interest);
-                updateInterestAmount();
-
-                // Bank accounts
-                const banks = data.bank_accounts || [];
-                document.getElementById('bankAccountsList').innerHTML = banks.length > 0 ?
-                    banks.map(b => `
-                    <div class="bank-account-card">
-                        <div class="bank-account-header">
-                            <span class="bank-account-name">${b.bank_name}</span>
-                        </div>
-                        <div class="bank-account-number">${b.account_number}</div>
-                        <div class="bank-account-holder">${b.account_name}</div>
-                    </div>
-                `).join('') : '<p style="color:#6b7280;">ไม่พบข้อมูลบัญชีธนาคาร</p>';
-
-                document.getElementById('paymentModal').classList.add('active');
-            }
-        } catch (error) {
-            console.error('Error:', error);
-            showError('ไม่สามารถโหลดข้อมูลได้');
+    function goToPaymentHistoryForRedeem() {
+        if (!selectedPawnData) {
+            showError('ไม่พบข้อมูลจำนำ');
+            return;
         }
-    }
-
-    function updateInterestAmount() {
-        if (!selectedPawnData) return;
-        const months = parseInt(document.getElementById('monthsSelect').value);
-        const total = selectedPawnData.monthly_interest * months;
-        document.getElementById('totalInterest').textContent = '฿' + formatNumber(total);
-    }
-
-    function closePaymentModal() {
-        document.getElementById('paymentModal').classList.remove('active');
-        selectedPawnId = null;
-        selectedPawnData = null;
-        slipUrl = null;
-    }
-
-    function handleSlipUpload(input) {
-        if (input.files && input.files[0]) {
-            const file = input.files[0];
-            const reader = new FileReader();
-
-            reader.onload = function (e) {
-                document.getElementById('slipPreview').src = e.target.result;
-                document.getElementById('slipPreview').style.display = 'block';
-                document.querySelector('.upload-placeholder').style.display = 'none';
-
-                slipUrl = e.target.result;
-                document.getElementById('submitPaymentBtn').disabled = false;
-            };
-
-            reader.readAsDataURL(file);
-        }
-    }
-
-    async function submitInterestPayment() {
-        if (!selectedPawnId || !slipUrl) return;
-
-        const months = parseInt(document.getElementById('monthsSelect').value);
-        const btn = document.getElementById('submitPaymentBtn');
-        btn.disabled = true;
-        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> กำลังส่ง...';
-
-        try {
-            const response = await fetch('/api/customer/pawns?action=pay-interest', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Bearer ' + getToken()
-                },
-                body: JSON.stringify({
-                    pawn_id: selectedPawnId,
-                    slip_image_url: slipUrl,
-                    months: months
-                })
-            });
-
-            const data = await response.json();
-
-            if (data.success) {
-                showSuccess(data.message || 'ส่งสลิปเรียบร้อยแล้ว');
-                closePaymentModal();
-                loadPawns(currentPage);
-            } else {
-                showError(data.message || 'ไม่สามารถส่งสลิปได้');
-            }
-        } catch (error) {
-            console.error('Error:', error);
-            showError('เกิดข้อผิดพลาด');
-        } finally {
-            btn.disabled = false;
-            btn.innerHTML = '<i class="fas fa-paper-plane"></i> ส่งสลิป';
-        }
+        const amount = parseFloat(selectedPawnData.redemption_amount) || 0;
+        const params = new URLSearchParams({
+            action: 'create',
+            type: 'pawn_redemption',
+            pawn_id: selectedPawnId,
+            pawn_no: selectedPawnData.pawn_no || '',
+            amount: amount,
+            description: `ไถ่ถอนจำนำ ${selectedPawnData.pawn_no || ''}`,
+            customer_profile_id: selectedPawnData.customer_profile_id || ''
+        });
+        window.location.href = '/payment-history.php?' + params.toString();
     }
 
     // Utility functions
@@ -1506,30 +1646,112 @@ include('../includes/customer/sidebar.php');
     }
 
     function getToken() {
-        return localStorage.getItem('auth_token') || '';
+        const token = localStorage.getItem('auth_token');
+        if (!token) {
+            // No token, redirect to login
+            console.warn('[Auth] No token found, redirecting to login...');
+            window.location.href = '/login.html';
+            return '';
+        }
+        return token;
+    }
+
+    // Check API response for 401 Unauthorized and redirect to login
+    function checkAuthResponse(response) {
+        if (response.status === 401) {
+            console.warn('[Auth] Session expired (401), redirecting to login...');
+            localStorage.removeItem('auth_token');
+            localStorage.removeItem('user_data');
+            alert('Session หมดอายุ กรุณาเข้าสู่ระบบใหม่');
+            window.location.href = '/login.html';
+            return false;
+        }
+        return true;
     }
 
     function showError(msg) { alert(msg); }
     function showSuccess(msg) { alert(msg); }
 
-    // ========================================
-    // Create Modal Functions
-    // ========================================
+    // ✅ Highlight field with error
+    function highlightField(fieldId, hasError) {
+        const field = document.getElementById(fieldId);
+        if (!field) return;
 
-    function openCreateModal() {
-        document.getElementById('createPawnForm').reset();
-        clearSelectedCustomer();
-        clearSelectedOrder();
-        // Set default due date (3 months from now)
-        const dueDate = new Date();
-        dueDate.setMonth(dueDate.getMonth() + 3);
-        document.getElementById('dueDate').value = dueDate.toISOString().split('T')[0];
-        document.getElementById('createModal').classList.add('active');
+        if (hasError) {
+            field.style.borderColor = '#ef4444';
+            field.style.boxShadow = '0 0 0 3px rgba(239, 68, 68, 0.2)';
+        } else {
+            field.style.borderColor = '';
+            field.style.boxShadow = '';
+        }
     }
 
-    function closeCreateModal() {
-        document.getElementById('createModal').classList.remove('active');
-        clearSelectedOrder();
+    // ========================================
+    // ✅ Bank Account & Push Message Functions
+    // ========================================
+
+    function updatePawnMessageTemplate() {
+        const select = document.getElementById('pawnBankAccount');
+        const textarea = document.getElementById('pawnCustomerMessage');
+        const customerName = document.getElementById('selectedCustomerName')?.textContent?.trim() || 'ลูกค้า';
+        const loanAmount = document.getElementById('loanAmount')?.value || '0';
+        const interestRate = document.getElementById('interestRate')?.value || '2';
+        const itemName = document.getElementById('itemName')?.value?.trim() || 'สินค้าจำนำ';
+        const periodMonths = document.getElementById('pawnPeriod')?.value || '3';
+
+        if (!select || !textarea) return;
+
+        const selectedOption = select.options[select.selectedIndex];
+        if (!selectedOption || !selectedOption.value) {
+            textarea.value = '';
+            textarea.placeholder = 'เลือกบัญชีเพื่อสร้างข้อความอัตโนมัติ...';
+            return;
+        }
+
+        const bankName = selectedOption.dataset.bank || '';
+        const accountName = selectedOption.dataset.name || '';
+        const accountNumber = selectedOption.dataset.number || '';
+        const loanNum = parseFloat(loanAmount) || 0;
+        const monthlyInterest = Math.round(loanNum * (parseFloat(interestRate) || 2) / 100);
+        const dueDate = document.getElementById('dueDate')?.value || '';
+        const dueDateFormatted = dueDate ? new Date(dueDate).toLocaleDateString('th-TH', { day: 'numeric', month: 'long', year: 'numeric' }) : '';
+
+        const template = `💎 รับจำนำเรียบร้อยแล้วค่ะ
+
+ขอบพระคุณค่ะ คุณ${customerName} 🙏
+ที่ไว้วางใจใช้บริการรับจำนำจากร้าน ฮ.เฮง เฮง
+
+📋 รหัส: {{PAWN_NUMBER}}
+📦 สินค้า: ${itemName}
+💰 เงินต้น: ${formatNumber(loanNum)} บาท
+📊 ดอกเบี้ย: ${interestRate}% ต่อเดือน (${formatNumber(monthlyInterest)} บาท/เดือน)
+📅 ครบกำหนด: ${dueDateFormatted}
+
+🔔 กำหนดชำระดอกเบี้ย
+▫️ ทุกวันที่ ${new Date(dueDate).getDate() || 1} ของเดือน
+▫️ ยอดดอก: ${formatNumber(monthlyInterest)} บาท/เดือน
+
+🏦 ข้อมูลการโอนเงิน
+ธนาคาร: ${bankName}
+ชื่อบัญชี: ${accountName}
+เลขบัญชี: ${accountNumber}
+
+💳 เมื่อชำระแล้ว ส่งสลิปมาได้เลยค่ะ 📷
+❓ หากมีข้อสงสัย สอบถามได้ตลอดนะคะ 🙏`;
+
+        textarea.value = template;
+    }
+
+    function updatePawnSubmitButtonText() {
+        const checkbox = document.getElementById('sendPawnMessageCheckbox');
+        const btn = document.getElementById('submitPawnBtn');
+        if (checkbox && btn) {
+            if (checkbox.checked) {
+                btn.innerHTML = '<i class="fas fa-save"></i> บันทึก & ส่งข้อความ';
+            } else {
+                btn.innerHTML = '<i class="fas fa-save"></i> บันทึก';
+            }
+        }
     }
 
     // ========================================
@@ -1604,7 +1826,7 @@ include('../includes/customer/sidebar.php');
         // Auto-fill item details
         document.getElementById('itemName').value = selectedOrderData.product_code || '';
         document.getElementById('loanAmount').value = Math.round(selectedOrderData.suggested_loan);
-        
+
         // Auto-calculate due date based on business rules (30 days)
         const dueDate = new Date();
         dueDate.setDate(dueDate.getDate() + 30);
@@ -1621,8 +1843,6 @@ include('../includes/customer/sidebar.php');
     }
 
     // ✅ Redeem Functions (ไถ่ถอน)
-    let redeemSlipUrl = null;
-
     function openRedeemModal() {
         if (!selectedPawnData) {
             showError('กรุณาเลือกรายการจำนำก่อน');
@@ -1640,14 +1860,19 @@ include('../includes/customer/sidebar.php');
         document.getElementById('redeemInterest').textContent = '฿' + formatNumber(interest);
         document.getElementById('redeemTotal').textContent = '฿' + formatNumber(total);
 
-        // Clear slip
-        redeemSlipUrl = null;
-        document.getElementById('redeemSlipPreview').style.display = 'none';
-        document.getElementById('redeemSlipInput').value = '';
-        document.getElementById('submitRedeemBtn').disabled = true;
-
-        // Load bank accounts
-        loadBankAccountsForRedeem();
+        // Show pawn info
+        document.getElementById('redeemInfo').innerHTML = `
+            <div class="pawn-info-card">
+                <div class="pawn-info-row">
+                    <span class="pawn-info-label">รหัสจำนำ</span>
+                    <span class="pawn-info-value">${p.pawn_no}</span>
+                </div>
+                <div class="pawn-info-row">
+                    <span class="pawn-info-label">สินค้า</span>
+                    <span class="pawn-info-value">${p.item_description || '-'}</span>
+                </div>
+            </div>
+        `;
 
         console.log('[PAWNS] Opening redeem modal:', { pawn_id: selectedPawnId, principal, interest, total });
 
@@ -1658,100 +1883,27 @@ include('../includes/customer/sidebar.php');
         document.getElementById('redeemModal').classList.remove('active');
     }
 
-    async function loadBankAccountsForRedeem() {
-        try {
-            const res = await fetch('/api/customer/bank-accounts', {
-                headers: { 'Authorization': 'Bearer ' + getToken() }
-            });
-            const data = await res.json();
-            if (data.success && data.data) {
-                const html = data.data.map(acc => `
-                    <div class="bank-account-card">
-                        <div class="bank-account-header">
-                            <img src="${PATH.image('banks/' + (acc.bank_code?.toLowerCase() || 'default') + '.png')}" alt="${acc.bank_name}" style="height:24px;" onerror="this.style.display='none'">
-                            <span class="bank-account-name">${acc.bank_name}</span>
-                        </div>
-                        <div class="bank-account-number">${acc.account_number}</div>
-                        <div class="bank-account-holder">${acc.account_name}</div>
-                    </div>
-                `).join('');
-                document.getElementById('redeemBankAccounts').innerHTML = html;
-            }
-        } catch (e) {
-            console.error('Error loading bank accounts:', e);
-        }
-    }
-
-    async function handleRedeemSlipUpload(input) {
-        if (!input.files || !input.files[0]) return;
-
-        const file = input.files[0];
-        const formData = new FormData();
-        formData.append('slip', file);
-
-        try {
-            const res = await fetch('/api/customer/upload-slip', {
-                method: 'POST',
-                headers: { 'Authorization': 'Bearer ' + getToken() },
-                body: formData
-            });
-            const data = await res.json();
-
-            if (data.success) {
-                redeemSlipUrl = data.url;
-                const preview = document.getElementById('redeemSlipPreview');
-                preview.src = data.url;
-                preview.style.display = 'block';
-                document.getElementById('submitRedeemBtn').disabled = false;
-                console.log('[PAWNS] Redeem slip uploaded:', data.url);
-            } else {
-                showError(data.message || 'อัพโหลดสลิปไม่สำเร็จ');
-            }
-        } catch (e) {
-            console.error('Upload error:', e);
-            showError('เกิดข้อผิดพลาดในการอัพโหลด');
-        }
-    }
-
-    async function submitRedeem() {
-        if (!redeemSlipUrl || !selectedPawnId) {
-            showError('กรุณาอัพโหลดสลิปก่อน');
+    function payFromDetail() {
+        if (!selectedPawnId || !selectedPawnData) {
+            showError('ไม่พบข้อมูลจำนำ');
             return;
         }
 
-        try {
-            const res = await fetch('/api/customer/pawns?action=redeem', {
-                method: 'POST',
-                headers: {
-                    'Authorization': 'Bearer ' + getToken(),
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    pawn_id: selectedPawnId,
-                    slip_url: redeemSlipUrl,
-                    amount: selectedPawnData.redemption_amount
-                })
-            });
-            const data = await res.json();
+        const p = selectedPawnData;
+        const amount = p.monthly_interest || 0;
 
-            if (data.success) {
-                showSuccess('ส่งคำขอไถ่ถอนเรียบร้อย รอ Admin ตรวจสอบ');
-                closeRedeemModal();
-                closeDetailModal();
-                loadPawns();
-            } else {
-                showError(data.message || 'ไม่สามารถส่งคำขอได้');
-            }
-        } catch (e) {
-            console.error('Redeem error:', e);
-            showError('เกิดข้อผิดพลาด');
-        }
-    }
+        // Go directly to payment-history with all auto-complete params
+        const params = new URLSearchParams({
+            action: 'create',
+            type: 'deposit_interest',
+            pawn_id: selectedPawnId,
+            pawn_no: p.pawn_no || '',
+            amount: amount,
+            description: `ต่อดอกจำนำ ${p.pawn_no || ''} (1 เดือน)`,
+            customer_profile_id: p.customer_profile_id || ''
+        });
 
-    function payFromDetail() {
-        if (!selectedPawnId) return;
-        closeDetailModal();
-        openPaymentModal(selectedPawnId);
+        window.location.href = '/payment-history.php?' + params.toString();
     }
 
     let searchTimeout;
@@ -1774,7 +1926,7 @@ include('../includes/customer/sidebar.php');
 
                 if (data.success && data.data && data.data.length > 0) {
                     resultsDiv.innerHTML = data.data.map(c => `
-                    <div class="autocomplete-item" onclick='selectCustomer(${JSON.stringify(c).replace(/'/g, "\\'")})''>
+                    <div class="autocomplete-item" onclick='selectCustomer(${JSON.stringify(c).replace(/'/g, "\\'")})'>
                         <div class="autocomplete-item-avatar">
                             ${c.avatar_url || c.profile_picture ?
                             `<img src="${c.avatar_url || c.profile_picture}" alt="">` :
@@ -1835,15 +1987,6 @@ include('../includes/customer/sidebar.php');
         clearSelectedOrder();
     }
 
-    function getInitials(name) {
-        if (!name) return '-';
-        const parts = name.split(' ');
-        if (parts.length >= 2) {
-            return parts[0].charAt(0) + parts[1].charAt(0);
-        }
-        return name.substring(0, 2).toUpperCase();
-    }
-
     async function submitCreatePawn() {
         const customerId = document.getElementById('selectedCustomerId').value;
         const itemType = document.getElementById('itemType').value;
@@ -1857,29 +2000,59 @@ include('../includes/customer/sidebar.php');
         const dueDate = document.getElementById('dueDate').value;
         const notes = document.getElementById('pawnNotes').value;
 
+        // ✅ Push message fields
+        const bankAccount = document.getElementById('pawnBankAccount').value;
+        const customerMessage = document.getElementById('pawnCustomerMessage').value;
+        const sendMessage = document.getElementById('sendPawnMessageCheckbox').checked;
+
+        // ✅ Enhanced Validation with clear error messages
+        const errors = [];
+
         if (!customerId) {
-            showError('กรุณาเลือกลูกค้า');
-            return;
+            errors.push('❌ กรุณาเลือกลูกค้า');
+            highlightField('customerSearch', true);
+        } else {
+            highlightField('customerSearch', false);
         }
 
         // ✅ Hybrid A+: Check if order is selected (preferred) or manual entry
         const orderId = document.getElementById('selectedOrderId').value;
         const originalPrice = document.getElementById('selectedOriginalPrice').value;
 
-        if (!itemType && !orderId) {
-            showError('กรุณาเลือกสินค้าจาก order หรือกรอกข้อมูลสินค้า');
-            return;
+        // If no order selected, require manual fields
+        if (!orderId) {
+            if (!itemType) {
+                errors.push('❌ กรุณาเลือกประเภทสินค้า');
+                highlightField('itemType', true);
+            } else {
+                highlightField('itemType', false);
+            }
+
+            if (!itemName) {
+                errors.push('❌ กรุณาระบุชื่อสินค้า');
+                highlightField('itemName', true);
+            } else {
+                highlightField('itemName', false);
+            }
+
+            if (!loanAmount || parseFloat(loanAmount) <= 0) {
+                errors.push('❌ กรุณาระบุเงินต้น (ยอดเงินกู้)');
+                highlightField('loanAmount', true);
+            } else {
+                highlightField('loanAmount', false);
+            }
         }
 
-        if (!orderId && (!itemType || !itemName || !loanAmount)) {
-            showError('กรุณากรอกข้อมูลให้ครบ');
+        // Show all errors at once
+        if (errors.length > 0) {
+            showError('กรุณากรอกข้อมูลให้ครบถ้วน:\n\n' + errors.join('\n'));
             return;
         }
 
         try {
             // ✅ Use different endpoint based on order selection
             const endpoint = orderId ? '/api/customer/pawns?action=create' : '/api/admin/pawns.php';
-            
+
             const payload = orderId ? {
                 // Hybrid A+ - Create from order
                 order_id: orderId,
@@ -1887,7 +2060,11 @@ include('../includes/customer/sidebar.php');
                 appraised_value: originalPrice,
                 loan_percentage: 65,
                 interest_rate: interestRate || 2,
-                item_description: itemDescription || notes
+                item_description: itemDescription || notes,
+                // ✅ Push message fields
+                bank_account: bankAccount,
+                customer_message: customerMessage,
+                send_message: sendMessage
             } : {
                 // Traditional - Manual entry
                 customer_id: customerId,
@@ -1900,7 +2077,11 @@ include('../includes/customer/sidebar.php');
                 interest_rate: interestRate || 2,
                 period_months: periodMonths,
                 due_date: dueDate,
-                notes: notes
+                notes: notes,
+                // ✅ Push message fields
+                bank_account: bankAccount,
+                customer_message: customerMessage,
+                send_message: sendMessage
             };
 
             const response = await fetch(endpoint, {
@@ -1912,18 +2093,29 @@ include('../includes/customer/sidebar.php');
                 body: JSON.stringify(payload)
             });
 
+            // ✅ Debug: Log response status
+            console.log('[PAWNS] Response status:', response.status);
+
             const data = await response.json();
+            console.log('[PAWNS] Response data:', data);
 
             if (data.success) {
-                showSuccess(`บันทึกรายการจำนำสำเร็จ\nรหัส: ${data.data.pawn_no}\nครบกำหนด: ${data.data.due_date}`);
+                let successMsg = `บันทึกรายการจำนำสำเร็จ\nรหัส: ${data.data.pawn_no}\nครบกำหนด: ${data.data.due_date}`;
+                if (data.message_sent) {
+                    successMsg += '\n✅ ส่งข้อความแจ้งลูกค้าแล้ว';
+                }
+                showSuccess(successMsg);
                 closeCreateModal();
                 loadPawns(1);
             } else {
-                showError(data.message || 'เกิดข้อผิดพลาด');
+                // ✅ Show detailed error message
+                const errorMsg = data.message || 'เกิดข้อผิดพลาด';
+                console.error('[PAWNS] API Error:', errorMsg);
+                showError(errorMsg);
             }
         } catch (error) {
-            console.error('Error:', error);
-            showError('เกิดข้อผิดพลาดในการบันทึก');
+            console.error('[PAWNS] Error:', error);
+            showError('เกิดข้อผิดพลาดในการบันทึก: ' + error.message);
         }
     }
 

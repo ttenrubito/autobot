@@ -224,17 +224,19 @@ class RouterV4Handler implements BotHandlerInterface
                 }
             }
 
-            // ==================== �🛡️ GATEKEEPER LAYER ====================
+            // ==================== 🛡️ GATEKEEPER LAYER ====================
             // ป้องกันการตอบข้อความที่ไม่จำเป็น (คำลงท้าย, คำสั้นพิมพ์รัว)
             // + Message Buffer: เก็บข้อความที่ skip ไว้รวมบริบท
             
             if ($messageType === 'text' && !empty($text)) {
-                $gatekeeperResult = $this->shouldProcessMessage($text, $platformUserId, $channelId, $traceId);
+                $gatekeeperResult = $this->shouldProcessMessage($text, $platformUserId, $channelId, $traceId, $config);
                 if (!$gatekeeperResult['should_process']) {
-                    // 📝 เก็บข้อความลง buffer แทนที่จะทิ้ง
-                    $this->appendToMessageBuffer($text, $platformUserId, $channelId);
+                    // 📝 เก็บข้อความลง buffer แทนที่จะทิ้ง (ยกเว้น gibberish)
+                    if ($gatekeeperResult['reason'] !== 'gibberish') {
+                        $this->appendToMessageBuffer($text, $platformUserId, $channelId);
+                    }
                     
-                    Logger::info('[GATEKEEPER] Skipped message - buffered for context', [
+                    Logger::info('[GATEKEEPER] Skipped message', [
                         'trace_id' => $traceId,
                         'reason' => $gatekeeperResult['reason'],
                         'text_preview' => mb_substr($text, 0, 20, 'UTF-8'),
@@ -366,13 +368,23 @@ class RouterV4Handler implements BotHandlerInterface
                     return $this->makeResponse($checkoutResult['reply'], 'checkout_flow', $traceId, $checkoutResult);
                 } else {
                     // CheckoutService returned empty -> User is talking off-topic
-                    // Clear checkout state and let IntentService handle
-                    Logger::info('[ROUTER_V4] User talking off-topic, releasing from checkout', [
-                        'trace_id' => $traceId,
-                    ]);
-                    $this->checkoutService->clearCheckoutState($platformUserId, $channelId);
-                    $context['checkout_state'] = null;
-                    $context['pending_checkout'] = false;
+                    // ✅ FIX: Don't clear if step is 'ask_address' - might be address data
+                    $currentStep = $checkoutState['step'] ?? '';
+                    if ($currentStep === 'ask_address') {
+                        Logger::warning('[ROUTER_V4] CheckoutService returned empty at ask_address step, keeping state', [
+                            'trace_id' => $traceId,
+                            'text_preview' => mb_substr($text, 0, 50, 'UTF-8'),
+                        ]);
+                        // Don't clear - let IntentService handle but keep state for retry
+                    } else {
+                        Logger::info('[ROUTER_V4] User talking off-topic, releasing from checkout', [
+                            'trace_id' => $traceId,
+                            'step' => $currentStep,
+                        ]);
+                        $this->checkoutService->clearCheckoutState($platformUserId, $channelId);
+                        $context['checkout_state'] = null;
+                        $context['pending_checkout'] = false;
+                    }
                 }
             }
 
@@ -521,6 +533,22 @@ class RouterV4Handler implements BotHandlerInterface
                 return ['reply' => $result['message']];
 
             // ==================== PRODUCT SEARCH ====================
+            
+            case 'product_availability':  // "มีนาฬิกาสีแดงไหม", "มีสินค้าอะไรบ้าง"
+                // ✅ Extract keyword from text and route to product search
+                $text = $context['message']['text'] ?? '';
+                $keyword = $this->extractProductKeywords($text);
+                
+                if (!empty($keyword)) {
+                    // ✅ Has specific keyword - skip LLM rewrite, search directly
+                    return $this->handleProductSearch(['keyword' => $keyword, 'skip_llm_rewrite' => true], $config, $context);
+                }
+                
+                // ✅ NEW: Empty keyword (e.g., "มีไหม", "มีบ้างไหม") - use LLM to get context from chat history
+                Logger::info('[ROUTER_V4] product_availability: empty keyword, using LLM context', [
+                    'original_text' => $text
+                ]);
+                return $this->handleProductSearch(['keyword' => $text, 'skip_llm_rewrite' => false], $config, $context);
             
             case 'product_search':
                 return $this->handleProductSearch($params, $config, $context);
@@ -873,43 +901,53 @@ class RouterV4Handler implements BotHandlerInterface
         $code = $params['code'] ?? $params['product_code'] ?? null;
         $keyword = $params['keyword'] ?? null;
         $query = $code ?: $keyword;
+        $skipLlmRewrite = $params['skip_llm_rewrite'] ?? false;
 
         if (!$query) {
             return ['reply' => 'พิมพ์รหัสสินค้า หรือชื่อสินค้าที่สนใจได้เลยค่ะ 😊'];
         }
 
         // ✅ Step 1: Context-Aware Query Rewriting + Chit-chat Detection
-        $rewriteResult = $this->rewriteQueryWithContext($query, $config, $context);
-        
-        // ✅ Step 2: If chit-chat detected, fallback to LLM general response
-        if ($rewriteResult['is_chit_chat'] ?? false) {
-            Logger::info('[ROUTER_V4] Chit-chat detected, falling back to LLM', [
-                'original_query' => $query
-            ]);
+        // Skip if already confirmed as product search (e.g., from product_availability intent)
+        if (!$skipLlmRewrite) {
+            $rewriteResult = $this->rewriteQueryWithContext($query, $config, $context);
             
-            $llmResponse = $this->handleWithLLM($context, $config);
-            if ($llmResponse) {
-                return ['reply' => $llmResponse];
+            // ✅ Step 2: If chit-chat detected, fallback to LLM general response
+            if ($rewriteResult['is_chit_chat'] ?? false) {
+                Logger::info('[ROUTER_V4] Chit-chat detected, falling back to LLM', [
+                    'original_query' => $query
+                ]);
+                
+                $llmResponse = $this->handleWithLLM($context, $config);
+                if ($llmResponse) {
+                    return ['reply' => $llmResponse];
+                }
+                
+                // Fallback for greetings
+                if (preg_match('/(สวัสดี|หวัดดี|ดีค่ะ|ดีครับ)/u', $query)) {
+                    return ['reply' => 'สวัสดีค่ะ 😊 ยินดีต้อนรับเข้าสู่ร้านของเราค่ะ มีอะไรให้ช่วยคะ?'];
+                }
+                if (preg_match('/(ขอบคุณ|ขอบใจ|ขอบพระคุณ)/u', $query)) {
+                    return ['reply' => 'ยินดีค่ะ 🙏 มีอะไรสอบถามเพิ่มเติมได้เลยนะคะ'];
+                }
+                
+                return ['reply' => 'มีอะไรให้ช่วยคะ? พิมพ์รหัสหรือชื่อสินค้าที่สนใจได้เลยนะคะ 😊'];
             }
             
-            // Fallback for greetings
-            if (preg_match('/(สวัสดี|หวัดดี|ดีค่ะ|ดีครับ)/u', $query)) {
-                return ['reply' => 'สวัสดีค่ะ 😊 ยินดีต้อนรับเข้าสู่ร้านของเราค่ะ มีอะไรให้ช่วยคะ?'];
-            }
-            if (preg_match('/(ขอบคุณ|ขอบใจ|ขอบพระคุณ)/u', $query)) {
-                return ['reply' => 'ยินดีค่ะ 🙏 มีอะไรสอบถามเพิ่มเติมได้เลยนะคะ'];
-            }
+            // ✅ Step 3: Use rewritten query for product search
+            $searchQuery = $rewriteResult['rewritten'] ?? $query;
             
-            return ['reply' => 'มีอะไรให้ช่วยคะ? พิมพ์รหัสหรือชื่อสินค้าที่สนใจได้เลยนะคะ 😊'];
-        }
-        
-        // ✅ Step 3: Use rewritten query for product search
-        $searchQuery = $rewriteResult['rewritten'] ?? $query;
-        
-        if ($searchQuery !== $query) {
-            Logger::info('[ROUTER_V4] Query rewritten for context', [
-                'original' => $query,
-                'rewritten' => $searchQuery
+            if ($searchQuery !== $query) {
+                Logger::info('[ROUTER_V4] Query rewritten for context', [
+                    'original' => $query,
+                    'rewritten' => $searchQuery
+                ]);
+            }
+        } else {
+            // Skip LLM rewrite - use original query directly
+            $searchQuery = $query;
+            Logger::info('[ROUTER_V4] Skipping LLM rewrite (product_availability intent)', [
+                'query' => $query
             ]);
         }
 
@@ -1310,14 +1348,16 @@ class RouterV4Handler implements BotHandlerInterface
     // ==================== 🛡️ GATEKEEPER FUNCTIONS ====================
 
     /**
-     * 🛡️ Gatekeeper: ตรวจสอบว่าควรประมวลผลข้อความนี้หรือไม่
+     * 🛡️ Gatekeeper V2: Dynamic & Context-Aware Message Processing
      * 
-     * ใช้ "Information Density Score" approach:
-     * - คำนวณคะแนน 0.0-1.0 ว่าข้อความมีข้อมูลมากแค่ไหน
-     * - ถ้า score ต่ำ + บอทเพิ่งตอบไป → skip
-     * - ถ้า score สูง (มี pattern สำคัญ) → ต้อง process
+     * ปรับปรุงจาก V1:
+     * - ✅ Dynamic thresholds จาก config/conversation state
+     * - ✅ Context-aware: รู้ว่าบอทเพิ่งถามอะไร
+     * - ✅ Gibberish detection
+     * - ✅ Platform-specific timing
+     * - ✅ Conversation state awareness
      */
-    protected function shouldProcessMessage(string $text, string $platformUserId, int $channelId, string $traceId): array
+    protected function shouldProcessMessage(string $text, string $platformUserId, int $channelId, string $traceId, array $config = []): array
     {
         $text = trim($text);
         $textLen = mb_strlen($text, 'UTF-8');
@@ -1327,7 +1367,50 @@ class RouterV4Handler implements BotHandlerInterface
             return ['should_process' => false, 'reason' => 'empty'];
         }
 
-        // 1.5 ✅ Quick Reply Whitelist - ตัวเลข 1-9 หรือคำตอบสั้น → ผ่านทันที
+        // 2. 🎯 Get Gatekeeper Config (dynamic from bot config)
+        $gatekeeperCfg = $config['gatekeeper'] ?? [];
+        $skipThreshold = (float) ($gatekeeperCfg['skip_threshold'] ?? 0.3);
+        $replyWindowSec = (int) ($gatekeeperCfg['reply_window_seconds'] ?? 15);
+        $rapidTypingSec = (int) ($gatekeeperCfg['rapid_typing_seconds'] ?? 3);
+        $enableGibberishCheck = (bool) ($gatekeeperCfg['gibberish_detection'] ?? true);
+        
+        // Platform-specific adjustments
+        $platform = $this->chatService->getQuickState('platform', $platformUserId, $channelId)['value'] ?? 'line';
+        if ($platform === 'facebook') {
+            // Facebook users tend to type faster
+            $rapidTypingSec = max(2, $rapidTypingSec - 1);
+        }
+
+        // 3. 🔤 Gibberish Detection (random keyboard spam)
+        if ($enableGibberishCheck && $this->isGibberish($text)) {
+            Logger::debug('[GATEKEEPER] Gibberish detected, skipping', [
+                'trace_id' => $traceId,
+                'text' => $text,
+            ]);
+            return ['should_process' => false, 'reason' => 'gibberish'];
+        }
+
+        // 4. 🎯 Context-Aware: Check if bot is EXPECTING specific input
+        $awaitingInput = $this->chatService->getQuickState('awaiting_input', $platformUserId, $channelId);
+        if (!empty($awaitingInput['type'])) {
+            $inputType = $awaitingInput['type'];
+            $expiresAt = $awaitingInput['expires_at'] ?? 0;
+            
+            // ถ้ายังไม่หมดอายุ และ input ตรงกับที่รอ → ผ่านทันที
+            if (time() < $expiresAt) {
+                $matchesExpected = $this->matchesExpectedInput($text, $inputType);
+                if ($matchesExpected) {
+                    Logger::debug('[GATEKEEPER] Matches expected input, pass through', [
+                        'trace_id' => $traceId,
+                        'input_type' => $inputType,
+                        'text' => mb_substr($text, 0, 30, 'UTF-8'),
+                    ]);
+                    return ['should_process' => true, 'reason' => 'expected_input', 'info_score' => 1.0];
+                }
+            }
+        }
+
+        // 5. ✅ Quick Reply Whitelist - ตัวเลข 1-9 หรือคำตอบสั้น → ผ่านทันที
         if (preg_match('/^[1-9]$/', $text) || preg_match('/^(ใช่|ไม่|yes|no|ok|โอเค|ได้|ไม่ได้|ตกลง|ยกเลิก|cancel)$/iu', $text)) {
             Logger::debug('[GATEKEEPER] Quick reply whitelist, pass through', [
                 'trace_id' => $traceId,
@@ -1336,10 +1419,10 @@ class RouterV4Handler implements BotHandlerInterface
             return ['should_process' => true, 'reason' => 'quick_reply', 'info_score' => 1.0];
         }
 
-        // 2. 📊 Calculate Information Density Score (0.0 - 1.0)
-        $infoScore = $this->calculateInfoScore($text);
+        // 6. 📊 Calculate Information Density Score (0.0 - 1.0)
+        $infoScore = $this->calculateInfoScore($text, $config);
         
-        // 3. ⏱️ Get timing context
+        // 7. ⏱️ Get timing context
         $lastReply = $this->chatService->getQuickState('last_bot_reply_time', $platformUserId, $channelId);
         $lastReplyTime = $lastReply['time'] ?? 0;
         $timeSinceReply = time() - $lastReplyTime;
@@ -1348,35 +1431,42 @@ class RouterV4Handler implements BotHandlerInterface
         $lastMsgTime = $lastUserMsg['time'] ?? 0;
         $timeSinceLastMsg = time() - $lastMsgTime;
         
-        // 4. 🚫 Decision Logic
-        // Skip if: LOW info score AND (just replied OR rapid typing)
-        $skipThreshold = 0.3;
-        
+        // 8. 📈 Dynamic Threshold Adjustment
+        // ถ้าบอทเพิ่งถามคำถาม → ลด threshold (ยอมรับคำตอบสั้นมากขึ้น)
+        $lastBotAction = $this->chatService->getQuickState('last_bot_action', $platformUserId, $channelId);
+        $botAskedQuestion = ($lastBotAction['type'] ?? '') === 'question';
+        if ($botAskedQuestion && $timeSinceReply < 60) {
+            $skipThreshold = max(0.1, $skipThreshold - 0.15);
+        }
+
+        // 9. 🚫 Decision Logic with dynamic thresholds
         if ($infoScore < $skipThreshold) {
-            // Case A: บอทเพิ่งตอบไป < 15 วินาที และข้อความไม่มีสาระ
-            if ($timeSinceReply < 15 && $timeSinceReply >= 0) {
+            // Case A: บอทเพิ่งตอบไป < replyWindowSec และข้อความไม่มีสาระ
+            if ($timeSinceReply < $replyWindowSec && $timeSinceReply >= 0) {
                 Logger::debug('[GATEKEEPER] Low info after reply, skipping', [
                     'trace_id' => $traceId,
                     'text' => $text,
                     'info_score' => $infoScore,
+                    'threshold' => $skipThreshold,
                     'time_since_reply' => $timeSinceReply,
                 ]);
                 return ['should_process' => false, 'reason' => 'low_info_after_reply'];
             }
             
-            // Case B: พิมพ์รัว < 3 วินาที และข้อความไม่มีสาระ
-            if ($timeSinceLastMsg < 3 && $timeSinceLastMsg >= 0) {
+            // Case B: พิมพ์รัว < rapidTypingSec และข้อความไม่มีสาระ
+            if ($timeSinceLastMsg < $rapidTypingSec && $timeSinceLastMsg >= 0) {
                 Logger::debug('[GATEKEEPER] Low info rapid typing, skipping', [
                     'trace_id' => $traceId,
                     'text' => $text,
                     'info_score' => $infoScore,
+                    'threshold' => $skipThreshold,
                     'time_since_last' => $timeSinceLastMsg,
                 ]);
                 return ['should_process' => false, 'reason' => 'low_info_rapid'];
             }
         }
 
-        // 5. บันทึกข้อความล่าสุดไว้เช็คในครั้งต่อไป
+        // 10. บันทึกข้อความล่าสุดไว้เช็คในครั้งต่อไป
         $this->chatService->setQuickState('last_user_msg', [
             'text' => $text,
             'time' => time()
@@ -1386,86 +1476,243 @@ class RouterV4Handler implements BotHandlerInterface
     }
 
     /**
-     * 📊 Calculate Information Density Score (0.0 - 1.0)
+     * 🔤 Gibberish Detection - ตรวจจับข้อความไม่มีความหมาย
      * 
-     * วัดว่าข้อความมี "ข้อมูล" มากแค่ไหน:
-     * - 0.0 = ไม่มีสาระ (ครับ, ค่ะ, โอเค)
-     * - 0.5 = ปานกลาง (ข้อความสั้น, ไม่มี pattern ชัดเจน)
-     * - 1.0 = มีสาระมาก (รหัสสินค้า, คำถาม, action keyword)
+     * ตรวจจับ:
+     * - Random keyboard: asdfghjkl, qwerty, ฟหกดสา
+     * - Repeated characters: กกกกกก, 5555555
+     * - Random Unicode: ◕‿◕, ₪₪₪
      */
-    protected function calculateInfoScore(string $text): float
+    protected function isGibberish(string $text): bool
     {
         $text = trim($text);
         $len = mb_strlen($text, 'UTF-8');
         
+        // ข้อความสั้นมาก → ไม่เช็ค gibberish (อาจเป็น "ได้", "ok")
+        if ($len <= 3) {
+            return false;
+        }
+        
+        // 1. 🔁 Repeated single character (กกกกก, 55555)
+        if (preg_match('/^(.)\1{4,}$/u', $text)) {
+            return true;
+        }
+        
+        // 2. ⌨️ Keyboard row patterns (English)
+        $keyboardRows = [
+            'qwertyuiop',
+            'asdfghjkl',
+            'zxcvbnm',
+            'qwerty',
+            'asdf',
+            'zxcv',
+        ];
+        $lowerText = mb_strtolower($text, 'UTF-8');
+        foreach ($keyboardRows as $row) {
+            if (strpos($lowerText, $row) !== false) {
+                return true;
+            }
+        }
+        
+        // 3. ⌨️ Keyboard patterns (Thai) - ฟหกดส, ไำพะ
+        $thaiKeyboardRows = [
+            'ฟหกดสา',
+            'ไำพะ',
+            'ฟหกด',
+            'กดสา',
+        ];
+        foreach ($thaiKeyboardRows as $row) {
+            if (mb_strpos($text, $row) !== false) {
+                return true;
+            }
+        }
+        
+        // 4. 📊 High consonant ratio without vowels (Thai gibberish)
+        if ($len >= 5) {
+            $thaiConsonants = preg_match_all('/[ก-ฮ]/u', $text);
+            $thaiVowels = preg_match_all('/[ะาิีึืุูเแโใไำ]/u', $text);
+            
+            // ถ้ามี consonant ล้วนๆ > 5 ตัว และไม่มี vowel → gibberish
+            if ($thaiConsonants >= 5 && $thaiVowels === 0) {
+                return true;
+            }
+        }
+        
+        // 5. 🔢 Only repeated numbers (แต่ไม่ใช่เบอร์โทร/รหัส)
+        if (preg_match('/^(\d)\1{5,}$/', $text)) {
+            return true;
+        }
+        
+        return false;
+    }
+
+    /**
+     * 🎯 Check if text matches expected input type
+     */
+    protected function matchesExpectedInput(string $text, string $inputType): bool
+    {
+        switch ($inputType) {
+            case 'number':
+            case 'quantity':
+                return preg_match('/^\d+$/', $text);
+                
+            case 'yes_no':
+            case 'confirm':
+                return preg_match('/^(ใช่|ไม่|yes|no|ok|ได้|ไม่ได้|ตกลง|ยกเลิก|cancel|1|2)$/iu', $text);
+                
+            case 'selection':
+                return preg_match('/^[1-9]$/', $text);
+                
+            case 'phone':
+                return preg_match('/^0[0-9]{8,9}$/', preg_replace('/\D/', '', $text));
+                
+            case 'address':
+                return mb_strlen($text, 'UTF-8') >= 10;
+                
+            case 'name':
+                return mb_strlen($text, 'UTF-8') >= 2 && mb_strlen($text, 'UTF-8') <= 100;
+                
+            case 'product_code':
+                return preg_match('/^[A-Z0-9\-]{3,}$/i', $text);
+                
+            case 'any':
+                return mb_strlen(trim($text), 'UTF-8') > 0;
+                
+            default:
+                return false;
+        }
+    }
+
+    /**
+     * 📊 Calculate Information Density Score V2 (0.0 - 1.0)
+     * 
+     * ปรับปรุง:
+     * - ✅ Dynamic keywords จาก config
+     * - ✅ Better scoring algorithm
+     * - ✅ More patterns
+     */
+    protected function calculateInfoScore(string $text, array $config = []): float
+    {
+        $text = trim($text);
+        $len = mb_strlen($text, 'UTF-8');
+        
+        // === Early Exit: Pure filler words ===
+        if (preg_match('/^(ครับ|ค่ะ|คะ|คับ|นะคะ|นะครับ|จ้า|จ้ะ|จ๊า|ค่า|เค|โอเค|ok|okay|k|kk|อืม|อ่า|อา|เออ|yes|no|y|n)+[!?.\s]*$/iu', $text)) {
+            return 0.0;
+        }
+        
+        // === Early Exit: Single emoji or sticker ===
+        if (preg_match('/^[\p{So}\p{Cs}]+$/u', $text) || $text === '[sticker]') {
+            return 0.1;
+        }
+        
         // === Base Score from Length ===
-        // Normalize: 0 chars = 0.0, 20+ chars = 0.5 max from length alone
         $lengthScore = min($len / 40, 0.5);
         
-        // === Pattern Boosts (สิ่งที่บ่งบอกว่ามีข้อมูลสำคัญ) ===
-        $boosts = 0.0;
+        // === Get Custom Keywords from Config ===
+        $gatekeeperCfg = $config['gatekeeper'] ?? [];
+        $customActionKeywords = $gatekeeperCfg['action_keywords'] ?? [];
+        $customProductKeywords = $gatekeeperCfg['product_keywords'] ?? [];
+        $customBrandKeywords = $gatekeeperCfg['brand_keywords'] ?? [];
         
-        // 🏷️ Product code pattern (A-123, GLD-NCK-001, ROL-001)
+        // === Pattern Boosts ===
+        $boosts = 0.0;
+        $matchedPatterns = [];
+        
+        // 🏷️ Product code pattern (A-123, GLD-NCK-001)
         if (preg_match('/[A-Z]{2,5}[-]?[A-Z0-9]{2,}/i', $text)) {
             $boosts += 0.6;
+            $matchedPatterns[] = 'product_code';
         }
         
         // 🔢 Numbers with 3+ digits (price, phone, quantity)
         if (preg_match('/\d{3,}/', $text)) {
             $boosts += 0.4;
+            $matchedPatterns[] = 'number';
         }
         
         // ❓ Question indicators
-        if (preg_match('/(ไหม|มั้ย|เท่าไหร่|ยังไง|อะไร|ที่ไหน|เมื่อไหร่|กี่|how|what|where|when|\?)/iu', $text)) {
+        if (preg_match('/(ไหม|มั้ย|เท่าไหร่|ยังไง|อะไร|ที่ไหน|เมื่อไหร่|กี่|how|what|where|when|why|\?)/iu', $text)) {
             $boosts += 0.5;
+            $matchedPatterns[] = 'question';
         }
         
-        // 🛒 Action keywords at START of message (ลูกค้าต้องการทำอะไร)
-        // ✅ เพิ่ม สวัสดี, ทัก, hello, hi สำหรับการเปิดบทสนทนา
-        if (preg_match('/^(สนใจ|ซื้อ|เอา|ดู|ขอ|จอง|รับ|ต้องการ|อยาก|หา|เช็ค|ตรวจ|ถาม|สอบถาม|สวัสดี|ทัก|hello|hi)/iu', $text)) {
+        // 🛒 Action keywords (built-in + custom)
+        $defaultActionKeywords = 'สนใจ|ซื้อ|เอา|ดู|ขอ|จอง|รับ|ต้องการ|อยาก|หา|เช็ค|ตรวจ|ถาม|สอบถาม|สวัสดี|ทัก|hello|hi';
+        $actionPattern = $defaultActionKeywords;
+        if (!empty($customActionKeywords)) {
+            $actionPattern .= '|' . implode('|', array_map('preg_quote', $customActionKeywords));
+        }
+        if (preg_match('/^(' . $actionPattern . ')/iu', $text)) {
             $boosts += 0.6;
+            $matchedPatterns[] = 'action';
         }
         
-        // 💰 Business keywords anywhere (ผ่อน, โอน, มัดจำ, ราคา)
-        if (preg_match('/(ราคา|ผ่อน|โอน|มัดจำ|จ่าย|ชำระ|ส่ง|จัดส่ง|ที่อยู่|price|pay|ship)/iu', $text)) {
+        // 💰 Business keywords
+        if (preg_match('/(ราคา|ผ่อน|โอน|มัดจำ|จ่าย|ชำระ|ส่ง|จัดส่ง|ที่อยู่|price|pay|ship|delivery)/iu', $text)) {
             $boosts += 0.5;
+            $matchedPatterns[] = 'business';
         }
         
-        // 💎 Product category keywords (jewelry, watches, bags)
-        // "แหวนเพชรแท้", "นาฬิกา rolex", "กระเป๋า LV" → should trigger search
-        if (preg_match('/(นาฬิกา|แหวน|สร้อย|กำไล|จี้|ต่างหู|เพชร|ทอง|ทองคำ|พลอย|ไข่มุก|เงิน|กระเป๋า|watch|ring|necklace|bracelet|diamond|gold|bag)/iu', $text)) {
+        // 💎 Product category keywords (built-in + custom)
+        $defaultProductKeywords = 'นาฬิกา|แหวน|สร้อย|กำไล|จี้|ต่างหู|เพชร|ทอง|ทองคำ|พลอย|ไข่มุก|เงิน|กระเป๋า|watch|ring|necklace|bracelet|diamond|gold|bag';
+        $productPattern = $defaultProductKeywords;
+        if (!empty($customProductKeywords)) {
+            $productPattern .= '|' . implode('|', array_map('preg_quote', $customProductKeywords));
+        }
+        if (preg_match('/(' . $productPattern . ')/iu', $text)) {
             $boosts += 0.5;
+            $matchedPatterns[] = 'product';
         }
         
-        // 🏷️ Brand names (luxury brands people search for)
-        if (preg_match('/(rolex|omega|patek|cartier|audemars|hublot|iwc|panerai|chanel|hermes|louis vuitton|lv|gucci|dior|bulgari|tiffany|van cleef|chopard)/iu', $text)) {
+        // 🏷️ Brand names (built-in + custom)
+        $defaultBrands = 'rolex|omega|patek|cartier|audemars|hublot|iwc|panerai|chanel|hermes|louis vuitton|lv|gucci|dior|bulgari|tiffany|van cleef|chopard';
+        $brandPattern = $defaultBrands;
+        if (!empty($customBrandKeywords)) {
+            $brandPattern .= '|' . implode('|', array_map('preg_quote', $customBrandKeywords));
+        }
+        if (preg_match('/(' . $brandPattern . ')/iu', $text)) {
             $boosts += 0.5;
+            $matchedPatterns[] = 'brand';
         }
         
         // 📍 Address indicators
         if (preg_match('/(เขต|อำเภอ|ตำบล|จังหวัด|ถนน|ซอย|หมู่|บ้านเลขที่|\d+\/\d+)/u', $text)) {
             $boosts += 0.5;
+            $matchedPatterns[] = 'address';
         }
         
-        // 🔢 Quick Reply Bonus - ตัวเลขเดี่ยว 1-9 (เลือกตัวเลือก)
+        // 🔢 Quick Reply - ตัวเลขเดี่ยว 1-9
         if (preg_match('/^[1-9]$/', $text)) {
             $boosts += 0.6;
+            $matchedPatterns[] = 'quick_reply';
         }
         
-        // === Penalties (สิ่งที่บ่งบอกว่าไม่มีข้อมูล) ===
-        
-        // 🚫 Pure phatic/filler words ONLY → score = 0
-        if (preg_match('/^(ครับ|ค่ะ|คะ|คับ|นะคะ|นะครับ|จ้า|จ้ะ|จ๊า|ค่า|เค|โอเค|ok|okay|k|kk|อืม|อ่า|อา|เออ|yes|no|y|n)+[!?.\s]*$/iu', $text)) {
-            return 0.0;
+        // 📞 Phone number pattern
+        if (preg_match('/0[689][0-9]{7,8}/', preg_replace('/\D/', '', $text))) {
+            $boosts += 0.5;
+            $matchedPatterns[] = 'phone';
         }
         
-        // 🚫 Single emoji or sticker placeholder
-        if (preg_match('/^[\p{So}\p{Cs}]+$/u', $text) || $text === '[sticker]') {
-            return 0.1;
+        // 💬 Complaint/Urgent keywords
+        if (preg_match('/(ด่วน|urgent|รีบ|เร่ง|ปัญหา|problem|ช่วย|help|ติดต่อ|แจ้ง)/iu', $text)) {
+            $boosts += 0.6;
+            $matchedPatterns[] = 'urgent';
         }
         
         // === Final Score ===
-        return min($lengthScore + $boosts, 1.0);
+        $finalScore = min($lengthScore + $boosts, 1.0);
+        
+        // Log matched patterns for debugging
+        if (!empty($matchedPatterns)) {
+            Logger::debug('[INFO_SCORE] Matched patterns', [
+                'text_preview' => mb_substr($text, 0, 30, 'UTF-8'),
+                'score' => $finalScore,
+                'patterns' => $matchedPatterns,
+            ]);
+        }
+        
+        return $finalScore;
     }
 
     // ==================== 📝 MESSAGE BUFFER FUNCTIONS ====================
@@ -1683,6 +1930,68 @@ class RouterV4Handler implements BotHandlerInterface
         
         return false;
     }
+
+    // ==================== 🎯 GATEKEEPER HELPER FUNCTIONS ====================
+
+    /**
+     * 📝 Set awaiting input state - บอทกำลังรอ input เฉพาะ
+     * 
+     * ใช้เมื่อบอทถามคำถามและต้องการคำตอบเฉพาะ เช่น:
+     * - รอเลือกตัวเลข 1-3
+     * - รอยืนยัน ใช่/ไม่
+     * - รอกรอกที่อยู่
+     * 
+     * @param string $inputType Type: number, yes_no, selection, phone, address, name, product_code, any
+     * @param string $platformUserId 
+     * @param int $channelId
+     * @param int $ttlSeconds Time to wait (default 120 seconds = 2 minutes)
+     */
+    protected function setAwaitingInput(string $inputType, string $platformUserId, int $channelId, int $ttlSeconds = 120): void
+    {
+        $this->chatService->setQuickState('awaiting_input', [
+            'type' => $inputType,
+            'expires_at' => time() + $ttlSeconds,
+            'set_at' => time(),
+        ], $platformUserId, $channelId, $ttlSeconds);
+    }
+
+    /**
+     * 🗑️ Clear awaiting input state
+     */
+    protected function clearAwaitingInput(string $platformUserId, int $channelId): void
+    {
+        $this->chatService->deleteQuickState('awaiting_input', $platformUserId, $channelId);
+    }
+
+    /**
+     * 📝 Set last bot action - บอทเพิ่งทำอะไรไป
+     * 
+     * ใช้เพื่อให้ gatekeeper รู้ว่าบอทเพิ่งถามคำถามหรือแสดงรายการ
+     * 
+     * @param string $actionType Type: question, list, confirm, info, greeting
+     * @param string $platformUserId
+     * @param int $channelId
+     * @param array $extra Extra data เช่น question text, list items
+     */
+    protected function setLastBotAction(string $actionType, string $platformUserId, int $channelId, array $extra = []): void
+    {
+        $this->chatService->setQuickState('last_bot_action', array_merge([
+            'type' => $actionType,
+            'time' => time(),
+        ], $extra), $platformUserId, $channelId, 300); // Keep for 5 minutes
+    }
+
+    /**
+     * 📝 Record bot reply time (for gatekeeper timing)
+     */
+    protected function recordBotReplyTime(string $platformUserId, int $channelId): void
+    {
+        $this->chatService->setQuickState('last_bot_reply_time', [
+            'time' => time(),
+        ], $platformUserId, $channelId, 120);
+    }
+
+    // ==================== 🔍 PRODUCT SEARCH FUNCTIONS ====================
 
     /**
      * Format product search response (used by both handleProductSearch and handleFallback)
@@ -3360,31 +3669,28 @@ PROMPT;
 
         $base64Image = base64_encode($imageData);
 
-        // Build analysis prompt
-        $analysisPrompt = "วิเคราะห์รูปภาพนี้และระบุข้อมูลสำคัญ:\n\n"
-            . "1. ประเภทรูป (image_type): ระบุเป็น payment_proof | product_image | image_generic\n"
-            . "   - payment_proof: สลิปโอนเงิน, ใบเสร็จ, หลักฐานการชำระเงิน\n"
-            . "   - product_image: รูปสินค้า, นาฬิกา, กระเป๋า, เครื่องประดับ, สินค้าแบรนด์เนม\n"
-            . "   - image_generic: รูปอื่นๆ ที่ไม่ใช่ 2 ประเภทข้างต้น\n\n"
-            . "2. ถ้าเป็นสลิป (payment_proof) ดึงข้อมูล:\n"
-            . "   - amount: จำนวนเงิน (ตัวเลข)\n"
-            . "   - bank: ธนาคาร\n"
-            . "   - date: วันที่/เวลา\n"
-            . "   - ref: เลขอ้างอิง\n"
-            . "   - sender_name: ชื่อผู้โอน\n"
-            . "   - receiver_name: ชื่อผู้รับ\n\n"
-            . "3. ถ้าเป็นสินค้า (product_image) ดึงข้อมูล:\n"
-            . "   - brand: แบรนด์/ยี่ห้อ\n"
-            . "   - model: รุ่น/ชื่อสินค้า\n"
-            . "   - description: คำอธิบายสินค้าโดยย่อ\n"
-            . "   - category: หมวดหมู่ (watch/bag/jewelry/etc)\n\n"
-            . "ตอบเป็น JSON อย่างเดียว ไม่ต้องมีข้อความอื่น:\n"
+        // Build analysis prompt - MUST be explicit about nested details structure
+        $analysisPrompt = "วิเคราะห์รูปภาพนี้และตอบเป็น JSON:\n\n"
             . "{\n"
-            . "  \"image_type\": \"payment_proof\" | \"product_image\" | \"image_generic\",\n"
-            . "  \"confidence\": 0.0-1.0,\n"
-            . "  \"details\": { ... ข้อมูลที่ดึงได้ ... },\n"
-            . "  \"description\": \"คำอธิบายสั้นๆ ของรูป\"\n"
-            . "}";
+            . "  \"image_type\": \"payment_proof\" หรือ \"product_image\" หรือ \"image_generic\",\n"
+            . "  \"confidence\": ตัวเลข 0.0-1.0,\n"
+            . "  \"details\": {\n"
+            . "    // ถ้าเป็นสลิป (payment_proof):\n"
+            . "    \"amount\": ตัวเลขจำนวนเงิน,\n"
+            . "    \"bank\": \"ชื่อธนาคาร\",\n"
+            . "    \"date\": \"วันที่/เวลา\",\n"
+            . "    \"ref\": \"เลขอ้างอิง\",\n"
+            . "    \"sender_name\": \"ชื่อผู้โอน\",\n"
+            . "    \"receiver_name\": \"ชื่อผู้รับ\"\n"
+            . "    // ถ้าเป็นสินค้า (product_image):\n"
+            . "    \"brand\": \"แบรนด์\",\n"
+            . "    \"model\": \"รุ่น\",\n"
+            . "    \"category\": \"หมวดหมู่\"\n"
+            . "  },\n"
+            . "  \"description\": \"คำอธิบายสั้นๆ\"\n"
+            . "}\n\n"
+            . "สำคัญมาก: ต้องใส่ข้อมูลทั้งหมดใน \"details\" object!\n"
+            . "ตอบเป็น JSON อย่างเดียว ไม่ต้องมีข้อความอื่น";
 
         // Build Gemini multimodal request
         $payload = [
@@ -3397,8 +3703,9 @@ PROMPT;
                 ]
             ],
             'generationConfig' => [
-                'temperature' => 0.2,
-                'maxOutputTokens' => 2048
+                'temperature' => 0.1,
+                'maxOutputTokens' => 2048,
+                'responseMimeType' => 'application/json'
             ]
         ];
 
@@ -3473,6 +3780,27 @@ PROMPT;
         $confidence = (float)($parsed['confidence'] ?? 0.5);
         $details = $parsed['details'] ?? [];
         $description = $parsed['description'] ?? '';
+        
+        // ✅ FALLBACK: If Gemini put fields at root level instead of inside 'details'
+        // This handles inconsistent Gemini responses
+        if (empty($details) || !isset($details['amount'])) {
+            $slipFields = ['amount', 'bank', 'date', 'ref', 'sender_name', 'receiver_name'];
+            $productFields = ['brand', 'model', 'category'];
+            $fieldsToCheck = ($imageType === 'payment_proof') ? $slipFields : $productFields;
+            
+            foreach ($fieldsToCheck as $field) {
+                if (isset($parsed[$field]) && !isset($details[$field])) {
+                    $details[$field] = $parsed[$field];
+                }
+            }
+            
+            if (!empty(array_filter($details))) {
+                Logger::info('[ROUTER_V4] Gemini Vision - extracted fields from root level (fallback)', [
+                    'image_type' => $imageType,
+                    'details_keys' => array_keys($details),
+                ]);
+            }
+        }
 
         // Map to route
         // ✅ FIX: Lower threshold for payment_proof to 0.4 (slips have clear patterns)

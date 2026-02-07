@@ -20,9 +20,14 @@ include('../includes/customer/sidebar.php');
                 <h1 class="page-title">ประวัติการชำระเงิน</h1>
                 <p class="page-subtitle">ดูรายการชำระเงินและสลิปการโอน</p>
             </div>
-            <button class="btn btn-primary btn-sm" onclick="openAddPaymentModal()">
-                <i class="fas fa-plus"></i> <span class="btn-text">เพิ่มรายการ</span>
-            </button>
+            <div class="page-header-actions" style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+                <a href="reports/income.php" class="btn btn-outline btn-sm" title="รายงานรายรับสำหรับยื่นภาษี">
+                    <i class="fas fa-chart-bar"></i> <span class="btn-text">รายงาน</span>
+                </a>
+                <button class="btn btn-primary btn-sm" onclick="openAddPaymentModal()">
+                    <i class="fas fa-plus"></i> <span class="btn-text">เพิ่มรายการ</span>
+                </button>
+            </div>
         </div>
     </div>
 
@@ -52,6 +57,9 @@ include('../includes/customer/sidebar.php');
                         ผ่อนชำระ</button>
                     <button class="filter-chip" data-filter="savings" onclick="filterPayments('savings', event)"><i
                             class="fas fa-piggy-bank"></i> ออมเงิน</button>
+                    <button class="filter-chip" data-filter="deposit_interest"
+                        onclick="filterPayments('deposit_interest', event)"><i class="fas fa-percent"></i>
+                        ต่อดอกฝาก</button>
                     <button class="filter-chip" data-filter="pending" onclick="filterPayments('pending', event)"><i
                             class="fas fa-clock"></i> รอตรวจสอบ</button>
                 </div>
@@ -114,7 +122,7 @@ include('../includes/customer/sidebar.php');
     <!-- Pagination -->
     <div id="paymentPagination" class="pagination-container" style="display: none;">
         <!-- Rendered by JavaScript -->
-    </div> เช่นกรณี
+    </div>
 </main>
 
 <!-- Payment Details Modal (Outside of main-content) -->
@@ -181,6 +189,20 @@ include('../includes/customer/sidebar.php');
                                 <span>มัดจำ</span>
                             </div>
                         </label>
+                        <label class="payment-type-option">
+                            <input type="radio" name="payment_type" value="deposit_interest">
+                            <div class="payment-type-card">
+                                <i class="fas fa-percent"></i>
+                                <span>ต่อดอกฝาก</span>
+                            </div>
+                        </label>
+                        <label class="payment-type-option">
+                            <input type="radio" name="payment_type" value="pawn_redemption">
+                            <div class="payment-type-card">
+                                <i class="fas fa-undo"></i>
+                                <span>ไถ่ถอน</span>
+                            </div>
+                        </label>
                     </div>
                 </div>
 
@@ -189,7 +211,9 @@ include('../includes/customer/sidebar.php');
                     <label class="form-label">ลูกค้า <span class="required">*</span></label>
                     <div class="autocomplete-wrapper">
                         <input type="text" id="customerSearch" class="form-control"
-                            placeholder="พิมพ์ชื่อ/เบอร์โทร/Platform ID..." autocomplete="off">
+                            placeholder="พิมพ์ชื่อ/เบอร์โทร/Platform ID..." autocomplete="off"
+                            oninput="handleCustomerSearchInput(this.value)"
+                            onfocus="handleCustomerSearchFocus(this.value)">
                         <input type="hidden" id="customerProfileId" name="customer_profile_id">
                         <div id="customerSuggestions" class="autocomplete-suggestions"></div>
                     </div>
@@ -201,12 +225,26 @@ include('../includes/customer/sidebar.php');
                     <label class="form-label">คำสั่งซื้อ/สัญญา</label>
                     <div class="autocomplete-wrapper">
                         <input type="text" id="orderSearch" class="form-control"
-                            placeholder="พิมพ์เลขที่คำสั่งซื้อ/สัญญา..." autocomplete="off">
+                            placeholder="พิมพ์เลขที่คำสั่งซื้อ/สัญญา..." autocomplete="off"
+                            oninput="handleOrderSearchInput(this.value)">
                         <input type="hidden" id="referenceId" name="reference_id">
                         <input type="hidden" id="referenceType" name="reference_type" value="order">
                         <div id="orderSuggestions" class="autocomplete-suggestions"></div>
                     </div>
                     <div id="selectedOrder" class="selected-item" style="display:none;"></div>
+                </div>
+
+                <!-- Pawn Search (for deposit_interest) -->
+                <div class="form-group" id="pawnSearchGroup" style="display:none;">
+                    <label class="form-label">รายการจำนำ <span class="required">*</span></label>
+                    <div class="autocomplete-wrapper">
+                        <input type="text" id="pawnSearch" class="form-control"
+                            placeholder="พิมพ์เลขที่จำนำ/ชื่อสินค้า/ชื่อลูกค้า..." autocomplete="off"
+                            oninput="handlePawnSearchInput(this.value)">
+                        <input type="hidden" id="pawnId" name="pawn_id">
+                        <div id="pawnSuggestions" class="autocomplete-suggestions"></div>
+                    </div>
+                    <div id="selectedPawn" class="selected-item" style="display:none;"></div>
                 </div>
 
                 <!-- Amount -->
@@ -753,23 +791,114 @@ include('../includes/customer/sidebar.php');
             width: 100%;
         }
 
+        /* Date range: stack inputs vertically on mobile */
         .date-range-inline {
-            flex-wrap: wrap;
+            flex-direction: column !important;
+            align-items: stretch !important;
+            gap: 0.75rem !important;
         }
 
         .date-range-inline input[type="date"] {
-            flex: 1;
-            min-width: 120px;
+            width: 100% !important;
+            min-width: 0;
+            padding: 0.75rem 1rem;
+            font-size: 1rem;
         }
 
+        .date-sep {
+            display: none !important;
+            /* Hide separator on mobile */
+        }
+
+        /* Action buttons: side by side row */
+        .date-range-inline .btn-apply,
+        .date-range-inline .btn-reset {
+            flex: 1;
+            width: auto;
+            height: 40px;
+        }
+
+        /* Button wrapper for inline buttons */
+        .filter-group-date .date-range-inline {
+            position: relative;
+        }
+
+        /* Create a buttons row on mobile */
+        .filter-group-date .date-range-inline::after {
+            content: '';
+            display: block;
+            clear: both;
+        }
+
+        /* Filter chips: horizontal scroll on mobile */
         .filter-chips {
             width: 100%;
+            flex-wrap: nowrap;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: none;
+            /* Firefox */
+            -ms-overflow-style: none;
+            /* IE/Edge */
+            padding-bottom: 0.5rem;
+            margin: 0 -0.5rem;
+            padding-left: 0.5rem;
+            padding-right: 0.5rem;
+        }
+
+        .filter-chips::-webkit-scrollbar {
+            display: none;
+            /* Chrome/Safari */
         }
 
         .filter-chip {
-            flex: 1;
+            flex: 0 0 auto;
+            /* Don't stretch, keep natural size */
+            min-width: auto;
             text-align: center;
-            min-width: 0;
+            padding: 0.5rem 0.875rem;
+            font-size: 0.8rem;
+        }
+
+        .filter-chip i {
+            font-size: 0.7rem;
+        }
+    }
+
+    /* Extra small screens */
+    @media (max-width: 480px) {
+        .page-header-content h1 {
+            font-size: 1.25rem;
+        }
+
+        .page-header-content .page-subtitle {
+            font-size: 0.8rem;
+        }
+
+        .filter-panel {
+            margin-bottom: 1rem;
+        }
+
+        .filter-row {
+            padding: 0.75rem 1rem;
+        }
+
+        .filter-chip {
+            padding: 0.4rem 0.75rem;
+            font-size: 0.75rem;
+        }
+
+        /* Card spacing */
+        .card {
+            margin-bottom: 1rem;
+        }
+
+        .card-header {
+            padding: 0.75rem 1rem;
+        }
+
+        .card-body {
+            padding: 0.5rem;
         }
     }
 
@@ -1127,12 +1256,38 @@ include('../includes/customer/sidebar.php');
     .payment-modal-body {
         padding: 1rem;
         overflow-y: auto;
-        overflow-x: visible;
+        overflow-x: hidden;
         flex: 1;
         background: #f9fafb;
         /* Subtle light gray background */
         -webkit-overflow-scrolling: touch;
         /* Smooth scrolling on iOS */
+    }
+
+    /* Allow autocomplete dropdowns to overflow modal body */
+    .payment-modal-body .detail-section {
+        position: relative;
+    }
+
+    .payment-modal-body .order-reference-container {
+        position: static !important;
+    }
+
+    .payment-modal-body .order-search-inline {
+        position: static !important;
+    }
+
+    .payment-modal-body .autocomplete-wrapper {
+        position: relative !important;
+    }
+
+    /* Fixed position dropdown to escape overflow: auto */
+    .payment-modal-body .autocomplete-suggestions.show {
+        position: fixed !important;
+        z-index: 999999 !important;
+        width: auto;
+        min-width: 300px;
+        max-width: 400px;
     }
 
     @media (min-width: 768px) {
@@ -2293,6 +2448,16 @@ include('../includes/customer/sidebar.php');
         color: #15803d;
     }
 
+    .type-badge.type-deposit {
+        background: #fef3c7;
+        color: #d97706;
+    }
+
+    .type-badge.type-deposit-interest {
+        background: #ede9fe;
+        color: #7c3aed;
+    }
+
     /* Status Badge */
     .status-badge-sm {
         display: inline-flex;
@@ -2406,6 +2571,55 @@ include('../includes/customer/sidebar.php');
         .payments-mobile-list {
             display: flex !important;
         }
+
+        /* Modal header improvements */
+        .payment-modal-header {
+            padding: 1rem 1.25rem;
+        }
+
+        .payment-modal-title {
+            font-size: 1.1rem;
+        }
+
+        .payment-modal-close {
+            width: 36px;
+            height: 36px;
+        }
+
+        /* Modal body padding */
+        .payment-modal-body {
+            padding: 1rem !important;
+        }
+
+        /* Summary card in modal */
+        .payment-summary-card {
+            padding: 1rem !important;
+        }
+
+        .summary-amount {
+            font-size: 1.75rem !important;
+        }
+
+        .summary-meta {
+            flex-direction: column;
+            align-items: flex-start !important;
+            gap: 0.25rem !important;
+        }
+
+        /* Customer info row */
+        .customer-info-row {
+            flex-wrap: wrap;
+            gap: 0.5rem !important;
+        }
+
+        /* Mobile card improvements */
+        .payment-mobile-no {
+            font-size: 0.85rem;
+        }
+
+        .payment-mobile-meta {
+            font-size: 0.8rem;
+        }
     }
 
     @media (min-width: 769px) {
@@ -2415,6 +2629,72 @@ include('../includes/customer/sidebar.php');
 
         .payments-mobile-list {
             display: none !important;
+        }
+    }
+
+    /* Extra small screens - modal full optimization */
+    @media (max-width: 480px) {
+        .payment-modal-header {
+            padding: 0.875rem 1rem;
+        }
+
+        .payment-modal-title {
+            font-size: 1rem;
+        }
+
+        .payment-modal-body {
+            padding: 0.75rem !important;
+        }
+
+        .payment-summary-card {
+            border-radius: 12px !important;
+            margin-bottom: 0.75rem !important;
+        }
+
+        .summary-amount {
+            font-size: 1.5rem !important;
+        }
+
+        .detail-section {
+            padding: 0.875rem !important;
+            border-radius: 10px !important;
+            margin-bottom: 0.75rem !important;
+        }
+
+        .detail-section h3 {
+            font-size: 1rem !important;
+            margin-bottom: 0.75rem !important;
+        }
+
+        /* Slip image */
+        .slip-image-container {
+            padding: 0.75rem !important;
+        }
+
+        /* Action buttons */
+        .action-row {
+            flex-direction: column;
+            gap: 0.5rem !important;
+        }
+
+        .action-row .btn {
+            width: 100%;
+            justify-content: center;
+        }
+
+        /* Mobile cards extra small */
+        .payment-mobile-card {
+            padding: 0.875rem;
+        }
+
+        .payment-mobile-amount {
+            font-size: 1rem;
+        }
+
+        .type-badge,
+        .status-badge-sm {
+            font-size: 0.7rem;
+            padding: 0.2rem 0.5rem;
         }
     }
 

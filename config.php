@@ -4,6 +4,11 @@
  * Auto-detects environment: Cloud Run (env vars) or localhost (defaults)
  */
 
+// =========================================================================
+// ✅ TIMEZONE: ตั้งค่า timezone เป็นเวลาไทย (UTC+7) ทั้งระบบ
+// =========================================================================
+date_default_timezone_set('Asia/Bangkok');
+
 // Use environment variables if available (Cloud Run), otherwise use localhost defaults
 define('DB_HOST', getenv('DB_HOST') ?: (getenv('INSTANCE_CONN_NAME') ? null : 'localhost'));
 define('DB_NAME', getenv('DB_NAME') ?: 'autobot');
@@ -39,6 +44,9 @@ function getDB() {
                 PDO::ATTR_EMULATE_PREPARES => false,
             ];
             $pdo = new PDO($dsn, DB_USER, DB_PASS, $options);
+            
+            // ✅ Set MySQL session timezone to Asia/Bangkok (UTC+7)
+            $pdo->exec("SET time_zone = '+07:00'");
         } catch (PDOException $e) {
             error_log("getDB() Error: " . $e->getMessage());
             die("Database Connection Error: " . $e->getMessage());

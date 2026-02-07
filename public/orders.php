@@ -39,12 +39,13 @@ include('../includes/customer/sidebar.php');
                             <th style="text-align:right;">จำนวนเงิน</th>
                             <th>ประเภทชำระ</th>
                             <th>สถานะ</th>
+                            <th>วันที่สร้าง</th>
                             <th></th>
                         </tr>
                     </thead>
                     <tbody id="ordersTableBody">
                         <tr>
-                            <td colspan="7" style="text-align:center;padding:2rem;">
+                            <td colspan="8" style="text-align:center;padding:2rem;">
                                 <div class="spinner" style="margin:0 auto 1rem;"></div>
                                 กำลังโหลดข้อมูล...
                             </td>
@@ -52,7 +53,10 @@ include('../includes/customer/sidebar.php');
                     </tbody>
                 </table>
             </div>
-            
+
+            <!-- Mobile Cards (visible on mobile) -->
+            <div class="orders-mobile-cards" id="ordersMobileCards"></div>
+
             <!-- Pagination -->
             <div id="ordersPagination" class="pagination-container"></div>
         </div>
@@ -67,7 +71,7 @@ include('../includes/customer/sidebar.php');
             <h2 class="order-modal-title">📦 รายละเอียดคำสั่งซื้อ</h2>
             <button class="order-modal-close" onclick="closeOrderModal()">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                    <path d="M18 6L6 18M6 6l12 12" stroke-width="2" stroke-linecap="round"/>
+                    <path d="M18 6L6 18M6 6l12 12" stroke-width="2" stroke-linecap="round" />
                 </svg>
             </button>
         </div>
@@ -85,7 +89,7 @@ include('../includes/customer/sidebar.php');
             <h2 class="order-modal-title">➕ สร้างคำสั่งซื้อใหม่</h2>
             <button class="order-modal-close" onclick="closeCreateOrderModal()">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                    <path d="M18 6L6 18M6 6l12 12" stroke-width="2" stroke-linecap="round"/>
+                    <path d="M18 6L6 18M6 6l12 12" stroke-width="2" stroke-linecap="round" />
                 </svg>
             </button>
         </div>
@@ -98,23 +102,21 @@ include('../includes/customer/sidebar.php');
                         <div class="form-group">
                             <label for="productSearch">ค้นหาด้วยชื่อ รหัส หรือ SKU</label>
                             <div class="autocomplete-wrapper">
-                                <input type="text" 
-                                       id="productSearch" 
-                                       class="form-input" 
-                                       placeholder="พิมพ์ชื่อสินค้า เช่น Rolex, Chanel, LV..."
-                                       autocomplete="off"
-                                       oninput="searchProducts(this.value)">
-                                <div id="productSearchResults" class="autocomplete-dropdown" style="display:none;"></div>
+                                <input type="text" id="productSearch" class="form-input"
+                                    placeholder="พิมพ์ชื่อสินค้า เช่น Rolex, Chanel, LV..." autocomplete="off"
+                                    oninput="searchProducts(this.value)">
+                                <div id="productSearchResults" class="autocomplete-dropdown" style="display:none;">
+                                </div>
                             </div>
                             <small class="form-hint">⌨️ พิมพ์อย่างน้อย 2 ตัวอักษรเพื่อค้นหา</small>
                         </div>
-                        
+
                         <!-- Selected Product Display -->
                         <div id="selectedProductCard" class="selected-product-card" style="display:none;">
                             <div class="selected-product-image">
-                                <img id="selectedProductImg" src="" alt="Product" 
-                                     data-placeholder="images/placeholder-product.svg"
-                                     onerror="this.onerror=null; var p=typeof PATH!=='undefined'?PATH.asset(this.dataset.placeholder):'/'+this.dataset.placeholder; this.src=p;">
+                                <img id="selectedProductImg" src="" alt="Product"
+                                    data-placeholder="images/placeholder-product.svg"
+                                    onerror="this.onerror=null; var p=typeof PATH!=='undefined'?PATH.asset(this.dataset.placeholder):'/'+this.dataset.placeholder; this.src=p;">
                             </div>
                             <div class="selected-product-info">
                                 <h5 id="selectedProductName">-</h5>
@@ -125,58 +127,58 @@ include('../includes/customer/sidebar.php');
                                 <i class="fas fa-times"></i>
                             </button>
                         </div>
-                        
+
                         <!-- Hidden fields for selected product -->
                         <input type="hidden" id="selectedProductId" name="product_id">
                         <input type="hidden" id="selectedProductSku" name="product_sku">
+                        <input type="hidden" id="productImageUrl" name="product_image">
                     </div>
                 </div>
-                
+
                 <!-- Manual Product Entry (fallback) -->
                 <div class="detail-section">
                     <h4 class="detail-section-title">📝 ข้อมูลสินค้า (กรอกเองได้)</h4>
                     <div class="detail-grid">
                         <div class="form-group">
                             <label for="productName">ชื่อสินค้า <span class="required">*</span></label>
-                            <input type="text" id="productName" name="product_name" class="form-input" required 
-                                   placeholder="เช่น Rolex Submariner Date">
+                            <input type="text" id="productName" name="product_name" class="form-input" required
+                                placeholder="เช่น Rolex Submariner Date">
                         </div>
                         <div class="form-group">
                             <label for="productCode">รหัสสินค้า</label>
-                            <input type="text" id="productCode" name="product_code" class="form-input" 
-                                   placeholder="เช่น RX-001">
+                            <input type="text" id="productCode" name="product_code" class="form-input"
+                                placeholder="เช่น RX-001">
                         </div>
                         <div class="form-group">
                             <label for="quantity">จำนวน <span class="required">*</span></label>
-                            <input type="number" id="quantity" name="quantity" class="form-input" value="1" min="1" required>
+                            <input type="number" id="quantity" name="quantity" class="form-input" value="1" min="1"
+                                required>
                         </div>
                         <div class="form-group">
                             <label for="totalAmount">ยอดรวม (บาท) <span class="required">*</span></label>
-                            <input type="number" id="totalAmount" name="total_amount" class="form-input" step="0.01" required
-                                   placeholder="เช่น 450000">
+                            <input type="number" id="totalAmount" name="total_amount" class="form-input" step="0.01"
+                                required placeholder="เช่น 450000">
                         </div>
                     </div>
                 </div>
-                
+
                 <!-- Customer Section -->
                 <div class="detail-section">
                     <h4 class="detail-section-title">👤 ข้อมูลลูกค้า</h4>
-                    
+
                     <!-- Customer Search -->
                     <div class="form-group">
                         <label for="customerSearch">ค้นหาลูกค้าจากระบบ</label>
                         <div class="autocomplete-wrapper">
-                            <input type="text" 
-                                   id="customerSearch" 
-                                   class="form-input" 
-                                   placeholder="พิมพ์ชื่อ, เบอร์โทร, LINE ID..."
-                                   autocomplete="off"
-                                   oninput="searchCustomers(this.value)">
+                            <input type="text" id="customerSearch" class="form-input"
+                                placeholder="พิมพ์ชื่อ, เบอร์โทร, LINE ID..." autocomplete="off"
+                                oninput="searchCustomers(this.value)">
                             <div id="customerSearchResults" class="autocomplete-dropdown" style="display:none;"></div>
                         </div>
-                        <small class="form-hint">⌨️ พิมพ์อย่างน้อย 2 ตัวอักษรเพื่อค้นหา หรือกรอกข้อมูลเองด้านล่าง</small>
+                        <small class="form-hint">⌨️ พิมพ์อย่างน้อย 2 ตัวอักษรเพื่อค้นหา
+                            หรือกรอกข้อมูลเองด้านล่าง</small>
                     </div>
-                    
+
                     <!-- Selected Customer Display -->
                     <div id="selectedCustomerCard" class="selected-customer-card" style="display:none;">
                         <div class="selected-customer-avatar" id="selectedCustomerAvatar">
@@ -190,24 +192,24 @@ include('../includes/customer/sidebar.php');
                             <i class="fas fa-times"></i>
                         </button>
                     </div>
-                    
+
                     <!-- Hidden field for selected customer -->
                     <input type="hidden" id="selectedCustomerId" name="customer_id">
                     <input type="hidden" id="externalUserId" name="external_user_id">
                     <input type="hidden" id="fromCaseId" name="from_case_id">
-                    
+
                     <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 1rem 0;">
-                    
+
                     <div class="detail-grid">
                         <div class="form-group">
                             <label for="customerName">ชื่อลูกค้า</label>
-                            <input type="text" id="customerName" name="customer_name" class="form-input" 
-                                   placeholder="เช่น คุณสมชาย">
+                            <input type="text" id="customerName" name="customer_name" class="form-input"
+                                placeholder="เช่น คุณสมชาย">
                         </div>
                         <div class="form-group">
                             <label for="customerPhone">เบอร์โทร</label>
-                            <input type="tel" id="customerPhone" name="customer_phone" class="form-input" 
-                                   placeholder="เช่น 081-234-5678">
+                            <input type="tel" id="customerPhone" name="customer_phone" class="form-input"
+                                placeholder="เช่น 081-234-5678">
                         </div>
                         <div class="form-group full-width">
                             <label for="customerSource">ช่องทาง</label>
@@ -222,33 +224,37 @@ include('../includes/customer/sidebar.php');
                         </div>
                     </div>
                 </div>
-                
+
                 <!-- Payment Type Section -->
                 <div class="detail-section">
                     <h4 class="detail-section-title">💳 ประเภทการชำระ</h4>
                     <div class="payment-type-options">
-                        <label class="payment-type-option" onclick="handlePaymentTypeClick(event, 'full')">
+                        <label class="payment-type-option"
+                            onclick="handlePaymentTypeClick(event, 'full'); onPaymentTypeChange();">
                             <input type="radio" name="payment_type" value="full" checked>
                             <span class="payment-type-card">
                                 <span class="payment-type-icon">💳</span>
                                 <span class="payment-type-label">จ่ายเต็ม</span>
                             </span>
                         </label>
-                        <label class="payment-type-option" onclick="handlePaymentTypeClick(event, 'deposit')">
+                        <label class="payment-type-option"
+                            onclick="handlePaymentTypeClick(event, 'deposit'); onPaymentTypeChange();">
                             <input type="radio" name="payment_type" value="deposit">
                             <span class="payment-type-card">
                                 <span class="payment-type-icon">💎</span>
                                 <span class="payment-type-label">มัดจำ</span>
                             </span>
                         </label>
-                        <label class="payment-type-option" onclick="handlePaymentTypeClick(event, 'installment')">
+                        <label class="payment-type-option"
+                            onclick="handlePaymentTypeClick(event, 'installment'); onPaymentTypeChange();">
                             <input type="radio" name="payment_type" value="installment">
                             <span class="payment-type-card">
                                 <span class="payment-type-icon">📅</span>
                                 <span class="payment-type-label">ผ่อนชำระ</span>
                             </span>
                         </label>
-                        <label class="payment-type-option" onclick="handlePaymentTypeClick(event, 'savings')">
+                        <label class="payment-type-option"
+                            onclick="handlePaymentTypeClick(event, 'savings'); onPaymentTypeChange();">
                             <input type="radio" name="payment_type" value="savings">
                             <span class="payment-type-card">
                                 <span class="payment-type-icon">🐷</span>
@@ -256,14 +262,14 @@ include('../includes/customer/sidebar.php');
                             </span>
                         </label>
                     </div>
-                    
+
                     <!-- Deposit Fields (hidden by default) -->
                     <div id="depositFields" class="deposit-fields" style="display:none;">
                         <div class="detail-grid" style="margin-top: 1rem;">
                             <div class="form-group">
                                 <label for="depositAmount">ยอดมัดจำ (บาท) <span class="required">*</span></label>
-                                <input type="number" id="depositAmount" name="deposit_amount" class="form-input" step="0.01"
-                                       placeholder="เช่น 5000">
+                                <input type="number" id="depositAmount" name="deposit_amount" class="form-input"
+                                    step="0.01" placeholder="เช่น 5000">
                                 <small class="form-hint">ขั้นต่ำ 10% ของราคาสินค้า</small>
                             </div>
                             <div class="form-group">
@@ -273,36 +279,32 @@ include('../includes/customer/sidebar.php');
                             </div>
                         </div>
                     </div>
-                    
+
                     <!-- Installment Fields (hidden by default) -->
                     <div id="installmentFields" class="installment-fields" style="display:none;">
-                        <div class="detail-grid" style="margin-top: 1rem;">
-                            <div class="form-group">
-                                <label for="installmentMonths">จำนวนงวด</label>
-                                <select id="installmentMonths" name="installment_months" class="form-input">
-                                    <option value="3">3 งวด (ดอกเบี้ย 3%)</option>
-                                </select>
-                                <small class="form-hint">ผ่อนสูงสุด 3 งวด ดอกเบี้ย 3% ต่อเดือน</small>
-                            </div>
-                            <div class="form-group">
-                                <label for="downPayment">เงินดาวน์ (บาท) <span class="required">*</span></label>
-                                <input type="number" id="downPayment" name="down_payment" class="form-input" step="0.01"
-                                       placeholder="เช่น 50000">
-                                <small class="form-hint">ขั้นต่ำ 30% ของราคาสินค้า</small>
-                            </div>
+                        <div class="installment-info"
+                            style="margin-top: 1rem; padding: 1rem; background: #eff6ff; border-radius: 8px; border: 1px solid #bfdbfe;">
+                            <h5 style="margin: 0 0 0.5rem; color: #1e40af;">📅 เงื่อนไขการผ่อนชำระ</h5>
+                            <ul style="margin: 0; padding-left: 1.2rem; color: #1e40af; font-size: 0.9rem;">
+                                <li>ผ่อน 3 งวด ภายใน 60 วัน</li>
+                                <li>ค่าธรรมเนียม 3% รวมในงวดแรก</li>
+                                <li>งวด 1 (วันนี้), งวด 2 (+30 วัน), งวด 3 (+60 วัน รับของ)</li>
+                            </ul>
                         </div>
-                        <div id="installmentSummary" class="installment-summary" style="margin-top: 1rem; padding: 1rem; background: #f8f9fa; border-radius: 8px; display: none;">
+                        <div id="installmentSummary" class="installment-summary"
+                            style="margin-top: 1rem; padding: 1rem; background: #f8f9fa; border-radius: 8px; display: none;">
                             <h5 style="margin: 0 0 0.5rem;">📊 สรุปยอดผ่อน:</h5>
                             <div id="installmentCalc"></div>
                         </div>
                     </div>
                 </div>
-                
+
                 <!-- Shipping Method Section -->
                 <div class="detail-section">
                     <h4 class="detail-section-title">🚚 วิธีจัดส่ง</h4>
                     <div class="form-group">
-                        <select id="shippingMethod" name="shipping_method" class="form-input" onchange="toggleShippingFields()">
+                        <select id="shippingMethod" name="shipping_method" class="form-input"
+                            onchange="toggleShippingFields()">
                             <option value="pickup">🏪 รับหน้าร้าน</option>
                             <option value="post">📮 ส่งไปรษณีย์ (EMS/Kerry)</option>
                             <option value="grab">🏍️ Grab/Lalamove</option>
@@ -311,60 +313,68 @@ include('../includes/customer/sidebar.php');
                     <div id="shippingAddressFields" style="display: none; margin-top: 1rem;">
                         <div class="form-group">
                             <label for="shippingAddress">ที่อยู่จัดส่ง <span class="required">*</span></label>
-                            <textarea id="shippingAddress" name="shipping_address" class="form-input" rows="3" 
-                                      placeholder="ชื่อ-สกุล, ที่อยู่, เบอร์โทร..."></textarea>
+                            <textarea id="shippingAddress" name="shipping_address" class="form-input" rows="3"
+                                placeholder="ชื่อ-สกุล, ที่อยู่, เบอร์โทร..."></textarea>
                         </div>
                         <div class="detail-grid">
                             <div class="form-group">
                                 <label for="shippingFee">ค่าจัดส่ง (บาท)</label>
                                 <input type="number" id="shippingFee" name="shipping_fee" class="form-input" step="0.01"
-                                       value="0" placeholder="0">
+                                    value="0" placeholder="0">
                                 <small class="form-hint">ถ้าฟรี ใส่ 0</small>
                             </div>
                             <div class="form-group">
                                 <label for="trackingNumber">เลขพัสดุ (ใส่ภายหลังได้)</label>
                                 <input type="text" id="trackingNumber" name="tracking_number" class="form-input"
-                                       placeholder="เช่น TH12345678">
+                                    placeholder="เช่น TH12345678">
                             </div>
                         </div>
                     </div>
                 </div>
-                
+
                 <!-- Notes Section -->
                 <div class="detail-section">
                     <h4 class="detail-section-title">📝 หมายเหตุ</h4>
                     <div class="form-group">
-                        <textarea id="orderNotes" name="notes" class="form-input" rows="3" 
-                                  placeholder="หมายเหตุเพิ่มเติม เช่น รายละเอียดสินค้า, เงื่อนไขพิเศษ..."></textarea>
+                        <textarea id="orderNotes" name="notes" class="form-input" rows="3"
+                            placeholder="หมายเหตุเพิ่มเติม เช่น รายละเอียดสินค้า, เงื่อนไขพิเศษ..."></textarea>
                     </div>
                 </div>
-                
+
                 <!-- Bank Account & Push Message Section -->
                 <div class="detail-section" id="pushMessageSection">
                     <h4 class="detail-section-title">💬 แจ้งลูกค้า</h4>
                     <div class="form-group">
                         <label for="bankAccount">บัญชีรับโอน</label>
-                        <select id="bankAccount" name="bank_account" class="form-input" onchange="updateMessageTemplate()">
+                        <select id="bankAccount" name="bank_account" class="form-input"
+                            onchange="updateMessageTemplate()">
                             <option value="">-- เลือกบัญชี --</option>
-                            <option value="scb_1" data-bank="ไทยพาณิชย์" data-name="บจก เพชรวิบวับ" data-number="1653014242">ไทยพาณิชย์ - 1653014242 (≤50K)</option>
-                            <option value="kbank_1" data-bank="กสิกรไทย" data-name="บจก.เฮงเฮงโฮลดิ้ง" data-number="8000029282">กสิกรไทย - 8000029282</option>
-                            <option value="bay_1" data-bank="กรุงศรี" data-name="บจก.เฮงเฮงโฮลดิ้ง" data-number="8000029282">กรุงศรี - 8000029282</option>
+                            <option value="scb_1" data-bank="ไทยพาณิชย์" data-name="บจก เพชรวิบวับ"
+                                data-number="1653014242">ไทยพาณิชย์ - 1653014242 (≤50K)</option>
+                            <option value="kbank_1" data-bank="กสิกรไทย" data-name="บจก.เฮงเฮงโฮลดิ้ง"
+                                data-number="8000029282">กสิกรไทย - 8000029282</option>
+                            <option value="bay_1" data-bank="กรุงศรี" data-name="บจก.เฮงเฮงโฮลดิ้ง"
+                                data-number="8000029282">กรุงศรี - 8000029282</option>
                         </select>
                     </div>
                     <div class="form-group">
                         <label for="customerMessage">ข้อความแจ้งลูกค้า</label>
-                        <textarea id="customerMessage" name="customer_message" class="form-input" rows="6" 
-                                  placeholder="ข้อความที่จะส่งให้ลูกค้า..."></textarea>
+                        <textarea id="customerMessage" name="customer_message" class="form-input" rows="6"
+                            placeholder="ข้อความที่จะส่งให้ลูกค้า..."></textarea>
                         <small class="form-hint">💡 เลือกบัญชีเพื่อ auto-fill ข้อความ หรือพิมพ์เอง</small>
                     </div>
                     <div class="form-group">
                         <label class="checkbox-label">
-                            <input type="checkbox" name="send_message" id="sendMessageCheckbox" checked>
+                            <input type="checkbox" name="send_message" id="sendMessageCheckbox" checked
+                                onchange="updateSubmitButtonText()">
                             <span>📤 ส่งข้อความแจ้งลูกค้าทันที</span>
                         </label>
+                        <small id="sendMessageWarning" class="form-hint" style="color: #f59e0b; display: none;">
+                            ⚠️ ต้องเลือกลูกค้าจากระบบที่มี LINE/Facebook ก่อนส่งได้
+                        </small>
                     </div>
                 </div>
-                
+
                 <!-- Submit Button -->
                 <div class="form-actions">
                     <button type="button" class="btn btn-outline" onclick="closeCreateOrderModal()">ยกเลิก</button>
@@ -381,830 +391,1222 @@ include('../includes/customer/sidebar.php');
 <div id="toast" class="toast"></div>
 
 <style>
-.spinner {
-    width: 48px;
-    height: 48px;
-    border: 4px solid var(--color-border);
-    border-top-color: var(--color-primary);
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-    to { transform: rotate(360deg); }
-}
-
-/* Order Detail Modal - Clean Design */
-.order-detail-modal {
-    display: none;
-    position: fixed;
-    inset: 0;
-    z-index: 9999;
-    align-items: center;
-    justify-content: center;
-}
-.order-detail-modal[style*="display: flex"] {
-    display: flex;
-}
-
-.order-modal-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.6);
-    backdrop-filter: blur(4px);
-    z-index: 9998;
-}
-
-.order-modal-dialog {
-    position: relative;
-    background: #fff;
-    border-radius: 16px;
-    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
-    width: 95vw;
-    max-width: 800px;
-    max-height: 90vh;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    z-index: 9999;
-    animation: modalFadeIn 0.2s ease-out;
-}
-
-@keyframes modalFadeIn {
-    from { opacity: 0; transform: translateY(-20px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
-.order-modal-header {
-    padding: 1.25rem 1.5rem;
-    border-bottom: 1px solid #e5e7eb;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    background: #fff;
-    flex-shrink: 0;
-}
-
-.order-modal-title {
-    font-size: 1.25rem;
-    font-weight: 700;
-    color: #1f2937;
-    margin: 0;
-}
-
-.order-modal-close {
-    width: 36px;
-    height: 36px;
-    border-radius: 8px;
-    background: #f3f4f6;
-    border: none;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.15s;
-    color: #6b7280;
-}
-
-.order-modal-close:hover {
-    background: #e5e7eb;
-    color: #374151;
-}
-
-.order-modal-body {
-    padding: 1.5rem;
-    overflow-y: auto;
-    flex: 1;
-    background: #f9fafb;
-}
-
-/* Detail Sections */
-.detail-section {
-    background: #fff;
-    border-radius: 12px;
-    padding: 1.25rem;
-    margin-bottom: 1rem;
-    border: 1px solid #e5e7eb;
-}
-
-.detail-section:last-child {
-    margin-bottom: 0;
-}
-
-.detail-section-title {
-    font-size: 0.875rem;
-    font-weight: 600;
-    color: #6b7280;
-    margin: 0 0 1rem 0;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
-.detail-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 1rem;
-}
-
-.detail-item {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-}
-
-.detail-label {
-    font-size: 0.75rem;
-    color: #9ca3af;
-    font-weight: 500;
-    text-transform: uppercase;
-    letter-spacing: 0.3px;
-}
-
-.detail-value {
-    font-size: 0.95rem;
-    color: #1f2937;
-    font-weight: 500;
-}
-
-.detail-value-lg {
-    font-size: 1.5rem;
-    font-weight: 700;
-    color: #059669;
-}
-
-/* Customer Profile Card in Modal */
-.customer-section {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    padding: 1rem;
-    background: #f9fafb;
-    border-radius: 10px;
-    margin-bottom: 1rem;
-}
-
-.customer-avatar-lg {
-    width: 56px;
-    height: 56px;
-    border-radius: 50%;
-    background: #e5e7eb;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.25rem;
-    font-weight: 600;
-    color: #6b7280;
-    flex-shrink: 0;
-    overflow: hidden;
-}
-
-.customer-avatar-lg img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-}
-
-.customer-info-detail {
-    flex: 1;
-    min-width: 0;
-}
-
-.customer-name-lg {
-    font-size: 1.1rem;
-    font-weight: 600;
-    color: #1f2937;
-    margin: 0 0 0.25rem 0;
-}
-
-.customer-meta {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    flex-wrap: wrap;
-}
-
-.customer-meta-item {
-    display: flex;
-    align-items: center;
-    gap: 0.35rem;
-    font-size: 0.85rem;
-    color: #6b7280;
-}
-
-.customer-meta-item svg {
-    width: 14px;
-    height: 14px;
-}
-
-.platform-tag {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    padding: 0.25rem 0.6rem;
-    background: #f3f4f6;
-    border-radius: 6px;
-    font-size: 0.75rem;
-    font-weight: 500;
-    color: #374151;
-}
-
-.platform-tag.line { background: #e8f5e9; color: #06c755; }
-.platform-tag.facebook { background: #e3f2fd; color: #1877f2; }
-.platform-tag svg { width: 12px; height: 12px; }
-
-/* Status Badge */
-.status-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    padding: 0.35rem 0.75rem;
-    border-radius: 6px;
-    font-size: 0.8rem;
-    font-weight: 600;
-}
-
-.status-pending { background: #fef3c7; color: #b45309; }
-.status-processing { background: #dbeafe; color: #1d4ed8; }
-.status-shipped { background: #e0e7ff; color: #4338ca; }
-.status-delivered { background: #d1fae5; color: #047857; }
-.status-cancelled { background: #fee2e2; color: #b91c1c; }
-
-/* Payment Type Badge */
-.payment-type-tag {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    padding: 0.35rem 0.75rem;
-    background: #f3f4f6;
-    border-radius: 6px;
-    font-size: 0.8rem;
-    font-weight: 500;
-    color: #374151;
-}
-
-/* Action Buttons */
-.action-buttons {
-    display: flex;
-    gap: 0.75rem;
-    flex-wrap: wrap;
-    margin-top: 1rem;
-    padding-top: 1rem;
-    border-top: 1px solid #e5e7eb;
-}
-
-.btn-action {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.6rem 1rem;
-    background: #fff;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
-    font-size: 0.875rem;
-    font-weight: 500;
-    color: #374151;
-    cursor: pointer;
-    transition: all 0.15s;
-    text-decoration: none;
-}
-
-.btn-action:hover {
-    background: #f9fafb;
-    border-color: #d1d5db;
-}
-
-.btn-action i {
-    color: #6b7280;
-}
-
-/* Installment Table */
-.installment-table {
-    width: 100%;
-    font-size: 0.875rem;
-    border-collapse: collapse;
-}
-
-.installment-table th {
-    text-align: left;
-    padding: 0.75rem;
-    font-weight: 600;
-    color: #6b7280;
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.3px;
-    background: #f9fafb;
-    border-bottom: 1px solid #e5e7eb;
-}
-
-.installment-table td {
-    padding: 0.75rem;
-    border-bottom: 1px solid #f3f4f6;
-    color: #374151;
-}
-
-.installment-table tr:last-child td {
-    border-bottom: none;
-}
-
-.inst-status {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.25rem;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    font-size: 0.75rem;
-    font-weight: 500;
-}
-
-.inst-status.paid { background: #d1fae5; color: #047857; }
-.inst-status.pending { background: #fef3c7; color: #b45309; }
-.inst-status.overdue { background: #fee2e2; color: #b91c1c; }
-
-/* Create Order Modal Styles */
-.form-group {
-    margin-bottom: 1rem;
-}
-
-.form-group.full-width {
-    grid-column: 1 / -1;
-}
-
-.form-group label {
-    display: block;
-    font-size: 0.875rem;
-    font-weight: 500;
-    color: #374151;
-    margin-bottom: 0.5rem;
-}
-
-.form-group label .required {
-    color: #dc2626;
-}
-
-.form-input {
-    width: 100%;
-    padding: 0.75rem 1rem;
-    border: 1px solid #d1d5db;
-    border-radius: 8px;
-    font-size: 0.95rem;
-    transition: all 0.15s;
-    background: #fff;
-}
-
-.form-input:focus {
-    outline: none;
-    border-color: var(--color-primary);
-    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
-}
-
-.form-hint {
-    display: block;
-    font-size: 0.75rem;
-    color: #9ca3af;
-    margin-top: 0.5rem;
-}
-
-/* Product Autocomplete */
-.autocomplete-wrapper {
-    position: relative;
-}
-
-.autocomplete-dropdown {
-    position: absolute;
-    top: 100%;
-    left: 0;
-    right: 0;
-    background: #fff;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
-    box-shadow: 0 10px 25px rgba(0,0,0,0.15);
-    max-height: 300px;
-    overflow-y: auto;
-    z-index: 1000;
-    margin-top: 4px;
-}
-
-.autocomplete-item {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    padding: 0.75rem 1rem;
-    cursor: pointer;
-    border-bottom: 1px solid #f3f4f6;
-    transition: background 0.1s;
-}
-
-.autocomplete-item:last-child {
-    border-bottom: none;
-}
-
-.autocomplete-item:hover {
-    background: #f9fafb;
-}
-
-.autocomplete-item-img {
-    width: 48px;
-    height: 48px;
-    border-radius: 8px;
-    object-fit: cover;
-    background: #f3f4f6;
-}
-
-.autocomplete-item-info {
-    flex: 1;
-    min-width: 0;
-}
-
-.autocomplete-item-name {
-    font-weight: 500;
-    color: #1f2937;
-    margin-bottom: 0.25rem;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.autocomplete-item-meta {
-    font-size: 0.8rem;
-    color: #6b7280;
-}
-
-.autocomplete-item-price {
-    font-weight: 600;
-    color: #059669;
-    white-space: nowrap;
-}
-
-.autocomplete-loading,
-.autocomplete-empty {
-    padding: 1rem;
-    text-align: center;
-    color: #6b7280;
-    font-size: 0.9rem;
-}
-
-/* Selected Product Card */
-.selected-product-card {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    padding: 1rem;
-    background: #f0fdf4;
-    border: 2px solid #22c55e;
-    border-radius: 10px;
-    margin-top: 1rem;
-}
-
-.selected-product-image img {
-    width: 64px;
-    height: 64px;
-    border-radius: 8px;
-    object-fit: cover;
-}
-
-.selected-product-info {
-    flex: 1;
-}
-
-.selected-product-info h5 {
-    font-size: 1rem;
-    font-weight: 600;
-    color: #1f2937;
-    margin: 0 0 0.25rem 0;
-}
-
-.selected-product-info .product-code {
-    font-size: 0.8rem;
-    color: #6b7280;
-    margin: 0 0 0.25rem 0;
-}
-
-.selected-product-info .product-price {
-    font-size: 1.1rem;
-    font-weight: 700;
-    color: #059669;
-    margin: 0;
-}
-
-.btn-remove-product {
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    background: #fee2e2;
-    border: none;
-    color: #dc2626;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.15s;
-}
-
-.btn-remove-product:hover {
-    background: #fecaca;
-}
-
-/* Selected Customer Card */
-.selected-customer-card {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    padding: 1rem;
-    background: #eff6ff;
-    border: 2px solid #3b82f6;
-    border-radius: 10px;
-    margin-top: 1rem;
-}
-
-.selected-customer-avatar {
-    width: 48px;
-    height: 48px;
-    border-radius: 50%;
-    background: #3b82f6;
-    color: #fff;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.1rem;
-    font-weight: 600;
-    flex-shrink: 0;
-    overflow: hidden;
-}
-
-.selected-customer-avatar img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-}
-
-.selected-customer-info {
-    flex: 1;
-    min-width: 0;
-}
-
-.selected-customer-info h5 {
-    font-size: 1rem;
-    font-weight: 600;
-    color: #1f2937;
-    margin: 0 0 0.25rem 0;
-}
-
-.selected-customer-info .customer-meta-text {
-    font-size: 0.8rem;
-    color: #6b7280;
-    margin: 0;
-}
-
-/* Customer Autocomplete Item */
-.autocomplete-item-avatar {
-    width: 40px;
-    height: 40px;
-    border-radius: 50%;
-    background: #e5e7eb;
-    color: #6b7280;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 0.9rem;
-    font-weight: 600;
-    flex-shrink: 0;
-    overflow: hidden;
-}
-
-.autocomplete-item-avatar img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-}
-
-.autocomplete-item-platform {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.25rem;
-    padding: 0.15rem 0.5rem;
-    border-radius: 4px;
-    font-size: 0.7rem;
-    font-weight: 500;
-    margin-left: auto;
-}
-
-.autocomplete-item-platform.line { background: #e8f5e9; color: #06c755; }
-.autocomplete-item-platform.facebook { background: #e3f2fd; color: #1877f2; }
-.autocomplete-item-platform.instagram { background: #fce4ec; color: #c13584; }
-
-/* Payment Type Options */
-.payment-type-options {
-    display: flex;
-    gap: 1rem;
-    flex-wrap: wrap;
-}
-
-.payment-type-option {
-    flex: 1;
-    min-width: 120px;
-}
-
-.payment-type-option input {
-    position: absolute;
-    opacity: 0;
-    pointer-events: none;
-}
-
-.payment-type-card {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 1rem;
-    background: #fff;
-    border: 2px solid #e5e7eb;
-    border-radius: 10px;
-    cursor: pointer;
-    transition: all 0.15s;
-}
-
-.payment-type-option input:checked + .payment-type-card {
-    border-color: var(--color-primary);
-    background: #f0f9ff;
-}
-
-.payment-type-icon {
-    font-size: 1.5rem;
-}
-
-.payment-type-label {
-    font-size: 0.9rem;
-    font-weight: 500;
-    color: #374151;
-}
-
-.installment-fields {
-    background: #f9fafb;
-    padding: 1rem;
-    border-radius: 8px;
-    margin-top: 1rem;
-}
-
-/* Checkbox Label */
-.checkbox-label {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    cursor: pointer;
-    font-weight: 500;
-    color: #374151;
-}
-
-.checkbox-label input[type="checkbox"] {
-    width: 18px;
-    height: 18px;
-    accent-color: var(--color-primary);
-}
-
-/* Form Actions */
-.form-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.75rem;
-    padding-top: 1rem;
-    border-top: 1px solid #e5e7eb;
-    margin-top: 1rem;
-}
-
-/* Pagination */
-.pagination-container {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 1rem;
-    margin-top: 1rem;
-}
-.btn-pagination {
-    padding: 0.5rem 1rem;
-    border: 1px solid #e5e7eb;
-    background: white;
-    border-radius: 8px;
-    cursor: pointer;
-    transition: all 0.2s;
-}
-.btn-pagination:hover:not([disabled]) {
-    background: #f3f4f6;
-    border-color: #3b82f6;
-}
-.btn-pagination[disabled] {
-    opacity: 0.5;
-    cursor: not-allowed;
-}
-.page-indicator {
-    padding: 0.5rem 1rem;
-    color: #6b7280;
-    font-size: 0.9rem;
-}
-
-/* Page Header Content */
-.page-header-content {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    width: 100%;
-    flex-wrap: wrap;
-    gap: 1rem;
-}
-
-/* Page Actions */
-.page-actions {
-    display: flex;
-    gap: 0.75rem;
-}
-
-/* Toast */
-.toast {
-    position: fixed;
-    bottom: 2rem;
-    left: 50%;
-    transform: translateX(-50%) translateY(100px);
-    padding: 1rem 1.5rem;
-    border-radius: 10px;
-    background: #1f2937;
-    color: #fff;
-    font-weight: 500;
-    box-shadow: 0 10px 25px rgba(0,0,0,0.2);
-    z-index: 99999;
-    opacity: 0;
-    transition: all 0.3s;
-}
-
-.toast.show {
-    transform: translateX(-50%) translateY(0);
-    opacity: 1;
-}
-
-.toast.success { background: #059669; }
-.toast.error { background: #dc2626; }
-.toast.info { background: #0284c7; }
-
-/* Address Section */
-.address-block {
-    background: #f9fafb;
-    padding: 1rem;
-    border-radius: 8px;
-    font-size: 0.9rem;
-    line-height: 1.6;
-    color: #374151;
-}
-
-.address-name {
-    font-weight: 600;
-    color: #1f2937;
-    margin-bottom: 0.25rem;
-}
-
-.address-phone {
-    color: #6b7280;
-    margin-bottom: 0.5rem;
-}
-
-/* Responsive */
-@media (max-width: 640px) {
-    .page-header-content {
-        flex-direction: column;
-        align-items: flex-start;
+    .spinner {
+        width: 48px;
+        height: 48px;
+        border: 4px solid var(--color-border);
+        border-top-color: var(--color-primary);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
     }
-    
-    .page-header-content .btn {
-        width: 100%;
+
+    @keyframes spin {
+        to {
+            transform: rotate(360deg);
+        }
     }
-    
+
+    /* Order Detail Modal - Clean Design */
+    .order-detail-modal {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .order-detail-modal[style*="display: flex"] {
+        display: flex;
+    }
+
+    .order-modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.6);
+        backdrop-filter: blur(4px);
+        z-index: 9998;
+    }
+
     .order-modal-dialog {
-        width: 100vw;
-        height: 100vh;
-        max-width: 100vw;
-        max-height: 100vh;
-        border-radius: 0;
+        position: relative;
+        background: #fff;
+        border-radius: 16px;
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+        width: 95vw;
+        max-width: 800px;
+        max-height: 90vh;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        z-index: 9999;
+        animation: modalFadeIn 0.2s ease-out;
     }
-    
+
+    @keyframes modalFadeIn {
+        from {
+            opacity: 0;
+            transform: translateY(-20px);
+        }
+
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    .order-modal-header {
+        padding: 1.25rem 1.5rem;
+        border-bottom: 1px solid #e5e7eb;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background: #fff;
+        flex-shrink: 0;
+    }
+
+    .order-modal-title {
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: #1f2937;
+        margin: 0;
+    }
+
+    .order-modal-close {
+        width: 36px;
+        height: 36px;
+        border-radius: 8px;
+        background: #f3f4f6;
+        border: none;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.15s;
+        color: #6b7280;
+    }
+
+    .order-modal-close:hover {
+        background: #e5e7eb;
+        color: #374151;
+    }
+
+    .order-modal-body {
+        padding: 1.5rem;
+        overflow-y: auto;
+        flex: 1;
+        background: #f9fafb;
+    }
+
+    /* Detail Sections */
+    .detail-section {
+        background: #fff;
+        border-radius: 12px;
+        padding: 1.25rem;
+        margin-bottom: 1rem;
+        border: 1px solid #e5e7eb;
+    }
+
+    .detail-section:last-child {
+        margin-bottom: 0;
+    }
+
+    .detail-section-title {
+        font-size: 0.875rem;
+        font-weight: 600;
+        color: #6b7280;
+        margin: 0 0 1rem 0;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
     .detail-grid {
-        grid-template-columns: 1fr;
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 1rem;
     }
-    
+
+    .detail-item {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+    }
+
+    .detail-label {
+        font-size: 0.75rem;
+        color: #9ca3af;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+    }
+
+    .detail-value {
+        font-size: 0.95rem;
+        color: #1f2937;
+        font-weight: 500;
+    }
+
+    .detail-value-lg {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: #059669;
+    }
+
+    /* Customer Profile Card in Modal */
     .customer-section {
-        flex-direction: column;
-        text-align: center;
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        padding: 1rem;
+        background: #f9fafb;
+        border-radius: 10px;
+        margin-bottom: 1rem;
     }
-    
+
+    .customer-avatar-lg {
+        width: 56px;
+        height: 56px;
+        border-radius: 50%;
+        background: #e5e7eb;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.25rem;
+        font-weight: 600;
+        color: #6b7280;
+        flex-shrink: 0;
+        overflow: hidden;
+    }
+
+    .customer-avatar-lg img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+
+    .customer-info-detail {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .customer-name-lg {
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: #1f2937;
+        margin: 0 0 0.25rem 0;
+    }
+
     .customer-meta {
-        justify-content: center;
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        flex-wrap: wrap;
     }
-    
+
+    .customer-meta-item {
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+        font-size: 0.85rem;
+        color: #6b7280;
+    }
+
+    .customer-meta-item svg {
+        width: 14px;
+        height: 14px;
+    }
+
+    .platform-tag {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.25rem 0.6rem;
+        background: #f3f4f6;
+        border-radius: 6px;
+        font-size: 0.75rem;
+        font-weight: 500;
+        color: #374151;
+    }
+
+    .platform-tag.line {
+        background: #e8f5e9;
+        color: #06c755;
+    }
+
+    .platform-tag.facebook {
+        background: #e3f2fd;
+        color: #1877f2;
+    }
+
+    .platform-tag svg {
+        width: 12px;
+        height: 12px;
+    }
+
+    /* Status Badge */
+    .status-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.35rem 0.75rem;
+        border-radius: 6px;
+        font-size: 0.8rem;
+        font-weight: 600;
+    }
+
+    .status-pending {
+        background: #fef3c7;
+        color: #b45309;
+    }
+
+    .status-processing {
+        background: #dbeafe;
+        color: #1d4ed8;
+    }
+
+    .status-shipped {
+        background: #e0e7ff;
+        color: #4338ca;
+    }
+
+    .status-delivered {
+        background: #d1fae5;
+        color: #047857;
+    }
+
+    .status-cancelled {
+        background: #fee2e2;
+        color: #b91c1c;
+    }
+
+    /* Payment Type Badge */
+    .payment-type-tag {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.35rem 0.75rem;
+        background: #f3f4f6;
+        border-radius: 6px;
+        font-size: 0.8rem;
+        font-weight: 500;
+        color: #374151;
+    }
+
+    /* Action Buttons */
     .action-buttons {
-        flex-direction: column;
+        display: flex;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+        margin-top: 1rem;
+        padding-top: 1rem;
+        border-top: 1px solid #e5e7eb;
     }
-    
+
     .btn-action {
-        justify-content: center;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.6rem 1rem;
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        font-size: 0.875rem;
+        font-weight: 500;
+        color: #374151;
+        cursor: pointer;
+        transition: all 0.15s;
+        text-decoration: none;
     }
-}
+
+    .btn-action:hover {
+        background: #f9fafb;
+        border-color: #d1d5db;
+    }
+
+    .btn-action i {
+        color: #6b7280;
+    }
+
+    .btn-action.btn-cancel:hover {
+        background: #fecaca !important;
+        border-color: #f87171 !important;
+    }
+
+    /* Installment Table */
+    .installment-table {
+        width: 100%;
+        font-size: 0.875rem;
+        border-collapse: collapse;
+    }
+
+    .installment-table th {
+        text-align: left;
+        padding: 0.75rem;
+        font-weight: 600;
+        color: #6b7280;
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+        background: #f9fafb;
+        border-bottom: 1px solid #e5e7eb;
+    }
+
+    .installment-table td {
+        padding: 0.75rem;
+        border-bottom: 1px solid #f3f4f6;
+        color: #374151;
+    }
+
+    .installment-table tr:last-child td {
+        border-bottom: none;
+    }
+
+    .inst-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        padding: 0.25rem 0.5rem;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        font-weight: 500;
+    }
+
+    .inst-status.paid {
+        background: #d1fae5;
+        color: #047857;
+    }
+
+    .inst-status.pending {
+        background: #fef3c7;
+        color: #b45309;
+    }
+
+    .inst-status.overdue {
+        background: #fee2e2;
+        color: #b91c1c;
+    }
+
+    .inst-status.partial {
+        background: #dbeafe;
+        color: #1d4ed8;
+    }
+
+    /* Create Order Modal Styles */
+    .form-group {
+        margin-bottom: 1rem;
+    }
+
+    .form-group.full-width {
+        grid-column: 1 / -1;
+    }
+
+    .form-group label {
+        display: block;
+        font-size: 0.875rem;
+        font-weight: 500;
+        color: #374151;
+        margin-bottom: 0.5rem;
+    }
+
+    .form-group label .required {
+        color: #dc2626;
+    }
+
+    .form-input {
+        width: 100%;
+        padding: 0.75rem 1rem;
+        border: 1px solid #d1d5db;
+        border-radius: 8px;
+        font-size: 0.95rem;
+        transition: all 0.15s;
+        background: #fff;
+    }
+
+    .form-input:focus {
+        outline: none;
+        border-color: var(--color-primary);
+        box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+    }
+
+    .form-hint {
+        display: block;
+        font-size: 0.75rem;
+        color: #9ca3af;
+        margin-top: 0.5rem;
+    }
+
+    /* Product Autocomplete */
+    .autocomplete-wrapper {
+        position: relative;
+    }
+
+    .autocomplete-dropdown {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
+        max-height: 300px;
+        overflow-y: auto;
+        z-index: 1000;
+        margin-top: 4px;
+    }
+
+    .autocomplete-item {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        padding: 0.75rem 1rem;
+        cursor: pointer;
+        border-bottom: 1px solid #f3f4f6;
+        transition: background 0.1s;
+    }
+
+    .autocomplete-item:last-child {
+        border-bottom: none;
+    }
+
+    .autocomplete-item:hover {
+        background: #f9fafb;
+    }
+
+    .autocomplete-item-img {
+        width: 48px;
+        height: 48px;
+        border-radius: 8px;
+        object-fit: cover;
+        background: #f3f4f6;
+    }
+
+    .autocomplete-item-info {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .autocomplete-item-name {
+        font-weight: 500;
+        color: #1f2937;
+        margin-bottom: 0.25rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .autocomplete-item-meta {
+        font-size: 0.8rem;
+        color: #6b7280;
+    }
+
+    .autocomplete-item-price {
+        font-weight: 600;
+        color: #059669;
+        white-space: nowrap;
+    }
+
+    .autocomplete-loading,
+    .autocomplete-empty {
+        padding: 1rem;
+        text-align: center;
+        color: #6b7280;
+        font-size: 0.9rem;
+    }
+
+    /* Selected Product Card */
+    .selected-product-card {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        padding: 1rem;
+        background: #f0fdf4;
+        border: 2px solid #22c55e;
+        border-radius: 10px;
+        margin-top: 1rem;
+    }
+
+    .selected-product-image img {
+        width: 64px;
+        height: 64px;
+        border-radius: 8px;
+        object-fit: cover;
+    }
+
+    .selected-product-info {
+        flex: 1;
+    }
+
+    .selected-product-info h5 {
+        font-size: 1rem;
+        font-weight: 600;
+        color: #1f2937;
+        margin: 0 0 0.25rem 0;
+    }
+
+    .selected-product-info .product-code {
+        font-size: 0.8rem;
+        color: #6b7280;
+        margin: 0 0 0.25rem 0;
+    }
+
+    .selected-product-info .product-price {
+        font-size: 1.1rem;
+        font-weight: 700;
+        color: #059669;
+        margin: 0;
+    }
+
+    .btn-remove-product {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        background: #fee2e2;
+        border: none;
+        color: #dc2626;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.15s;
+    }
+
+    .btn-remove-product:hover {
+        background: #fecaca;
+    }
+
+    /* Selected Customer Card */
+    .selected-customer-card {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        padding: 1rem;
+        background: #eff6ff;
+        border: 2px solid #3b82f6;
+        border-radius: 10px;
+        margin-top: 1rem;
+    }
+
+    .selected-customer-avatar {
+        width: 48px;
+        height: 48px;
+        border-radius: 50%;
+        background: #3b82f6;
+        color: #fff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.1rem;
+        font-weight: 600;
+        flex-shrink: 0;
+        overflow: hidden;
+    }
+
+    .selected-customer-avatar img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+
+    .selected-customer-info {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .selected-customer-info h5 {
+        font-size: 1rem;
+        font-weight: 600;
+        color: #1f2937;
+        margin: 0 0 0.25rem 0;
+    }
+
+    .selected-customer-info .customer-meta-text {
+        font-size: 0.8rem;
+        color: #6b7280;
+        margin: 0;
+    }
+
+    /* Customer Autocomplete Item */
+    .autocomplete-item-avatar {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        background: #e5e7eb;
+        color: #6b7280;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.9rem;
+        font-weight: 600;
+        flex-shrink: 0;
+        overflow: hidden;
+    }
+
+    .autocomplete-item-avatar img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+
+    .autocomplete-item-platform {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        padding: 0.15rem 0.5rem;
+        border-radius: 4px;
+        font-size: 0.7rem;
+        font-weight: 500;
+        margin-left: auto;
+    }
+
+    .autocomplete-item-platform.line {
+        background: #e8f5e9;
+        color: #06c755;
+    }
+
+    .autocomplete-item-platform.facebook {
+        background: #e3f2fd;
+        color: #1877f2;
+    }
+
+    .autocomplete-item-platform.instagram {
+        background: #fce4ec;
+        color: #c13584;
+    }
+
+    /* Payment Type Options */
+    .payment-type-options {
+        display: flex;
+        gap: 1rem;
+        flex-wrap: wrap;
+    }
+
+    .payment-type-option {
+        flex: 1;
+        min-width: 120px;
+    }
+
+    .payment-type-option input {
+        position: absolute;
+        opacity: 0;
+        pointer-events: none;
+    }
+
+    .payment-type-card {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 1rem;
+        background: #fff;
+        border: 2px solid #e5e7eb;
+        border-radius: 10px;
+        cursor: pointer;
+        transition: all 0.15s;
+    }
+
+    .payment-type-option input:checked+.payment-type-card {
+        border-color: var(--color-primary);
+        background: #f0f9ff;
+    }
+
+    .payment-type-icon {
+        font-size: 1.5rem;
+    }
+
+    .payment-type-label {
+        font-size: 0.9rem;
+        font-weight: 500;
+        color: #374151;
+    }
+
+    .installment-fields {
+        background: #f9fafb;
+        padding: 1rem;
+        border-radius: 8px;
+        margin-top: 1rem;
+    }
+
+    /* Checkbox Label */
+    .checkbox-label {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        cursor: pointer;
+        font-weight: 500;
+        color: #374151;
+    }
+
+    .checkbox-label input[type="checkbox"] {
+        width: 18px;
+        height: 18px;
+        accent-color: var(--color-primary);
+    }
+
+    /* Form Actions */
+    .form-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.75rem;
+        padding-top: 1rem;
+        border-top: 1px solid #e5e7eb;
+        margin-top: 1rem;
+    }
+
+    /* Pagination */
+    .pagination-container {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 1rem;
+        margin-top: 1rem;
+    }
+
+    .btn-pagination {
+        padding: 0.5rem 1rem;
+        border: 1px solid #e5e7eb;
+        background: white;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .btn-pagination:hover:not([disabled]) {
+        background: #f3f4f6;
+        border-color: #3b82f6;
+    }
+
+    .btn-pagination[disabled] {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
+    .page-indicator {
+        padding: 0.5rem 1rem;
+        color: #6b7280;
+        font-size: 0.9rem;
+    }
+
+    /* Page Header Content */
+    .page-header-content {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        width: 100%;
+        flex-wrap: wrap;
+        gap: 1rem;
+    }
+
+    /* Page Actions */
+    .page-actions {
+        display: flex;
+        gap: 0.75rem;
+    }
+
+    /* Toast */
+    .toast {
+        position: fixed;
+        bottom: 2rem;
+        left: 50%;
+        transform: translateX(-50%) translateY(100px);
+        padding: 1rem 1.5rem;
+        border-radius: 10px;
+        background: #1f2937;
+        color: #fff;
+        font-weight: 500;
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+        z-index: 99999;
+        opacity: 0;
+        transition: all 0.3s;
+    }
+
+    .toast.show {
+        transform: translateX(-50%) translateY(0);
+        opacity: 1;
+    }
+
+    .toast.success {
+        background: #059669;
+    }
+
+    .toast.error {
+        background: #dc2626;
+    }
+
+    .toast.info {
+        background: #0284c7;
+    }
+
+    /* Address Section */
+    .address-block {
+        background: #f9fafb;
+        padding: 1rem;
+        border-radius: 8px;
+        font-size: 0.9rem;
+        line-height: 1.6;
+        color: #374151;
+    }
+
+    .address-name {
+        font-weight: 600;
+        color: #1f2937;
+        margin-bottom: 0.25rem;
+    }
+
+    .address-phone {
+        color: #6b7280;
+        margin-bottom: 0.5rem;
+    }
+
+    /* Responsive - Tablet (768px) */
+    @media (max-width: 768px) {
+        .page-header-content {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 1rem;
+        }
+
+        .page-header-content .btn {
+            width: 100%;
+            justify-content: center;
+        }
+
+        /* Hide desktop table, show mobile cards */
+        .table-container {
+            display: none !important;
+        }
+
+        .orders-mobile-cards {
+            display: flex !important;
+        }
+
+        /* Modal full-screen on mobile */
+        .order-modal-dialog {
+            width: 100vw !important;
+            height: 100vh !important;
+            max-width: 100vw !important;
+            max-height: 100vh !important;
+            border-radius: 0 !important;
+            margin: 0 !important;
+        }
+
+        .order-modal-header {
+            padding: 1rem 1.25rem;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            background: white;
+        }
+
+        .order-modal-title {
+            font-size: 1.1rem;
+        }
+
+        .order-modal-body {
+            padding: 1rem;
+            max-height: calc(100vh - 60px);
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        .detail-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .customer-section {
+            flex-direction: column;
+            text-align: center;
+        }
+
+        .customer-meta {
+            justify-content: center;
+        }
+
+        .action-buttons {
+            flex-direction: column;
+        }
+
+        .btn-action {
+            justify-content: center;
+            width: 100%;
+        }
+
+        /* Payment type options - horizontal scroll */
+        .payment-type-options {
+            display: flex !important;
+            flex-wrap: nowrap !important;
+            overflow-x: auto !important;
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: none;
+            gap: 0.5rem !important;
+            padding-bottom: 0.5rem;
+            margin: 0 -0.5rem;
+            padding-left: 0.5rem;
+            padding-right: 0.5rem;
+        }
+
+        .payment-type-options::-webkit-scrollbar {
+            display: none;
+        }
+
+        .payment-type-option {
+            flex: 0 0 auto;
+            min-width: 80px;
+        }
+
+        .payment-type-card {
+            padding: 0.75rem 0.5rem;
+        }
+
+        .payment-type-icon {
+            font-size: 1.25rem;
+        }
+
+        .payment-type-label {
+            font-size: 0.75rem;
+        }
+
+        /* Detail sections compact */
+        .detail-section {
+            padding: 1rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .detail-section-title {
+            font-size: 0.8rem;
+            margin-bottom: 0.75rem;
+        }
+
+        /* Form inputs larger for touch */
+        .form-input {
+            font-size: 16px;
+            /* Prevents zoom on iOS */
+            padding: 0.875rem 1rem;
+        }
+
+        /* Form actions sticky on mobile */
+        .form-actions {
+            position: sticky;
+            bottom: 0;
+            background: white;
+            padding: 1rem;
+            margin: 0 -1rem -1rem;
+            border-top: 1px solid #e5e7eb;
+            z-index: 5;
+            gap: 0.5rem;
+        }
+
+        .form-actions .btn {
+            flex: 1;
+        }
+    }
+
+    /* Desktop - show table, hide mobile cards */
+    @media (min-width: 769px) {
+        .table-container {
+            display: block !important;
+        }
+
+        .orders-mobile-cards {
+            display: none !important;
+        }
+    }
+
+    /* Responsive - Mobile (480px) */
+    @media (max-width: 480px) {
+        .order-modal-header {
+            padding: 0.875rem 1rem;
+        }
+
+        .order-modal-title {
+            font-size: 1rem;
+        }
+
+        .order-modal-close {
+            width: 32px;
+            height: 32px;
+        }
+
+        .order-modal-body {
+            padding: 0.75rem;
+        }
+
+        .detail-section {
+            padding: 0.875rem;
+            border-radius: 10px;
+        }
+
+        .detail-section-title {
+            font-size: 0.75rem;
+        }
+
+        /* Customer section compact */
+        .customer-avatar-lg {
+            width: 44px;
+            height: 44px;
+            font-size: 1rem;
+        }
+
+        .customer-name-lg {
+            font-size: 1rem;
+        }
+
+        .customer-meta-item {
+            font-size: 0.8rem;
+        }
+
+        /* Installment table responsive */
+        .installment-table {
+            font-size: 0.8rem;
+        }
+
+        .installment-table th,
+        .installment-table td {
+            padding: 0.5rem;
+        }
+
+        /* Selected product card compact */
+        .selected-product-card {
+            flex-direction: column;
+            text-align: center;
+            gap: 0.75rem;
+        }
+
+        .selected-product-image {
+            width: 80px;
+            height: 80px;
+            margin: 0 auto;
+        }
+
+        /* Selected customer card compact */
+        .selected-customer-card {
+            flex-direction: column;
+            text-align: center;
+            gap: 0.5rem;
+        }
+
+        /* Payment type smaller */
+        .payment-type-option {
+            min-width: 70px;
+        }
+
+        .payment-type-icon {
+            font-size: 1.1rem;
+        }
+
+        .payment-type-label {
+            font-size: 0.7rem;
+        }
+
+        /* Form actions */
+        .form-actions {
+            flex-direction: column;
+        }
+
+        .form-actions .btn {
+            width: 100%;
+        }
+    }
+
+    /* Mobile Order Cards */
+    .orders-mobile-cards {
+        display: none;
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+
+    .order-mobile-card {
+        background: #fff;
+        border-radius: 12px;
+        padding: 1rem;
+        border: 1px solid #e5e7eb;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .order-mobile-card:hover {
+        border-color: #3b82f6;
+        box-shadow: 0 2px 8px rgba(59, 130, 246, 0.1);
+    }
+
+    .order-mobile-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 0.75rem;
+    }
+
+    .order-mobile-id {
+        font-weight: 600;
+        color: #3b82f6;
+        font-size: 0.9rem;
+    }
+
+    .order-mobile-amount {
+        font-weight: 700;
+        color: #059669;
+        font-size: 1.1rem;
+    }
+
+    .order-mobile-product {
+        font-size: 0.95rem;
+        color: #1f2937;
+        margin-bottom: 0.75rem;
+        line-height: 1.3;
+    }
+
+    .order-mobile-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.375rem 0;
+        font-size: 0.85rem;
+        color: #6b7280;
+        border-top: 1px solid #f3f4f6;
+    }
+
+    .order-mobile-row:first-of-type {
+        border-top: none;
+    }
+
+    .order-mobile-customer {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .order-mobile-customer img {
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        object-fit: cover;
+    }
+
+    .order-mobile-customer .avatar-placeholder-sm {
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        background: #e5e7eb;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.7rem;
+        font-weight: 600;
+        color: #6b7280;
+    }
+
+    .order-mobile-badges {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+        margin-top: 0.75rem;
+    }
+
+    .order-mobile-badges .badge {
+        font-size: 0.7rem;
+        padding: 0.2rem 0.5rem;
+    }
 </style>
 
 <!-- Customer Profile Component CSS -->

@@ -129,10 +129,23 @@ try {
     $search = $_GET['search'] ?? '';
     $limit = min((int) ($_GET['limit'] ?? 10), 50);
     $platform = $_GET['platform'] ?? null;
-    $tenantId = $_GET['tenant_id'] ?? 'default';
-
-    $whereClauses = ["tenant_id = ?"];
-    $params = [$tenantId];
+    
+    // ✅ Get user's channel IDs for tenant isolation
+    $user_id = $auth['user_id'];
+    $pdo = getDB();
+    $channelStmt = $pdo->prepare("SELECT id FROM customer_channels WHERE user_id = ? AND status = 'active'");
+    $channelStmt->execute([$user_id]);
+    $userChannels = $channelStmt->fetchAll(PDO::FETCH_COLUMN);
+    
+    if (empty($userChannels)) {
+        echo json_encode(['success' => true, 'data' => [], 'message' => 'No channels configured']);
+        exit;
+    }
+    
+    // Build channel filter
+    $channelPlaceholders = implode(',', array_fill(0, count($userChannels), '?'));
+    $whereClauses = ["channel_id IN ($channelPlaceholders)"];
+    $params = $userChannels;
 
     if ($search) {
         // ค้นหาจาก display_name, phone, email, full_name, platform_user_id

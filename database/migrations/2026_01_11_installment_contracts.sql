@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS installment_contracts (
     -- Installment details
     down_payment DECIMAL(12,2) NOT NULL DEFAULT 0,
     financed_amount DECIMAL(12,2) NOT NULL,
-    total_periods INT NOT NULL DEFAULT 12,
+    total_periods INT NOT NULL DEFAULT 3 COMMENT '3 งวด ภายใน 60 วัน',
     paid_periods INT NOT NULL DEFAULT 0,
     amount_per_period DECIMAL(12,2) NOT NULL,
     paid_amount DECIMAL(12,2) NOT NULL DEFAULT 0,

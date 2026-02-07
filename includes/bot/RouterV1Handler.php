@@ -572,6 +572,227 @@ class RouterV1Handler implements BotHandlerInterface
             }
 
             // =========================================================
+            // ✅ MENU RESET DETECTION: Clear checkout state when user clicks menu buttons
+            // Keywords like "ดูสินค้า", "สอบถาม" should reset checkout and start fresh
+            // =========================================================
+            $menuResetKeywords = '/^(ดูสินค้า|สอบถาม|ติดต่อ|เมนู|menu|หน้าหลัก|กลับ|ยกเลิก|cancel|หยุด)$/iu';
+            $currentCheckoutStepForReset = trim((string) ($lastSlots['checkout_step'] ?? ''));
+            $hasProductInSession = ((float) ($lastSlots['product_price'] ?? 0)) > 0 || trim((string) ($lastSlots['product_name'] ?? '')) !== '';
+            
+            // ✅ Strip emoji before matching
+            $textForMenuCheck = preg_replace('/[\x{1F300}-\x{1F9FF}\x{2600}-\x{26FF}\x{2700}-\x{27BF}❌✅⭕🔴⚪💬📍💳🚚🛍️]/u', '', $text);
+            $textForMenuCheck = trim($textForMenuCheck);
+            
+            if (preg_match($menuResetKeywords, $textForMenuCheck) && ($currentCheckoutStepForReset !== '' || $hasProductInSession)) {
+                Logger::info('[MENU_RESET] Resetting checkout state for menu keyword', [
+                    'trace_id' => $traceId,
+                    'text' => $text,
+                    'old_checkout_step' => $currentCheckoutStepForReset,
+                    'had_product' => $hasProductInSession,
+                ]);
+                
+                // ✅ Full reset - clear everything
+                $resetSlots = [
+                    'checkout_step' => '',
+                    'payment_method' => '',
+                    'delivery_method' => '',
+                    'order_status' => '',
+                    'address_buffer' => '',
+                    'product_code' => '',
+                    'product_name' => '',
+                    'product_price' => 0,
+                    'product_ref_id' => '',
+                    'product_image_url' => '',
+                    'first_payment' => 0,
+                ];
+                $lastSlots = $this->mergeSlots($lastSlots, $resetSlots);
+                $this->updateSessionState((int) $sessionId, 'menu_reset', $resetSlots);
+                
+                // ✅ Don't return - let the flow continue to handle "ดูสินค้า" or "สอบถาม" normally
+            }
+
+            // =========================================================
+            // ✅ GENERIC INQUIRY DETECTION: Handle bare "สอบถาม" without specific question
+            // User just wants to ask questions - give them a helpful prompt
+            // =========================================================
+            if (preg_match('/^(สอบถาม|สอบถามเพิ่ม|ถามหน่อย|มีคำถาม)$/iu', $textForMenuCheck)) {
+                Logger::info('[GENERIC_INQUIRY] User wants to ask questions', [
+                    'trace_id' => $traceId,
+                    'text' => $text,
+                ]);
+                
+                $reply = "ยินดีค่ะ 😊 สอบถามได้เลยนะคะ\n\n";
+                $reply .= "พิมพ์คำถามได้เลยค่ะ เช่น:\n";
+                $reply .= "• มีสินค้า [ชื่อ/รหัส] ไหม?\n";
+                $reply .= "• ราคาเท่าไหร่?\n";
+                $reply .= "• นโยบายเปลี่ยน/คืนสินค้า\n";
+                $reply .= "• วิธีผ่อนชำระ\n";
+                
+                if ($sessionId)
+                    $this->storeMessage($sessionId, 'assistant', $reply);
+                $this->logBotReply($context, $reply, 'text');
+                
+                $quickReplyActions = [
+                    [
+                        'type' => 'quick_reply',
+                        'items' => [
+                            ['label' => '🛍️ ดูสินค้า', 'text' => 'ดูสินค้า'],
+                            ['label' => '📋 นโยบายคืนสินค้า', 'text' => 'นโยบายคืนสินค้า'],
+                            ['label' => '💳 วิธีผ่อนชำระ', 'text' => 'วิธีผ่อนชำระ'],
+                            ['label' => '📞 ติดต่อร้าน', 'text' => 'ติดต่อร้าน'],
+                        ]
+                    ]
+                ];
+                
+                return ['reply_text' => $reply, 'actions' => $quickReplyActions, 'meta' => ['reason' => 'generic_inquiry_prompt']];
+            }
+
+            // =========================================================
+            // ✅ POLICY QUESTION DETECTION: Route to KB BEFORE product detection
+            // Questions about return/warranty/policy should go to KB, NOT product search
+            // =========================================================
+            $policyQuestionPattern = '/(\bเปลี่ยน.*คืน|\bคืน.*สินค้า|\bประกัน|\bรับประกัน|\breturn|\brefund|\bwarranty|\bexchange|\bนโยบาย|\bpolicy|\bเงื่อนไข|\bข้อตกลง|\bเปลี่ยนสินค้า|\bคืนเงิน|\bรับซื้อคืน)/iu';
+            if (preg_match($policyQuestionPattern, $text)) {
+                Logger::info('[POLICY_QUESTION] Detected policy question - routing to KB first', [
+                    'trace_id' => $traceId,
+                    'text' => $text,
+                ]);
+                
+                // Search KB for policy answer
+                $kbResults = $this->searchKnowledgeBase($context, $text);
+                if (!empty($kbResults) && isset($kbResults[0])) {
+                    $bestMatch = $kbResults[0];
+                    $reply = (string) ($bestMatch['answer'] ?? $fallback);
+
+                    $meta['knowledge_base'] = [
+                        'matched' => true,
+                        'match_type' => $bestMatch['match_type'] ?? 'policy_question',
+                        'match_score' => $bestMatch['match_score'] ?? 0,
+                        'matched_keyword' => $bestMatch['matched_keyword'] ?? null,
+                        'category' => $bestMatch['category'] ?? 'policy',
+                    ];
+                    $meta['reason'] = 'policy_question_kb_answer';
+                    $meta['route'] = 'policy';
+
+                    if ($sessionId && $reply !== '')
+                        $this->storeMessage($sessionId, 'assistant', $reply);
+                    $this->logBotReply($context, $reply, 'text');
+
+                    return [
+                        'reply_text' => $reply,
+                        'actions' => [],
+                        'meta' => $meta,
+                    ];
+                }
+                // If no KB match, fall through to LLM (not product search)
+            }
+
+            // =========================================================
+            // ✅ EARLY PURCHASE DETECTION: Catch "สนใจ/เอา/ซื้อ" BEFORE LLM
+            // When product context exists, these words should start checkout,
+            // NOT be interpreted as a new product search by LLM
+            // =========================================================
+            $earlyProductPrice = (float) ($lastSlots['product_price'] ?? 0);
+            $earlyProductName = trim((string) ($lastSlots['product_name'] ?? '')); // ✅ Check name too
+            $earlyCheckoutStep = trim((string) ($lastSlots['checkout_step'] ?? ''));
+
+            // ✅ DEBUG: Log early checkout state check
+            Logger::info('[EARLY_CHECKOUT_CHECK]', [
+                'trace_id' => $traceId,
+                'text' => $text,
+                'earlyProductPrice' => $earlyProductPrice,
+                'earlyProductName' => $earlyProductName,
+                'earlyCheckoutStep' => $earlyCheckoutStep,
+                'hasProductContext' => ($earlyProductPrice > 0 || $earlyProductName !== ''),
+            ]);
+
+            // ✅ Logic: ถ้ามีชื่อสินค้า หรือ มีราคา (อย่างใดอย่างหนึ่ง)
+            // ถ้า checkout_step ว่าง → เริ่ม checkout ใหม่
+            // ถ้า checkout_step = ask_payment และ user พิมพ์ "สนใจ" → ถามอีกครั้ง
+            if ($earlyProductPrice > 0 || $earlyProductName !== '') {
+                // ✅ FIX: Regex Relaxed - รองรับทั้งคำเดี่ยวและมีคำต่อท้าย
+                // จับคำขึ้นต้นด้วย สนใจ/เอา/ซื้อ ตามด้วยอะไรก็ได้
+                $purchaseRegex = '/^(สนใจ|เอา|ซื้อ|ตกลง|จอง|cf|เอาเลย|ซื้อเลย|รับเลย|รับ)/iu';
+                $hasInterestWord = preg_match($purchaseRegex, trim($text));
+                
+                // ✅ NEW: ตรวจว่าข้อความมี product code ไหม (สำหรับ กรณี "สนใจสินค้า ROL-DAY-001")
+                $hasProductCodeInText = preg_match('/\b([A-Z]{2,4}[-_][A-Z]{2,4}[-_]\d{2,4})\b/i', $text);
+                
+                // ✅ เงื่อนไขเริ่ม/ถาม checkout
+                $shouldStartCheckout = false;
+                
+                // ✅ FIX: "มีไหม/อยู่ไหม" = inquiry ไม่ใช่ interest → ไม่ควรเข้า checkout
+                // ลูกค้าถามว่า "มีไหม ROL-DAY-001" คือต้องการดูสินค้า ยังไม่ได้สนใจซื้อ
+                $isInquiryNotInterest = preg_match('/(มีไหม|อยู่ไหม|ยังอยู่ไหม|ยังมีไหม|หมดยัง|เหลือไหม|ถามหน่อย|สอบถาม)/iu', $text);
+                
+                if ($isInquiryNotInterest) {
+                    // This is inquiry - don't start checkout, let product search handle it
+                    Logger::info('[EARLY_CHECKOUT] Skipping - inquiry pattern detected, not interest', [
+                        'trace_id' => $traceId,
+                        'text' => $text,
+                    ]);
+                    $shouldStartCheckout = false;
+                } elseif ($earlyCheckoutStep === '' && $hasInterestWord) {
+                    // ไม่มี checkout ค้าง + พิมพ์สนใจ → เริ่มใหม่
+                    $shouldStartCheckout = true;
+                } elseif ($earlyCheckoutStep === 'ask_payment' && $hasInterestWord) {
+                    // checkout ค้างที่ ask_payment + พิมพ์สนใจ → ถามอีกครั้ง
+                    // ✅ FIX: ไม่ใช้ $hasProductCodeInText alone - ต้องมี interest word ด้วย
+                    $shouldStartCheckout = true;
+                    Logger::info('[EARLY_CHECKOUT] Re-asking payment for stale session', [
+                        'trace_id' => $traceId,
+                        'hasInterestWord' => $hasInterestWord,
+                    ]);
+                }
+                
+                if ($shouldStartCheckout) {
+                    Logger::info('[EARLY_CHECKOUT] Product context detected, starting checkout', [
+                        'trace_id' => $traceId,
+                        'product_price' => $earlyProductPrice,
+                        'product_name' => $earlyProductName,
+                        'text' => $text,
+                    ]);
+
+                    // Build checkout response (earlyProductName already set above)
+                    $earlyProductCode = trim((string) ($lastSlots['product_code'] ?? ''));
+
+                    // Update slots for checkout
+                    $slots = $this->mergeSlots($lastSlots, ['checkout_step' => 'ask_payment']);
+                    $this->updateSessionState((int) $sessionId, 'ask_payment', $slots);
+
+                    $reply = "ยินดีค่ะ 😊\n\n";
+                    $reply .= "📦 {$earlyProductName}\n";
+                    if ($earlyProductCode !== '') {
+                        $reply .= "🏷️ รหัส: {$earlyProductCode}\n";
+                    }
+                    $reply .= "💰 " . number_format($earlyProductPrice, 0) . " บาท\n\n";
+                    $reply .= "สะดวกชำระแบบไหนดีคะ?\n";
+                    $reply .= "1️⃣ โอนเต็ม\n";
+                    $reply .= "2️⃣ ผ่อน 3 งวด (+3% ค่าดำเนินการครั้งแรก)\n";
+                    $reply .= "3️⃣ มัดจำ 10%";
+
+                    if ($sessionId)
+                        $this->storeMessage($sessionId, 'assistant', $reply);
+                    $this->logBotReply($context, $reply, 'text');
+
+                    $quickReplyActions = [
+                        [
+                            'type' => 'quick_reply',
+                            'items' => [
+                                ['label' => '💰 โอนเต็ม', 'text' => 'โอนเต็ม'],
+                                ['label' => '💳 ผ่อน 3 งวด', 'text' => 'ผ่อน 3 งวด'],
+                                ['label' => '🎯 มัดจำ', 'text' => 'มัดจำ'],
+                                ['label' => '❌ ยกเลิก', 'text' => 'ยกเลิก'],
+                            ]
+                        ]
+                    ];
+
+                    $meta['reason'] = 'early_checkout_detection';
+                    return ['reply_text' => $reply, 'actions' => $quickReplyActions, 'meta' => $meta];
+                }
+            }
+
+            // =========================================================
             // ✅ Follow-up: ใช้ last_image_url เมื่อ user ถาม "มีไหม/ราคา" หลังส่งรูป
             // =========================================================
             if ($sessionId && !$isAdmin) {
@@ -623,7 +844,7 @@ class RouterV1Handler implements BotHandlerInterface
                 // Explicit reset command
                 if ($this->looksLikeResetContext($text, $sessionPolicy)) {
                     $this->removeSlotKeys((int) $sessionId, $productContextKeys);
-                    $reply = $templates['reset_confirmed'] ?? 'โอเคค่ะ ✅ ล้างบริบทเดิมแล้วนะคะ\nตอนนี้อยากให้ช่วยหา “สินค้า/รุ่น/รหัส/งบ” อะไรดีคะ? 😊';
+                    $reply = $templates['reset_confirmed'] ?? "โอเคค่ะ ✅ ล้างบริบทเดิมแล้วนะคะ\nตอนนี้อยากให้ช่วยหา 'สินค้า/รุ่น/รหัส/งบ' อะไรดีคะ? 😊";
                     $meta['reason'] = 'reset_context';
 
                     if ($reply !== '') {
@@ -639,9 +860,16 @@ class RouterV1Handler implements BotHandlerInterface
                     $this->removeSlotKeys((int) $sessionId, $productContextKeys);
                 }
 
+                // ✅ CRITICAL: Skip product selection if already in checkout flow
+                // When checkout_step is set (ask_payment, ask_delivery, etc.), "1", "2", "3" 
+                // should go to checkout flow, NOT product selection from candidates list
+                $currentCheckoutStep = trim((string) ($lastSlots['checkout_step'] ?? ''));
+                $isInCheckoutFlow = in_array($currentCheckoutStep, ['ask_payment', 'ask_delivery', 'ask_address'], true);
+
                 // Selection from last candidates list: "1" / "ข้อ 2" / "เอาอันที่ 3"
+                // ✅ Only process if NOT in checkout flow
                 $sel = $this->detectSelectionIndex($text);
-                if ($sel !== null) {
+                if ($sel !== null && !$isInCheckoutFlow) {
                     $cands = $this->getRecentProductCandidates($lastSlots, $sessionPolicy);
                     if (!empty($cands)) {
                         $idx = $sel - 1;
@@ -654,19 +882,18 @@ class RouterV1Handler implements BotHandlerInterface
                             $pImg = $p['image_url'] ?? null;
 
                             // Build a more sales-friendly reply
+                            // ✅ ไม่ถามซ้ำ "สนใจทำรายการแบบไหน" เพราะจะไปถามวิธีชำระใน checkout flow
                             $tpl = $templates['product_selected']
-                                ?? "ได้เลยค่ะ 😊 เลือก: {{name}}" . ($pCode ? " (รหัส {{code}})" : "") . ($pPrice !== '' ? "\nราคา: {{price}} บาท" : "")
-                                . "\n\nสนใจทำรายการแบบไหนคะ?\n1) สอบถามสภาพ/รายละเอียดเพิ่ม\n2) จอง/มัดจำ\n3) ซื้อเลย";
+                                ?? "โอเคค่ะ 😊 {{name}}" . ($pCode ? " ({{code}})" : "") . ($pPrice !== '' ? "\n💰 {{price}} บาท" : "")
+                                . "\n\nพิมพ์ 'สนใจ' หรือถามรายละเอียดเพิ่มได้เลยนะคะ";
                             $reply = $this->renderTemplate($tpl, [
                                 'name' => $pName ?: 'สินค้า',
                                 'code' => $pCode,
-                                'price' => $pPrice,
+                                'price' => number_format((float) $pPrice, 0),
                             ]);
 
+                            // ✅ ไม่ส่งรูปซ้ำ - ลูกค้าเห็นรูปไปแล้วตอนค้นหา
                             $actionsOut = [];
-                            if ($pImg) {
-                                $actionsOut[] = ['type' => 'image', 'url' => $pImg];
-                            }
 
                             // Create/update case
                             try {
@@ -676,6 +903,7 @@ class RouterV1Handler implements BotHandlerInterface
                                     'product_code' => $pCode,
                                     'product_name' => $pName,
                                     'product_price' => $pPrice,
+                                    'product_image_url' => $pImg,
                                 ];
                                 $case = $caseEngine->getOrCreateCase(CaseEngine::CASE_PRODUCT_INQUIRY, $caseSlots);
                                 $meta['case'] = ['id' => $case['id'] ?? null, 'case_no' => $case['case_no'] ?? null];
@@ -689,6 +917,7 @@ class RouterV1Handler implements BotHandlerInterface
                                 'product_code' => $pCode,
                                 'product_name' => $pName,
                                 'product_price' => $pPrice,
+                                'product_image_url' => $pImg,
                             ]);
                             $this->updateSessionState((int) $sessionId, 'product_selected', $slots);
 
@@ -704,6 +933,1169 @@ class RouterV1Handler implements BotHandlerInterface
                             ];
                         }
                     }
+                }
+
+                // Selection by price: "ตัวราคา 280000", "เอาตัว 195000", "ราคา 68000", "195,000"
+                // ✅ FIX: Support comma-separated numbers like "195,000"
+                if (preg_match('/(?:ตัว|เอา)?(?:ราคา|price)?\s*([\d,]{3,10})/iu', $text, $priceMatch)) {
+                    // Remove commas from matched number
+                    $targetPrice = (int) str_replace(',', '', $priceMatch[1]);
+                    $cands = $this->getRecentProductCandidates($lastSlots, $sessionPolicy);
+                    if (!empty($cands) && $targetPrice > 0) {
+                        foreach ($cands as $p) {
+                            // Also clean price from candidate (could have comma)
+                            $pPrice = (int) str_replace(',', '', (string) ($p['price'] ?? 0));
+                            if ($pPrice === $targetPrice) {
+                                $pName = trim((string) ($p['name'] ?? ''));
+                                $pCode = trim((string) ($p['code'] ?? ''));
+                                $pRef = $p['ref_id'] ?? null;
+                                $pImg = $p['image_url'] ?? null;
+
+                                // ✅ FIX: Sanitize price - ensure clean number for session
+                                $cleanPrice = (float) str_replace(',', '', (string) $pPrice);
+
+                                $tpl = $templates['product_selected']
+                                    ?? "ได้เลยค่ะ 😊 เลือก: {{name}}" . ($pCode ? " (รหัส {{code}})" : "") . "\nราคา: {{price}} บาท"
+                                    . "\n\n💡 พิมพ์ 'สนใจ' หรือ 'จอง' เพื่อทำรายการได้เลยค่ะ\nหรือพิมพ์ 'ผ่อน' ถ้าต้องการดูตารางผ่อน 😊";
+                                $reply = $this->renderTemplate($tpl, [
+                                    'name' => $pName ?: 'สินค้า',
+                                    'code' => $pCode,
+                                    'price' => number_format($cleanPrice, 0), // Format for display only
+                                ]);
+
+                                $actionsOut = [];
+                                if ($pImg) {
+                                    $actionsOut[] = ['type' => 'image', 'url' => $pImg];
+                                }
+
+                                // ✅ FIX: Update session with clean price number + image
+                                $slots = $this->mergeSlots($lastSlots, [
+                                    'product_ref_id' => $pRef,
+                                    'product_code' => $pCode,
+                                    'product_name' => $pName,
+                                    'product_price' => $cleanPrice, // Save clean number
+                                    'product_image_url' => $pImg,
+                                ]);
+                                $this->updateSessionState((int) $sessionId, 'product_selected', $slots);
+
+                                if ($reply !== '') {
+                                    $this->storeMessage($sessionId, 'assistant', $reply);
+                                }
+                                $this->logBotReply($context, $reply, 'text');
+
+                                Logger::info('[ROUTER_V1] Product selected by price', [
+                                    'target_price' => $targetPrice,
+                                    'selected_code' => $pCode,
+                                    'trace_id' => $traceId
+                                ]);
+
+                                return [
+                                    'reply_text' => $reply,
+                                    'actions' => $actionsOut,
+                                    'meta' => $meta,
+                                ];
+                            }
+                        }
+                    }
+                }
+            }
+
+            // =========================================================
+            // ✅ CHECKOUT FLOW - Direct response when customer shows interest
+            // =========================================================
+            $productPrice = (float) ($lastSlots['product_price'] ?? 0);
+            $productName = trim((string) ($lastSlots['product_name'] ?? ''));
+            $productCode = trim((string) ($lastSlots['product_code'] ?? ''));
+            $checkoutStep = trim((string) ($lastSlots['checkout_step'] ?? ''));
+            $paymentMethod = trim((string) ($lastSlots['payment_method'] ?? ''));
+
+            // =========================================================
+            // ✅ NEW PRODUCT CODE DETECTION: Clear checkout if user switches product
+            // If user types a NEW product code different from current, reset checkout
+            // =========================================================
+            $newProductCodePattern = '/\b([A-Z]{2,4}[-_][A-Z]{2,4}[-_]\d{2,4})\b/i';
+            if ($checkoutStep !== '' && preg_match($newProductCodePattern, $text, $newCodeMatch)) {
+                $newCode = strtoupper($newCodeMatch[1]);
+                $currentCode = strtoupper($productCode);
+                
+                // If it's a DIFFERENT product code, clear checkout and let product detection handle it
+                if ($newCode !== $currentCode) {
+                    Logger::info('[CHECKOUT_FLOW] New product code detected - clearing checkout', [
+                        'trace_id' => $traceId,
+                        'old_code' => $currentCode,
+                        'new_code' => $newCode,
+                        'old_checkout_step' => $checkoutStep,
+                    ]);
+                    
+                    // Clear checkout-related slots but keep product context for the NEW product
+                    $clearSlots = [
+                        'checkout_step' => '',
+                        'payment_method' => '',
+                        'delivery_method' => '',
+                        'order_status' => '',
+                        'address_buffer' => '',
+                        'product_code' => '', // Clear to allow new product
+                        'product_name' => '',
+                        'product_price' => 0,
+                        'product_ref_id' => '',
+                        'product_image_url' => '',
+                    ];
+                    $lastSlots = $this->mergeSlots($lastSlots, $clearSlots);
+                    
+                    if ($sessionId) {
+                        $this->updateSessionState((int) $sessionId, 'product_switch', $clearSlots);
+                    }
+                    
+                    // Reset local variables to reflect cleared state
+                    $productPrice = 0;
+                    $productName = '';
+                    $productCode = '';
+                    $checkoutStep = '';
+                    $paymentMethod = '';
+                }
+            }
+
+            // ✅ DEBUG: Log checkout flow state
+            Logger::info('[CHECKOUT_FLOW_DEBUG]', [
+                'trace_id' => $traceId,
+                'text' => $text,
+                'product_price' => $productPrice,
+                'product_name' => $productName,
+                'checkout_step' => $checkoutStep,
+                'payment_method' => $paymentMethod,
+                'has_product' => $productPrice > 0,
+            ]);
+
+            // ✅ CRITICAL: เมื่อมี product ใน session และลูกค้าแสดงความสนใจ ต้อง RETURN ทันที
+            if ($productPrice > 0) {
+                $originalText = $text; // เก็บ text เดิมไว้ก่อน inject
+
+                // ✅ FIX: Strip emoji และ whitespace ก่อน match cancel keywords
+                $textForCancelCheck = preg_replace('/[\x{1F300}-\x{1F9FF}\x{2600}-\x{26FF}\x{2700}-\x{27BF}❌✅⭕🔴⚪]/u', '', $originalText);
+                $textForCancelCheck = trim($textForCancelCheck);
+
+                // =========================================================
+                // ✅ CANCEL DETECTION: ดักคำยกเลิก checkout
+                // =========================================================
+                if (preg_match('/^(ยกเลิก|cancel|ไม่เอา|พอแค่นี้|หยุด|ไม่ซื้อ|เลิก|ไม่|ไม่เอาแล้ว|ยกเลิกเลย|เปลี่ยนใจ)/iu', $textForCancelCheck) && $checkoutStep !== '') {
+                    // ✅ FIX: ล้าง ALL slots รวม product_* เพื่อ reset สถานะทั้งหมด
+                    $slots = $this->mergeSlots($lastSlots, [
+                        'checkout_step' => '',
+                        'payment_method' => '',
+                        'delivery_method' => '',
+                        'order_status' => '',
+                        'address_buffer' => '',
+                        'product_code' => '',
+                        'product_name' => '',
+                        'product_price' => 0,
+                        'product_ref_id' => '',
+                        'product_image_url' => '',
+                        'first_payment' => 0,
+                    ]);
+                    $this->updateSessionState((int) $sessionId, 'cancelled', $slots);
+
+                    $reply = "รับทราบค่ะ ยกเลิกรายการให้แล้วนะคะ 👌||SPLIT||หากสนใจชิ้นไหน สอบถามใหม่ได้ตลอดเลยค่ะ 😊";
+
+                    if ($sessionId)
+                        $this->storeMessage($sessionId, 'assistant', $reply);
+                    $this->logBotReply($context, $reply, 'text');
+
+                    // ✅ Quick Reply กลับไป Main Menu
+                    $quickReplyActions = [
+                        [
+                            'type' => 'quick_reply',
+                            'items' => [
+                                ['label' => '🛍️ ดูสินค้า', 'text' => 'ดูสินค้า'],
+                                ['label' => '💬 สอบถาม', 'text' => 'สอบถาม'],
+                            ]
+                        ]
+                    ];
+
+                    return ['reply_text' => $reply, 'actions' => $quickReplyActions, 'meta' => ['reason' => 'checkout_cancelled']];
+                }
+
+                // =========================================================
+                // CASE 1: ลูกค้าบอก "สนใจ/เอา/ซื้อ" → ถามวิธีชำระทันที
+                // =========================================================
+                // ✅ FIX: ใช้คำ specific - ลบคำกว้างๆ เช่น "ได้/ใช่/ok/yes" ที่ match กับประโยคทั่วไป
+                $purchasePatterns = '/(เอา|ซื้อ|ตกลง|สนใจ|เอาเลย|ซื้อเลย|รับเลย|จอง|cf)(\s*(เรือน|ตัว|ชิ้น|อัน)?(นี้|นั้น|เลย)?(ครับ|ค่ะ|คะ|นะ)?)?/iu';
+                // ✅ FIX: เริ่ม checkout ได้เมื่อ checkout_step ว่างเท่านั้น (หลังจบจะ reset เป็น '' แล้ว)
+                $canStartNewCheckout = ($checkoutStep === '');
+                if ($canStartNewCheckout && preg_match($purchasePatterns, $originalText)) {
+                    Logger::info('[CHECKOUT] Customer interested - asking payment method', [
+                        'product_name' => $productName,
+                        'product_price' => $productPrice,
+                        'trace_id' => $traceId
+                    ]);
+
+                    // Update slots
+                    $slots = $this->mergeSlots($lastSlots, ['checkout_step' => 'ask_payment']);
+                    $this->updateSessionState((int) $sessionId, 'ask_payment', $slots);
+
+                    // ✅ DIRECT RETURN - ไม่ให้ fall through ไป LLM
+                    $reply = "ยินดีค่ะ 😊\n\n";
+                    $reply .= "📦 {$productName}\n";
+                    $reply .= "🏷️ รหัส: {$productCode}\n";
+                    $reply .= "💰 " . number_format($productPrice, 0) . " บาท\n\n";
+                    $reply .= "สะดวกชำระแบบไหนดีคะ?\n";
+                    $reply .= "1️⃣ โอนเต็ม\n";
+                    $reply .= "2️⃣ ผ่อน 3 งวด (+3% ค่าดำเนินการครั้งแรก)\n";
+                    $reply .= "3️⃣ มัดจำ 10%";
+
+                    if ($sessionId)
+                        $this->storeMessage($sessionId, 'assistant', $reply);
+                    $this->logBotReply($context, $reply, 'text');
+
+                    // ✅ Quick Reply ปุ่มกดสำหรับเลือกวิธีชำระ
+                    $quickReplyActions = [
+                        [
+                            'type' => 'quick_reply',
+                            'items' => [
+                                ['label' => '💰 โอนเต็ม', 'text' => 'โอนเต็ม'],
+                                ['label' => '💳 ผ่อน 3 งวด', 'text' => 'ผ่อน 3 งวด'],
+                                ['label' => '🎯 มัดจำ', 'text' => 'มัดจำ'],
+                                ['label' => '❌ ยกเลิก', 'text' => 'ยกเลิก'],
+                            ]
+                        ]
+                    ];
+
+                    return ['reply_text' => $reply, 'actions' => $quickReplyActions, 'meta' => ['reason' => 'checkout_ask_payment', 'checkout_step' => 'ask_payment']];
+                }
+
+                // =========================================================
+                // CASE 2: ลูกค้าเลือกวิธีชำระ (อยู่ใน ask_payment step)
+                // =========================================================
+                if ($checkoutStep === 'ask_payment') {
+                    $selectedPayment = null;
+                    $replyText = '';
+
+                    // ✅ FIX: ใช้ stripos แทน regex เพื่อรองรับ emoji นำหน้า
+                    $textClean = preg_replace('/[^\p{L}\p{N}\s]/u', '', $originalText); // ลบ emoji
+                    $textClean = trim(mb_strtolower($textClean, 'UTF-8'));
+                    
+                    // ✅ NEW: ถ้า user พิมพ์ "สนใจ/เอา/ซื้อ" ใน ask_payment → ถามวิธีชำระอีกครั้ง
+                    if (preg_match('/^(สนใจ|เอา|ซื้อ|ตกลง|จอง|cf|ok|ได้|ใช่|yes)$/iu', $textClean)) {
+                        $reply = "ยินดีค่ะ 😊 สะดวกชำระแบบไหนดีคะ?\n\n";
+                        $reply .= "📦 {$productName}\n";
+                        $reply .= "💰 " . number_format($productPrice, 0) . " บาท\n\n";
+                        $reply .= "1️⃣ โอนเต็ม\n";
+                        $reply .= "2️⃣ ผ่อน 3 งวด (+3% ค่าดำเนินการครั้งแรก)\n";
+                        $reply .= "3️⃣ มัดจำ 10%";
+                        
+                        if ($sessionId)
+                            $this->storeMessage($sessionId, 'assistant', $reply);
+                        $this->logBotReply($context, $reply, 'text');
+                        
+                        $quickReplyActions = [
+                            [
+                                'type' => 'quick_reply',
+                                'items' => [
+                                    ['label' => '💰 โอนเต็ม', 'text' => 'โอนเต็ม'],
+                                    ['label' => '💳 ผ่อน 3 งวด', 'text' => 'ผ่อน 3 งวด'],
+                                    ['label' => '🎯 มัดจำ', 'text' => 'มัดจำ'],
+                                    ['label' => '❌ ยกเลิก', 'text' => 'ยกเลิก'],
+                                ]
+                            ]
+                        ];
+                        
+                        return ['reply_text' => $reply, 'actions' => $quickReplyActions, 'meta' => ['reason' => 'checkout_repeat_ask_payment']];
+                    }
+
+                    if ($originalText === '1' || preg_match('/(เต็ม|โอน|full|cash|โอนเต็ม)/iu', $originalText)) {
+                        $selectedPayment = 'full';
+                        $replyText = "โอเคค่ะ โอนเต็ม ✅\n\n";
+                        $replyText .= "💰 " . number_format($productPrice, 0) . " บาท\n";
+                    } elseif ($originalText === '2' || preg_match('/(ผ่อน|ออม|งวด)/iu', $originalText)) {
+                        $selectedPayment = 'installment';
+                        $fee = round($productPrice * 0.03);
+                        $p1 = ceil(($productPrice / 3) / 500) * 500;
+                        $p2 = $p1;
+                        $p3 = $productPrice - $p1 - $p2;
+                        if ($p3 < 0) {
+                            $p1 = ceil($productPrice / 3);
+                            $p2 = $p1;
+                            $p3 = $productPrice - $p1 - $p2;
+                        }
+
+                        $replyText = "โอเคค่ะ ผ่อน 3 งวด ✅\n\n";
+                        $replyText .= "💰 ราคา: " . number_format($productPrice, 0) . " บาท\n";
+                        $replyText .= "📝 ค่าดำเนินการ 3%: " . number_format($fee, 0) . " บาท\n\n";
+                        $replyText .= "งวด 1: " . number_format($p1 + $fee, 0) . " บาท\n";
+                        $replyText .= "งวด 2: " . number_format($p2, 0) . " บาท\n";
+                        $replyText .= "งวด 3: " . number_format($p3, 0) . " บาท\n";
+                    } elseif ($originalText === '3' || preg_match('/(มัดจำ|จอง)/iu', $originalText)) {
+                        $selectedPayment = 'deposit';
+                        $depositAmount = round($productPrice * 0.1);
+                        $replyText = "โอเคค่ะ มัดจำ 10% ✅\n\n";
+                        $replyText .= "💰 " . number_format($depositAmount, 0) . " บาท\n";
+                    }
+
+                    if ($selectedPayment) {
+                        $slots = $this->mergeSlots($lastSlots, [
+                            'checkout_step' => 'ask_delivery',
+                            'payment_method' => $selectedPayment,
+                        ]);
+                        $this->updateSessionState((int) $sessionId, 'ask_delivery', $slots);
+
+                        $replyText .= "รับสินค้ายังไงดีคะ?\n";
+                        $replyText .= "1️⃣ รับหน้าร้าน\n";
+                        $replyText .= "2️⃣ ส่ง EMS (+150 บาท)\n";
+                        $replyText .= "3️⃣ ส่ง Grab (ค่าส่งตามจริง)";
+
+                        if ($sessionId)
+                            $this->storeMessage($sessionId, 'assistant', $replyText);
+                        $this->logBotReply($context, $replyText, 'text');
+
+                        // ✅ Quick Reply ปุ่มกดสำหรับเลือกวิธีรับสินค้า
+                        $quickReplyActions = [
+                            [
+                                'type' => 'quick_reply',
+                                'items' => [
+                                    ['label' => '🏢 รับหน้าร้าน', 'text' => 'รับหน้าร้าน'],
+                                    ['label' => '📦 ส่ง EMS', 'text' => 'ส่ง EMS'],
+                                    ['label' => '🛵 ส่ง Grab', 'text' => 'ส่ง Grab'],
+                                    ['label' => '❌ ยกเลิก', 'text' => 'ยกเลิก'],
+                                ]
+                            ]
+                        ];
+
+                        return ['reply_text' => $replyText, 'actions' => $quickReplyActions, 'meta' => ['reason' => 'checkout_ask_delivery', 'payment_method' => $selectedPayment]];
+                    }
+                }
+
+                // =========================================================
+                // CASE 3: ลูกค้าเลือกวิธีรับ (อยู่ใน ask_delivery step)
+                // =========================================================
+                if ($checkoutStep === 'ask_delivery') {
+                    // ✅ Guard: Check if we still have valid product context
+                    if (!$this->hasValidProductContext($lastSlots)) {
+                        Logger::info('[ASK_DELIVERY] No valid product context - skipping checkout flow', [
+                            'trace_id' => $traceId,
+                            'text' => $originalText,
+                        ]);
+                        // Clear stale checkout state and let flow continue to KB/LLM
+                        $this->updateSessionState((int) $sessionId, 'menu_reset', [
+                            'checkout_step' => '',
+                            'delivery_method' => '',
+                        ]);
+                        // Don't return - fall through to general handling
+                    } else {
+                        $selectedDelivery = null;
+                        $replyText = '';
+
+                        // ✅ FIX: Handle "สอบถามเพิ่ม" - pause delivery selection, let user ask question
+                        if (preg_match('/^(สอบถาม|ถาม|คำถาม|question|ask)/iu', $originalText)) {
+                            $paymentLabel = match ($paymentMethod) {
+                                'installment' => 'ผ่อน 3 งวด',
+                                'deposit' => 'มัดจำ 10%',
+                                default => 'โอนเต็ม',
+                            };
+
+                            $reply = "ได้เลยค่ะ 😊 สอบถามได้เลยนะคะ||SPLIT||";
+                            $reply .= "📦 ออเดอร์ปัจจุบัน: {$productName}\n";
+                            $reply .= "💰 ราคา: " . number_format($productPrice, 0) . " บาท\n";
+                            $reply .= "💳 วิธีชำระ: {$paymentLabel}\n\n";
+                            $reply .= "พิมพ์คำถามได้เลยค่ะ หรือพร้อมเลือกวิธีรับสินค้าพิมพ์ได้เลยนะคะ 📍";
+
+                            if ($sessionId)
+                                $this->storeMessage($sessionId, 'assistant', $reply);
+                            $this->logBotReply($context, $reply, 'text');
+
+                            $quickReplyActions = [
+                                [
+                                    'type' => 'quick_reply',
+                                    'items' => [
+                                        ['label' => '🏢 รับหน้าร้าน', 'text' => 'รับหน้าร้าน'],
+                                        ['label' => '📦 ส่ง EMS', 'text' => 'ส่ง EMS'],
+                                        ['label' => '🚙 ส่ง Grab', 'text' => 'ส่ง Grab'],
+                                        ['label' => '❌ ยกเลิก', 'text' => 'ยกเลิก'],
+                                    ]
+                                ]
+                            ];
+                            return ['reply_text' => $reply, 'actions' => $quickReplyActions, 'meta' => ['reason' => 'checkout_ask_question_pause_delivery']];
+                        }
+
+                    // ✅ FIX: รองรับ emoji จาก Quick Reply
+                    if ($originalText === '1' || preg_match('/(ร้าน|หน้าร้าน|รับ|pickup|มารับ|สีลม|รับหน้าร้าน)/iu', $originalText)) {
+                        $selectedDelivery = 'pickup';
+                        $paymentLabel = match ($paymentMethod) {
+                            'installment' => 'ผ่อน 3 งวด',
+                            'deposit' => 'มัดจำ 10%',
+                            default => 'โอนเต็ม',
+                        };
+
+                        $replyText = "โอเคค่ะ รับหน้าร้าน ✅\n\n";
+                        $replyText .= "📦 {$productName}\n";
+                        $replyText .= "💳 {$paymentLabel}\n";
+                        $replyText .= "🏢 รับที่ร้าน\n\n";
+                        $replyText .= "เดี๋ยวส่งเลขบัญชีให้นะคะ 🙏";
+
+                        $slots = $this->mergeSlots($lastSlots, [
+                            'checkout_step' => '',  // ✅ Reset เพื่อให้ลูกค้าถามเพิ่มเติมได้
+                            'delivery_method' => 'pickup',
+                            'order_status' => 'pending_payment',  // เก็บสถานะว่าสั่งซื้อแล้ว
+                        ]);
+                        $this->updateSessionState((int) $sessionId, 'completed', $slots);
+
+                        if ($sessionId)
+                            $this->storeMessage($sessionId, 'assistant', $replyText);
+                        $this->logBotReply($context, $replyText, 'text');
+
+                        return ['reply_text' => $replyText, 'actions' => [], 'meta' => ['reason' => 'checkout_order_confirmed', 'handoff_to_admin' => true]];
+
+                    } elseif ($originalText === '2' || preg_match('/\bems\b/iu', $originalText)) {
+                        // ✅ EMS delivery - ค่าส่ง 150 บาท
+                        $selectedDelivery = 'ems';
+                        $paymentLabel = match ($paymentMethod) {
+                            'installment' => 'ผ่อน 3 งวด',
+                            'deposit' => 'มัดจำ 10%',
+                            default => 'โอนเต็ม',
+                        };
+
+                        $replyText = "โอเคค่ะ ส่ง EMS ✅\n\n";
+                        $replyText .= "📦 {$productName}\n";
+                        $replyText .= "💳 {$paymentLabel}\n";
+                        $replyText .= "🚚 EMS (+150 บาท)\n\n";
+                        $replyText .= "แจ้งชื่อ-ที่อยู่-เบอร์ ได้เลยค่ะ";
+
+                        $slots = $this->mergeSlots($lastSlots, [
+                            'checkout_step' => 'ask_address',
+                            'delivery_method' => 'ems',
+                            'shipping_fee' => 150,
+                        ]);
+                        $this->updateSessionState((int) $sessionId, 'ask_address', $slots);
+
+                        if ($sessionId)
+                            $this->storeMessage($sessionId, 'assistant', $replyText);
+                        $this->logBotReply($context, $replyText, 'text');
+
+                        // ✅ Quick Reply สำหรับ ask_address
+                        $addressQuickReply = [
+                            [
+                                'type' => 'quick_reply',
+                                'items' => [
+                                    ['label' => '💬 สอบถามเพิ่ม', 'text' => 'สอบถามเพิ่ม'],
+                                    ['label' => '❌ ยกเลิก', 'text' => 'ยกเลิก'],
+                                ]
+                            ]
+                        ];
+
+                        return ['reply_text' => $replyText, 'actions' => $addressQuickReply, 'meta' => ['reason' => 'checkout_ask_address', 'delivery_method' => 'ems']];
+
+                    } elseif ($originalText === '3' || preg_match('/(grab|แกร็บ|แกรบ)/iu', $originalText)) {
+                        // ✅ Grab delivery - ค่าส่งตามจริง
+                        $selectedDelivery = 'grab';
+                        $paymentLabel = match ($paymentMethod) {
+                            'installment' => 'ผ่อน 3 งวด',
+                            'deposit' => 'มัดจำ 10%',
+                            default => 'โอนเต็ม',
+                        };
+
+                        $replyText = "โอเคค่ะ ส่ง Grab ✅\n\n";
+                        $replyText .= "📦 {$productName}\n";
+                        $replyText .= "💳 {$paymentLabel}\n";
+                        $replyText .= "🛵 Grab (ค่าส่งตามจริง - จะแจ้งให้ทราบอีกครั้งค่ะ)\n\n";
+                        $replyText .= "แจ้งชื่อ-ที่อยู่-เบอร์ ได้เลยค่ะ";
+
+                        $slots = $this->mergeSlots($lastSlots, [
+                            'checkout_step' => 'ask_address',
+                            'delivery_method' => 'grab',
+                            'shipping_fee' => 0, // ค่าส่งตามจริง จะคำนวณทีหลัง
+                        ]);
+                        $this->updateSessionState((int) $sessionId, 'ask_address', $slots);
+
+                        if ($sessionId)
+                            $this->storeMessage($sessionId, 'assistant', $replyText);
+                        $this->logBotReply($context, $replyText, 'text');
+
+                        // ✅ Quick Reply สำหรับ ask_address
+                        $addressQuickReply = [
+                            [
+                                'type' => 'quick_reply',
+                                'items' => [
+                                    ['label' => '💬 สอบถามเพิ่ม', 'text' => 'สอบถามเพิ่ม'],
+                                    ['label' => '❌ ยกเลิก', 'text' => 'ยกเลิก'],
+                                ]
+                            ]
+                        ];
+
+                        return ['reply_text' => $replyText, 'actions' => $addressQuickReply, 'meta' => ['reason' => 'checkout_ask_address', 'delivery_method' => 'grab']];
+
+                    } elseif (preg_match('/^(ส่ง|จัดส่ง|deliver)/iu', $originalText)) {
+                        // ✅ ลูกค้าพิมพ์แค่ "ส่ง" โดยไม่ระบุ EMS หรือ Grab → ถาม clarify
+                        $paymentLabel = match ($paymentMethod) {
+                            'installment' => 'ผ่อน 3 งวด',
+                            'deposit' => 'มัดจำ 10%',
+                            default => 'โอนเต็ม',
+                        };
+
+                        $replyText = "รับทราบค่ะ สะดวกส่งแบบไหนดีคะ? 🚚\n\n";
+                        $replyText .= "📦 EMS (+150 บาท) - ได้รับภายใน 2-3 วันทำการ\n";
+                        $replyText .= "🛵 Grab (ค่าส่งตามจริง) - ได้รับภายในวันเดียวกัน";
+
+                        if ($sessionId)
+                            $this->storeMessage($sessionId, 'assistant', $replyText);
+                        $this->logBotReply($context, $replyText, 'text');
+
+                        $quickReplyActions = [
+                            [
+                                'type' => 'quick_reply',
+                                'items' => [
+                                    ['label' => '📦 ส่ง EMS', 'text' => 'ส่ง EMS'],
+                                    ['label' => '🛵 ส่ง Grab', 'text' => 'ส่ง Grab'],
+                                    ['label' => '🏢 รับหน้าร้าน', 'text' => 'รับหน้าร้าน'],
+                                    ['label' => '❌ ยกเลิก', 'text' => 'ยกเลิก'],
+                                ]
+                            ]
+                        ];
+
+                        return ['reply_text' => $replyText, 'actions' => $quickReplyActions, 'meta' => ['reason' => 'checkout_clarify_delivery']];
+                    }
+                    // ✅ HYBRID: ไม่ match → ปล่อยไป LLM (ไม่มี else return)
+                    } // End of else block (hasValidProductContext)
+                } // End of if ($checkoutStep === 'ask_delivery')
+
+                // =========================================================
+                // ✅ HYBRID: ส่ง Context ไป LLM เมื่อลูกค้าถามนอกเรื่อง
+                // =========================================================
+                $inCheckoutFlow = in_array($checkoutStep, ['ask_payment', 'ask_delivery', 'ask_address'], true);
+
+                // ✅ Guard: Only add checkout context if we have valid product
+                if (!$this->hasValidProductContext($lastSlots)) {
+                    $inCheckoutFlow = false; // Skip checkout context injection
+                }
+
+                $checkoutContext = "";
+                if ($inCheckoutFlow && $this->hasValidProductContext($lastSlots)) {
+                    $checkoutContext = "\n\n[CHECKOUT CONTEXT]\n";
+                    $checkoutContext .= "สินค้า: {$productName} (รหัส: {$productCode}) ราคา " . number_format($productPrice, 0) . " บาท\n";
+
+                    $checkoutContext .= "สถานะ: กำลังรอลูกค้าเลือก '{$checkoutStep}'\n";
+                    $checkoutContext .= "คำสั่ง: ตอบคำถามสั้นๆ แล้ววกกลับมาถามเรื่องชำระ/จัดส่ง ตามขั้นตอนเดิม\n";
+                    if ($checkoutStep === 'ask_payment') {
+                        $checkoutContext .= "วกกลับถาม: 'สะดวกชำระแบบไหนดีคะ? โอนเต็ม ผ่อน หรือ มัดจำ?'\n";
+                    } elseif ($checkoutStep === 'ask_delivery') {
+                        $checkoutContext .= "วกกลับถาม: 'รับหน้าร้าน, ส่ง EMS (+150 บาท) หรือ ส่ง Grab (ค่าส่งตามจริง) ดีคะ?'\n";
+                    }
+                    if ($paymentMethod) {
+                        $checkoutContext .= "วิธีชำระ: {$paymentMethod}\n";
+                    }
+                    $checkoutContext .= "[END CONTEXT]\n\n";
+                    $text = $checkoutContext . "ข้อความลูกค้า: " . $originalText;
+                }
+            } // End of if ($productPrice > 0)
+
+            // =========================================================
+            // ✅ ADDRESS COLLECTION with BUFFERING
+            // รองรับลูกค้าที่พิมพ์ที่อยู่ทีละส่วน (ชื่อ, ที่อยู่, เบอร์)
+            // =========================================================
+            $checkoutStep = trim((string) ($lastSlots['checkout_step'] ?? ''));
+            $deliveryMethod = trim((string) ($lastSlots['delivery_method'] ?? ''));
+
+            // ✅ FIX: รองรับทั้ง 'ems' และ 'grab' (ไม่ใช่แค่ 'delivery')
+            $needsAddress = in_array($deliveryMethod, ['ems', 'grab', 'delivery'], true);
+            
+            // ✅ Guard: Only enter ask_address flow if we have valid product context
+            if ($checkoutStep === 'ask_address' && $needsAddress && $this->hasValidProductContext($lastSlots)) {
+                $originalTextForAddress = $originalText ?? $text;
+
+                // ✅ Check for cancel before processing address (strip emoji first)
+                $textForCheck = preg_replace('/[\x{1F300}-\x{1F9FF}\x{2600}-\x{26FF}\x{2700}-\x{27BF}❌✅⭕🔴⚪💬📍💳🚚🛍️]/u', '', $originalTextForAddress);
+                $textForCheck = trim($textForCheck);
+
+                if (preg_match('/^(ยกเลิก|cancel|ไม่เอา|พอแค่นี้|หยุด|ไม่ซื้อ|เลิก|ไม่เอาแล้ว|ยกเลิกเลย|เปลี่ยนใจ)$/iu', $textForCheck)) {
+                    // ✅ FIX: ล้าง ALL slots รวม product_* เพื่อ reset สถานะทั้งหมด
+                    $slots = $this->mergeSlots($lastSlots, [
+                        'checkout_step' => '',
+                        'payment_method' => '',
+                        'delivery_method' => '',
+                        'order_status' => '',
+                        'address_buffer' => '',
+                        'product_code' => '',
+                        'product_name' => '',
+                        'product_price' => 0,
+                        'product_ref_id' => '',
+                        'product_image_url' => '',
+                        'first_payment' => 0,
+                    ]);
+                    $this->updateSessionState((int) $sessionId, 'cancelled', $slots);
+
+                    $reply = "รับทราบค่ะ ยกเลิกรายการให้แล้วนะคะ 👌||SPLIT||หากสนใจชิ้นไหน สอบถามใหม่ได้ตลอดเลยค่ะ 😊";
+                    if ($sessionId)
+                        $this->storeMessage($sessionId, 'assistant', $reply);
+                    $this->logBotReply($context, $reply, 'text');
+
+                    $quickReplyActions = [
+                        [
+                            'type' => 'quick_reply',
+                            'items' => [
+                                ['label' => '🛍️ ดูสินค้า', 'text' => 'ดูสินค้า'],
+                                ['label' => '💬 สอบถาม', 'text' => 'สอบถาม'],
+                            ]
+                        ]
+                    ];
+                    return ['reply_text' => $reply, 'actions' => $quickReplyActions, 'meta' => ['reason' => 'checkout_cancelled']];
+                }
+
+                // ✅ FIX: Handle "สอบถามเพิ่ม" - รองรับ emoji นำหน้า
+                if (preg_match('/(สอบถาม|ถาม|คำถาม|question|ask)/iu', $textForCheck)) {
+                    $productName = trim((string) ($lastSlots['product_name'] ?? ''));
+                    $productPrice = (float) ($lastSlots['product_price'] ?? 0);
+
+                    $reply = "ได้เลยค่ะ 😊 สอบถามได้เลยนะคะ\n\n";
+                    $reply .= "📦 ออเดอร์ปัจจุบัน: {$productName}\n";
+                    $reply .= "💰 ราคา: " . number_format($productPrice, 0) . " บาท\n\n";
+                    $reply .= "พิมพ์คำถามได้เลยค่ะ หรือถ้าพร้อมแจ้งที่อยู่ พิมพ์ได้เลยนะคะ 📍";
+
+                    if ($sessionId)
+                        $this->storeMessage($sessionId, 'assistant', $reply);
+                    $this->logBotReply($context, $reply, 'text');
+
+                    $quickReplyActions = [
+                        [
+                            'type' => 'quick_reply',
+                            'items' => [
+                                ['label' => '📍 แจ้งที่อยู่', 'text' => 'แจ้งที่อยู่'],
+                                ['label' => '💳 วิธีชำระ', 'text' => 'ชำระเงินอย่างไร'],
+                                ['label' => '🚚 ค่าส่ง', 'text' => 'ค่าส่งเท่าไหร่'],
+                                ['label' => '❌ ยกเลิก', 'text' => 'ยกเลิก'],
+                            ]
+                        ]
+                    ];
+                    return ['reply_text' => $reply, 'actions' => $quickReplyActions, 'meta' => ['reason' => 'checkout_ask_question_pause']];
+                }
+                
+                // =========================================================
+                // ✅ NEW: ตรวจว่าข้อความดูเหมือน address หรือไม่
+                // ถ้าไม่ใช่ → ปล่อยไป LLM พร้อม checkout context
+                // =========================================================
+                $looksLikeAddress = $this->looksLikeAddressText($originalTextForAddress);
+                
+                if (!$looksLikeAddress) {
+                    // ไม่ใช่ address → ปล่อยไป LLM พร้อม context
+                    Logger::info('[ADDRESS_FLOW] Text does not look like address - passing to LLM', [
+                        'text' => $originalTextForAddress,
+                        'trace_id' => $traceId,
+                    ]);
+                    
+                    // ✅ Inject checkout context for LLM
+                    $productName = trim((string) ($lastSlots['product_name'] ?? ''));
+                    $productPrice = (float) ($lastSlots['product_price'] ?? 0);
+                    $productCode = trim((string) ($lastSlots['product_code'] ?? ''));
+                    
+                    $checkoutContext = "\n\n[CHECKOUT CONTEXT]\n";
+                    $checkoutContext .= "สินค้า: {$productName} (รหัส: {$productCode}) ราคา " . number_format($productPrice, 0) . " บาท\n";
+                    $checkoutContext .= "สถานะ: กำลังรอลูกค้าแจ้งที่อยู่จัดส่ง\n";
+                    $checkoutContext .= "คำสั่ง: ตอบคำถามสั้นๆ แล้ววกกลับมาขอที่อยู่จัดส่ง 'กรุณาแจ้งชื่อ-ที่อยู่-เบอร์โทร ด้วยนะคะ'\n";
+                    $checkoutContext .= "[END CONTEXT]\n\n";
+                    $text = $checkoutContext . "ข้อความลูกค้า: " . $originalTextForAddress;
+                    
+                    // ไม่ return - ปล่อยให้ flow ไปต่อที่ KB/LLM
+                } else {
+                    // ✅ ดูเหมือน address → process ปกติ
+                    $addressBuffer = trim((string) ($lastSlots['address_buffer'] ?? ''));
+
+                // Append ข้อความใหม่เข้า buffer (คั่นด้วย newline)
+                if ($addressBuffer !== '') {
+                    $addressBuffer .= "\n" . $originalTextForAddress;
+                } else {
+                    $addressBuffer = $originalTextForAddress;
+                }
+
+                Logger::info('[ADDRESS_BUFFER] Appending to buffer', [
+                    'new_text' => $originalTextForAddress,
+                    'buffer_so_far' => $addressBuffer,
+                    'trace_id' => $traceId,
+                ]);
+
+                // ตรวจสอบว่า buffer มีข้อมูลครบหรือยัง
+                $addressValidation = $this->validateAddressBuffer($addressBuffer);
+
+                if ($addressValidation['is_complete']) {
+                    // ✅ ข้อมูลครบ! Parse และบันทึก
+                    $addressData = $this->parseShippingAddress($addressBuffer);
+
+                    // Save to customer_addresses
+                    try {
+                        // Try multiple sources for platform_user_id
+                        $platformUserId = $context['platform_user_id']
+                            ?? $context['external_user_id']
+                            ?? $context['customer']['external_user_id']
+                            ?? null;
+                        $platform = $context['platform'] ?? 'line';
+
+                        Logger::info('[ADDRESS_BUFFER] Attempting to save address', [
+                            'platform_user_id' => $platformUserId,
+                            'platform' => $platform,
+                            'address_data' => $addressData,
+                            'context_external_user_id' => $context['external_user_id'] ?? 'N/A',
+                            'trace_id' => $traceId,
+                        ]);
+
+                        if ($platformUserId) {
+                            // หา customer_id จาก customer_profiles (optional)
+                            $customer = $this->db->queryOne(
+                                "SELECT id FROM customer_profiles WHERE platform_user_id = ? AND platform = ? LIMIT 1",
+                                [$platformUserId, $platform]
+                            );
+                            $customerId = $customer ? (int) $customer['id'] : null;
+
+                            // ✅ INSERT ลง customer_addresses 
+                            // ใช้ platform_user_id เป็นหลัก ถ้าไม่มี customer_id ก็ใส่ 1 เป็น fallback
+                            $this->db->execute(
+                                "INSERT INTO customer_addresses (
+                                    customer_id, platform, platform_user_id, address_type, 
+                                    recipient_name, phone, address_line1, address_line2, 
+                                    subdistrict, district, province, postal_code, country, 
+                                    is_default, created_at
+                                ) VALUES (?, ?, ?, 'shipping', ?, ?, ?, ?, ?, ?, ?, ?, 'Thailand', 1, NOW())",
+                                [
+                                    $customerId ?: 1,
+                                    $platform,
+                                    $platformUserId,
+                                    $addressData['name'] ?? '',
+                                    $addressData['phone'] ?? '',
+                                    $addressData['address_line1'] ?? '',
+                                    $addressData['address_line2'] ?? '',
+                                    $addressData['subdistrict'] ?? '',
+                                    $addressData['district'] ?? '',
+                                    $addressData['province'] ?? '',
+                                    $addressData['postal_code'] ?? '',
+                                ]
+                            );
+
+                            $newAddressId = $this->db->lastInsertId();
+                            Logger::info('[ADDRESS_BUFFER] Address saved successfully', [
+                                'address_id' => $newAddressId,
+                                'customer_id' => $customerId,
+                                'platform_user_id' => $platformUserId,
+                                'trace_id' => $traceId
+                            ]);
+                        } else {
+                            Logger::warning('[ADDRESS_BUFFER] No platform_user_id found', [
+                                'context_keys' => array_keys($context),
+                                'trace_id' => $traceId
+                            ]);
+                        }
+                    } catch (\Exception $e) {
+                        Logger::error('[ADDRESS_BUFFER] Failed to save address: ' . $e->getMessage(), [
+                            'trace_id' => $traceId,
+                            'exception' => $e->getTraceAsString()
+                        ]);
+                    }
+
+                    // สรุปออเดอร์
+                    $productName = trim((string) ($lastSlots['product_name'] ?? 'สินค้า'));
+                    $productPrice = (float) ($lastSlots['product_price'] ?? 0);
+                    $firstPayment = (float) ($lastSlots['first_payment'] ?? $productPrice);
+                    $paymentMethod = trim((string) ($lastSlots['payment_method'] ?? 'full'));
+                    $deliveryMethod = trim((string) ($lastSlots['delivery_method'] ?? 'pickup'));
+                    
+                    // ✅ ค่าส่งตามวิธีจัดส่ง
+                    $shippingFee = match ($deliveryMethod) {
+                        'ems' => 150,
+                        'grab' => (int) ($lastSlots['shipping_fee'] ?? 0), // ค่าส่งตามจริง - จะแจ้งทีหลัง
+                        default => 0,
+                    };
+
+                    $paymentLabel = match ($paymentMethod) {
+                        'installment' => 'ผ่อน 3 งวด',
+                        'deposit' => 'มัดจำ 10%',
+                        default => 'โอนเต็ม',
+                    };
+
+                    // ✅ สร้าง Order และ Installment Contract
+                    $orderId = null;
+                    $contractId = null;
+                    $contractNo = null;
+                    $orderNumber = null;
+                    $installmentSchedule = '';
+
+                    try {
+                        // Generate order number
+                        $orderNumber = 'ORD-' . date('Ymd') . '-' . strtoupper(substr(bin2hex(random_bytes(3)), 0, 5));
+
+                        // Get channel_id from context
+                        $channelId = $context['channel']['id'] ?? 4;
+                        $platform = $context['platform'] ?? 'facebook';
+                        $externalUserId = $platformUserId ?? $context['external_user_id'] ?? '';
+
+                        // Determine order type
+                        $orderType = match ($paymentMethod) {
+                            'installment' => 'installment',
+                            'deposit' => 'deposit',
+                            default => 'full_payment',
+                        };
+
+                        // ✅ BUG FIX: Check for duplicate orders (Race Condition Prevention)
+                        // ป้องกันลูกค้ากดรัวๆ แล้วสร้าง Order ซ้ำ
+                        $existingOrder = $this->db->queryOne(
+                            "SELECT id, order_number FROM orders 
+                             WHERE customer_profile_id = ? 
+                             AND status = 'pending_payment'
+                             AND created_at > DATE_SUB(NOW(), INTERVAL 60 SECOND)
+                             ORDER BY id DESC LIMIT 1",
+                            [$customerId]
+                        );
+
+                        if ($existingOrder) {
+                            // ⚡ Already created recently - use existing order
+                            $orderId = (int) $existingOrder['id'];
+                            $orderNumber = $existingOrder['order_number'];
+                            Logger::info('[CHECKOUT] Using existing order (race condition prevented)', [
+                                'order_id' => $orderId,
+                                'order_number' => $orderNumber,
+                                'customer_id' => $customerId,
+                                'trace_id' => $traceId ?? null
+                            ]);
+                        } else {
+                            // Create Order
+                            $this->db->execute(
+                                "INSERT INTO orders (
+                                    order_number, customer_profile_id, order_type,
+                                    subtotal, shipping_fee, total_amount,
+                                    status, payment_status,
+                                    shipping_address_id, notes, created_at, updated_at
+                                ) VALUES (?, ?, ?, ?, ?, ?, 'pending_payment', 'unpaid', ?, ?, NOW(), NOW())",
+                                [
+                                    $orderNumber,
+                                    $customerId ?? null,
+                                    $orderType,
+                                    $productPrice,
+                                    $shippingFee,
+                                    $productPrice + $shippingFee,
+                                    $newAddressId ?? null,
+                                    "สั่งจาก Chatbot - {$platform}"
+                                ]
+                            );
+                            $orderId = $this->db->lastInsertId();
+                        }
+
+                        // Create order item (skip if using existing order from race condition)
+                        if (!$existingOrder) {
+                            $productRefId = $lastSlots['product_ref_id'] ?? $lastSlots['product_code'] ?? '';
+                            $productImage = $lastSlots['product_image'] ?? '';
+                            $productMetadata = json_encode([
+                                'image_url' => $productImage,
+                                'from_chatbot' => true,
+                                'session_id' => $sessionId
+                            ]);
+
+                            $this->db->execute(
+                                "INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, total_price, product_metadata, created_at)
+                                 VALUES (?, ?, ?, 1, ?, ?, ?, NOW())",
+                                [$orderId, $productRefId, $productName, $productPrice, $productPrice, $productMetadata]
+                            );
+                        }
+
+                        Logger::info('[CHECKOUT] Order created', [
+                            'order_id' => $orderId,
+                            'order_number' => $orderNumber,
+                            'order_type' => $orderType,
+                            'trace_id' => $traceId
+                        ]);
+
+                        // ✅ Create Installment Contract if payment_method = installment
+                        if ($paymentMethod === 'installment') {
+                            $contractNo = 'INS-' . date('Ymd') . '-' . strtoupper(substr(bin2hex(random_bytes(3)), 0, 5));
+                            $totalPeriods = 3;
+
+                            // สูตรคำนวณตามนโยบายร้าน ฮ.เฮง เฮง:
+                            // ค่าธรรมเนียม = ราคาสินค้า x 3%
+                            // ยอดต่องวด = ราคาสินค้า / 3
+                            // งวด 1 = (ราคา/3) + ค่าธรรมเนียม
+                            // งวด 2 = (ราคา/3)
+                            // งวด 3 = (ราคา/3) + เศษ
+                            $serviceFee = round($productPrice * 0.03, 0); // 3%
+                            $basePerPeriod = floor($productPrice / $totalPeriods);
+                            $remainder = $productPrice - ($basePerPeriod * $totalPeriods);
+
+                            $firstPaymentAmount = $basePerPeriod + $serviceFee; // งวด 1 + ค่าธรรมเนียม
+                            $secondPaymentAmount = $basePerPeriod; // งวด 2
+                            $thirdPaymentAmount = $basePerPeriod + $remainder; // งวด 3 + เศษ
+
+                            $totalAmount = $productPrice + $serviceFee; // ไม่รวมค่าส่ง (จ่ายตอนรับของ)
+                            $amountPerPeriod = $basePerPeriod;
+
+                            // Calculate due dates - 3 งวด รวม 60 วัน (ตามนโยบายร้าน ฮ.เฮง เฮง)
+                            // งวด 1 = Day 0, งวด 2 = Day 30, งวด 3 = Day 60 (รับของ)
+                            $firstDueDate = date('Y-m-d'); // งวดแรก = Day 0 (วันเปิดบิล)
+                            $secondDueDate = date('Y-m-d', strtotime('+30 days')); // Day 30
+                            $thirdDueDate = date('Y-m-d', strtotime('+60 days')); // Day 60 -> รับของ
+                            $endDate = $thirdDueDate; // สิ้นสุดสัญญา = Day 60
+
+                            $this->db->execute(
+                                "INSERT INTO installment_contracts (
+                                    contract_no, tenant_id, customer_id, channel_id, external_user_id,
+                                    platform, customer_name, customer_phone,
+                                    product_ref_id, product_name, product_price,
+                                    total_amount, down_payment, financed_amount,
+                                    total_periods, amount_per_period,
+                                    interest_rate, interest_type, total_interest,
+                                    start_date, next_due_date, end_date,
+                                    status, order_id, admin_notes,
+                                    created_at, updated_at
+                                ) VALUES (
+                                    ?, 'default', ?, ?, ?,
+                                    ?, ?, ?,
+                                    ?, ?, ?,
+                                    ?, 0, ?,
+                                    ?, ?,
+                                    3, 'flat', ?,
+                                    ?, ?, ?,
+                                    'active', ?, ?,
+                                    NOW(), NOW()
+                                )",
+                                [
+                                    $contractNo,
+                                    $customerId ?? null,
+                                    $channelId,
+                                    $externalUserId,
+                                    $platform,
+                                    $addressData['name'] ?? '',
+                                    $addressData['phone'] ?? '',
+                                    $productRefId,
+                                    $productName,
+                                    $productPrice,
+                                    $totalAmount,
+                                    $totalAmount,
+                                    $totalPeriods,
+                                    $amountPerPeriod,
+                                    $serviceFee,
+                                    $firstDueDate,
+                                    $firstDueDate,
+                                    $endDate,
+                                    $orderId,
+                                    "สร้างจาก Chatbot - session: {$sessionId}"
+                                ]
+                            );
+                            $contractId = $this->db->lastInsertId();
+
+                            // Update order with installment_id
+                            $this->db->execute(
+                                "UPDATE orders SET installment_id = ? WHERE id = ?",
+                                [$contractId, $orderId]
+                            );
+
+                            // Build installment schedule message
+                            $installmentSchedule = "\n\n📋 ตารางผ่อนชำระ:\n";
+                            $installmentSchedule .= "งวด 1: " . number_format($firstPaymentAmount, 0) . " บาท (วันนี้)\n";
+                            $installmentSchedule .= "งวด 2: " . number_format($secondPaymentAmount, 0) . " บาท (" . date('d/m/Y', strtotime($secondDueDate)) . ")\n";
+                            $installmentSchedule .= "งวด 3: " . number_format($thirdPaymentAmount, 0) . " บาท (" . date('d/m/Y', strtotime($thirdDueDate)) . ")";
+
+                            Logger::info('[CHECKOUT] Installment contract created', [
+                                'contract_id' => $contractId,
+                                'contract_no' => $contractNo,
+                                'total_amount' => $totalAmount,
+                                'periods' => $totalPeriods,
+                                'trace_id' => $traceId
+                            ]);
+                        }
+
+                    } catch (\Exception $e) {
+                        Logger::error('[CHECKOUT] Failed to create order/contract: ' . $e->getMessage(), [
+                            'trace_id' => $traceId,
+                            'exception' => $e->getTraceAsString()
+                        ]);
+                    }
+
+                    $reply = "ได้รับแล้วค่ะ ✅\n\n";
+                    $reply .= "👤 " . ($addressData['name'] ?? '-') . "\n";
+                    $reply .= "📍 " . ($addressData['address_line1'] ?? '-') . "\n";
+                    $reply .= "📱 " . ($addressData['phone'] ?? '-') . "\n\n";
+                    $reply .= "📦 {$productName}\n";
+                    $reply .= "💰 " . number_format($firstPayment, 0) . " บาท ({$paymentLabel})\n";
+                    if ($deliveryMethod === 'ems') {
+                        $reply .= "🚚 EMS (+150 บาท)\n";
+                    } elseif ($deliveryMethod === 'grab') {
+                        $reply .= "🛵 Grab (ค่าส่งตามจริง - แจ้งให้ทราบอีกครั้งค่ะ)\n";
+                    }
+                    if ($orderNumber) {
+                        $reply .= "🔖 เลขที่: {$orderNumber}";
+                    }
+                    $reply .= $installmentSchedule;
+                    $reply .= "\n\nเดี๋ยวส่งเลขบัญชีให้นะคะ 🙏";
+
+                    // Clear buffer and update step
+                    // ✅ BUG FIX: Clear ALL product-related slots to prevent "Session Hangover"
+                    // เคลียร์ข้อมูลสินค้าทิ้ง เพื่อเตรียมรับออเดอร์ใหม่
+                    $slots = $this->mergeSlots($lastSlots, [
+                        'checkout_step' => '',  // Reset เพื่อให้ลูกค้าถามเพิ่มเติมได้
+                        'shipping_address' => json_encode($addressData),
+                        'address_buffer' => '', // Clear buffer
+                        'order_status' => 'pending_payment',
+
+                        // ✅ BUG FIX: ล้างค่าสินค้าทิ้งหลังสร้าง Order สำเร็จ
+                        'product_name' => null,
+                        'product_code' => null,
+                        'product_price' => null,
+                        'product_ref_id' => null,
+                        'product_image_url' => null,
+                        'first_payment' => null,
+                        'delivery_method' => null,
+                        'last_product_candidates' => null,
+                        'last_product_query' => null,
+                    ]);
+                    $this->updateSessionState((int) $sessionId, 'completed', $slots);
+
+                    if ($sessionId)
+                        $this->storeMessage($sessionId, 'assistant', $reply);
+                    $this->logBotReply($context, $reply, 'text');
+
+                    return [
+                        'reply_text' => $reply,
+                        'actions' => [],
+                        'meta' => ['reason' => 'checkout_address_complete', 'trace_id' => $traceId],
+                        'handoff_to_admin' => true
+                    ];
+                } else {
+                    // ❌ ข้อมูลยังไม่ครบ → บันทึก buffer และถามเพิ่ม
+                    $slots = $this->mergeSlots($lastSlots, [
+                        'address_buffer' => $addressBuffer,
+                    ]);
+                    $this->updateSessionState((int) $sessionId, 'ask_address', $slots);
+
+                    // สร้างข้อความถามเพิ่ม
+                    $missing = $addressValidation['missing'];
+                    $missingList = [];
+                    if (in_array('name', $missing))
+                        $missingList[] = 'ชื่อ-นามสกุล';
+                    if (in_array('address', $missing))
+                        $missingList[] = 'ที่อยู่';
+                    if (in_array('phone', $missing))
+                        $missingList[] = 'เบอร์โทร';
+
+                    $reply = "รับทราบค่ะ 📝 กรุณาแจ้ง " . implode(', ', $missingList) . " เพิ่มด้วยนะคะ";
+
+                    if ($sessionId)
+                        $this->storeMessage($sessionId, 'assistant', $reply);
+                    $this->logBotReply($context, $reply, 'text');
+
+                    return [
+                        'reply_text' => $reply,
+                        'actions' => [],
+                        'meta' => ['reason' => 'checkout_address_incomplete', 'missing' => $missing, 'trace_id' => $traceId],
+                    ];
+                }
+                } // ✅ Close else block for looksLikeAddress
+            }
+
+            // =========================================================
+            // ✅ ADDRESS COLLECTION - Legacy fallback (ข้อความยาว)
+            // =========================================================
+            // ถ้าอยู่ใน step order_confirmed + delivery = ems/grab และข้อความยาวกว่า 30 ตัวอักษร (น่าจะเป็นที่อยู่)
+            $needsAddressLegacy = in_array($deliveryMethod, ['ems', 'grab', 'delivery'], true);
+            if (($checkoutStep === 'order_confirmed' || $checkoutStep === 'ask_address') && $needsAddressLegacy && mb_strlen($text) > 30) {
+                // พยายาม parse ที่อยู่จาก text
+                $addressData = $this->parseShippingAddress($text);
+
+                if (!empty($addressData['address_line1'])) {
+                    try {
+                        // Try multiple sources for platform_user_id
+                        $platformUserId = $context['platform_user_id']
+                            ?? $context['external_user_id']
+                            ?? $context['customer']['external_user_id']
+                            ?? null;
+                        $platform = $context['platform'] ?? 'line';
+
+                        Logger::info('[ROUTER_V1_LEGACY] Attempting to save address', [
+                            'platform_user_id' => $platformUserId,
+                            'platform' => $platform,
+                            'address_data' => $addressData,
+                            'context_external_user_id' => $context['external_user_id'] ?? 'N/A',
+                            'trace_id' => $traceId,
+                        ]);
+
+                        if ($platformUserId) {
+                            // 1. หา customer_id จาก customer_profiles (optional)
+                            $customer = $this->db->queryOne(
+                                "SELECT id FROM customer_profiles WHERE platform_user_id = ? AND platform = ? LIMIT 1",
+                                [$platformUserId, $platform]
+                            );
+                            $customerId = $customer ? (int) $customer['id'] : null;
+
+                            // 2. INSERT ลง customer_addresses
+                            $this->db->execute(
+                                "INSERT INTO customer_addresses (
+                                    customer_id, platform, platform_user_id, address_type, 
+                                    recipient_name, phone, address_line1, address_line2, 
+                                    subdistrict, district, province, postal_code, country, 
+                                    is_default, created_at
+                                ) VALUES (?, ?, ?, 'shipping', ?, ?, ?, ?, ?, ?, ?, ?, 'Thailand', 1, NOW())",
+                                [
+                                    $customerId ?: 1,
+                                    $platform,
+                                    $platformUserId,
+                                    $addressData['name'] ?? '',
+                                    $addressData['phone'] ?? '',
+                                    $addressData['address_line1'] ?? '',
+                                    $addressData['address_line2'] ?? '',
+                                    $addressData['subdistrict'] ?? '',
+                                    $addressData['district'] ?? '',
+                                    $addressData['province'] ?? '',
+                                    $addressData['postal_code'] ?? '',
+                                ]
+                            );
+
+                            $newAddressId = $this->db->lastInsertId();
+
+                            Logger::info('[ROUTER_V1_LEGACY] Customer address saved to customer_addresses', [
+                                'address_id' => $newAddressId,
+                                'customer_id' => $customerId,
+                                'platform_user_id' => $platformUserId,
+                                'address' => $addressData,
+                                'trace_id' => $traceId
+                            ]);
+                        } else {
+                            Logger::warning('[ROUTER_V1_LEGACY] No platform_user_id found', [
+                                'context_keys' => array_keys($context),
+                                'trace_id' => $traceId
+                            ]);
+                        }
+                    } catch (\Exception $e) {
+                        Logger::error('[ROUTER_V1_LEGACY] Failed to save customer address', [
+                            'error' => $e->getMessage(),
+                            'trace_id' => $traceId
+                        ]);
+                    }
+
+                    // ตอบกลับยืนยันที่อยู่ + สรุปออเดอร์
+                    $productName = trim((string) ($lastSlots['product_name'] ?? ''));
+                    $totalAmount = $lastSlots['first_payment'] ?? ($lastSlots['product_price'] ?? 0);
+                    $paymentMethod = trim((string) ($lastSlots['payment_method'] ?? 'full'));
+
+                    $paymentLabel = match ($paymentMethod) {
+                        'installment' => 'ผ่อน 3 งวด',
+                        'deposit' => 'มัดจำ 10%',
+                        default => 'โอนเต็มจำนวน',
+                    };
+
+                    $reply = "ได้รับที่อยู่เรียบร้อยแล้วค่ะ ✅||SPLIT||" .
+                        "📦 สรุปออเดอร์:\n" .
+                        "• สินค้า: " . ($productName ?: 'สินค้า') . "\n" .
+                        "• ยอดชำระ: " . number_format($totalAmount, 0) . " บาท ({$paymentLabel})\n" .
+                        "• จัดส่ง: EMS (+150 บาท)||SPLIT||" .
+                        "รอสักครู่นะคะ ระบบกำลังส่งเลขบัญชีให้ค่ะ 🙏";
+
+                    // Update session to complete - reset checkout_step
+                    $slots = $this->mergeSlots($lastSlots, [
+                        'checkout_step' => '',  // ✅ Reset เพื่อให้ลูกค้าถามเพิ่มเติมได้
+                        'shipping_address' => json_encode($addressData),
+                        'order_status' => 'pending_payment',  // เก็บสถานะว่าสั่งซื้อแล้ว
+                    ]);
+                    $this->updateSessionState((int) $sessionId, 'completed', $slots);
+
+                    if ($reply !== '') {
+                        $this->storeMessage($sessionId, 'assistant', $reply);
+                    }
+                    $this->logBotReply($context, $reply, 'text');
+
+                    return [
+                        'reply_text' => $reply,
+                        'actions' => [],
+                        'meta' => ['reason' => 'checkout_address_received', 'slots' => $slots, 'trace_id' => $traceId],
+                        'handoff_to_admin' => true
+                    ];
                 }
             }
 
@@ -776,6 +2168,25 @@ class RouterV1Handler implements BotHandlerInterface
             if (!$isAdmin && !empty($handoffTriggers)) {
                 $textLen = mb_strlen($text, 'UTF-8');
                 $shortConfirmations = ['สนใจ', 'ใช่', 'รับเลย', 'ตกลง', 'เอา', 'รับ', 'โอเค', 'ok'];
+
+                // =========================================================
+                // ✅ SKIP HANDOFF TRIGGERS if in checkout flow
+                // Let the checkout flow handle these keywords naturally
+                // =========================================================
+                $productPrice = (float) ($lastSlots['product_price'] ?? 0);
+                $productName = trim((string) ($lastSlots['product_name'] ?? ''));
+                $checkoutStep = trim((string) ($lastSlots['checkout_step'] ?? ''));
+
+                // If already in checkout flow or just asked payment, skip handoff triggers
+                // Let LLM handle the response contextually
+                if ($productPrice > 0 && !empty($checkoutStep)) {
+                    Logger::info('[HANDOFF_TRIGGERS] Skipping - in checkout flow', [
+                        'checkout_step' => $checkoutStep,
+                        'text' => $text,
+                    ]);
+                    // Don't check handoff triggers - let LLM handle checkout flow
+                    $handoffTriggers = []; // Clear to skip the loop below
+                }
 
                 foreach ($handoffTriggers as $keyword) {
                     $keyword = trim((string) $keyword);
@@ -882,9 +2293,24 @@ class RouterV1Handler implements BotHandlerInterface
             // =========================================================
             // ✅ Product code pattern detection (BEFORE routing rules)
             // Matches patterns like ROL-SUB-002, DIA-RNG-001, GUC-MAR-001
+            // ✅ CRITICAL: Skip if already in checkout flow to avoid duplicate search
             // =========================================================
+            $currentCheckoutStepForCodeDetection = trim((string) ($lastSlots['checkout_step'] ?? ''));
+            $skipProductCodeDetection = in_array($currentCheckoutStepForCodeDetection, ['ask_payment', 'ask_delivery', 'ask_address', 'order_confirmed', 'address_received'], true);
+
             $productCodePattern = '/\b([A-Z]{2,4}[-_][A-Z]{2,4}[-_]\d{2,4})\b/i';
-            if (preg_match($productCodePattern, $text, $codeMatch)) {
+
+            // ✅ DEBUG: Log product code detection attempt
+            Logger::info('[PRODUCT_CODE_DETECTION]', [
+                'trace_id' => $traceId,
+                'text' => $text,
+                'skip' => $skipProductCodeDetection,
+                'checkout_step' => $currentCheckoutStepForCodeDetection,
+                'pattern' => $productCodePattern,
+                'matches' => preg_match($productCodePattern, $text, $debugMatch) ? $debugMatch : null,
+            ]);
+
+            if (!$skipProductCodeDetection && preg_match($productCodePattern, $text, $codeMatch)) {
                 $detectedCode = strtoupper($codeMatch[1]);
                 $matchedRoute = 'product_lookup_by_code';
                 $meta['detected_product_code'] = $detectedCode;
@@ -913,19 +2339,94 @@ class RouterV1Handler implements BotHandlerInterface
                         // Cache candidates for later selection (e.g., 'เอาอันที่ 2')
                         $slots = $this->attachProductCandidatesToSlots($slots, $products, $detectedCode, $sessionPolicy);
 
+                        // ✅ CRITICAL: Save product info to slots for checkout flow
+                        $foundProductName = $products[0]['title'] ?? ($products[0]['name'] ?? null);
+                        $foundProductPrice = $products[0]['price'] ?? null;
+                        $foundProductCode = $detectedCode;
+                        
+                        $slots = $this->mergeSlots($slots, [
+                            'product_ref_id' => $products[0]['ref_id'] ?? null,
+                            'product_code' => $foundProductCode,
+                            'product_name' => $foundProductName,
+                            'product_price' => $foundProductPrice,
+                            'product_image_url' => $products[0]['thumbnail_url'] ?? null,
+                        ]);
+
                         // Create case for product inquiry
                         try {
                             $caseEngine = new CaseEngine($config, $context);
                             $caseSlots = [
                                 'product_code' => $detectedCode,
-                                'product_name' => $products[0]['title'] ?? $products[0]['name'] ?? null,
-                                'product_price' => $products[0]['price'] ?? null,
+                                'product_name' => $foundProductName,
+                                'product_price' => $foundProductPrice,
                                 'product_ref_id' => $products[0]['ref_id'] ?? null,
+                                'product_image_url' => $products[0]['thumbnail_url'] ?? null,
                             ];
                             $case = $caseEngine->getOrCreateCase(CaseEngine::CASE_PRODUCT_INQUIRY, $caseSlots);
                             $meta['case'] = ['id' => $case['id'] ?? null, 'case_no' => $case['case_no'] ?? null];
                         } catch (Exception $caseErr) {
                             Logger::error('[ROUTER_V1] Failed to create case: ' . $caseErr->getMessage());
+                        }
+
+                        // =========================================================
+                        // ✅ NEW: Check if user also expressed interest (สนใจ/เอา/ซื้อ)
+                        // If so, start checkout flow immediately instead of just showing product
+                        // =========================================================
+                        $interestPattern = '/(สนใจ|เอา|ซื้อ|ตกลง|จอง|cf|เอาเลย|ซื้อเลย|รับเลย|รับ)/iu';
+                        $hasInterestKeyword = preg_match($interestPattern, $text);
+                        
+                        if ($hasInterestKeyword && $foundProductPrice > 0) {
+                            Logger::info('[ROUTER_V1] Product code + interest keyword detected - starting checkout', [
+                                'code' => $foundProductCode,
+                                'price' => $foundProductPrice,
+                                'name' => $foundProductName,
+                                'trace_id' => $traceId ?? null
+                            ]);
+                            
+                            // Update slots to start checkout
+                            $slots = $this->mergeSlots($slots, ['checkout_step' => 'ask_payment']);
+                            
+                            if ($sessionId) {
+                                $this->updateSessionState((int) $sessionId, 'ask_payment', $slots);
+                            }
+                            
+                            // Build checkout reply
+                            $checkoutReply = "ยินดีค่ะ 😊\n\n";
+                            $checkoutReply .= "📦 {$foundProductName}\n";
+                            $checkoutReply .= "🏷️ รหัส: {$foundProductCode}\n";
+                            $checkoutReply .= "💰 " . number_format($foundProductPrice, 0) . " บาท\n\n";
+                            $checkoutReply .= "สะดวกชำระแบบไหนดีคะ?\n";
+                            $checkoutReply .= "1️⃣ โอนเต็ม\n";
+                            $checkoutReply .= "2️⃣ ผ่อน 3 งวด (+3% ค่าดำเนินการครั้งแรก)\n";
+                            $checkoutReply .= "3️⃣ มัดจำ 10%";
+                            
+                            if ($sessionId) {
+                                $this->storeMessage($sessionId, 'assistant', $checkoutReply);
+                            }
+                            $this->logBotReply($context, $checkoutReply, 'text');
+                            
+                            // ✅ Build actions: Image first, then quick reply
+                            $actionsOut = [];
+                            
+                            // Add product image (ลูกค้ายังไม่เคยเห็นรูป ต้องแสดงด้วย)
+                            $productImageUrl = $products[0]['thumbnail_url'] ?? ($products[0]['image_url'] ?? null);
+                            if ($productImageUrl) {
+                                $actionsOut[] = ['type' => 'image', 'url' => $productImageUrl];
+                            }
+                            
+                            // Add quick reply buttons
+                            $actionsOut[] = [
+                                'type' => 'quick_reply',
+                                'items' => [
+                                    ['label' => '💰 โอนเต็ม', 'text' => 'โอนเต็ม'],
+                                    ['label' => '💳 ผ่อน 3 งวด', 'text' => 'ผ่อน 3 งวด'],
+                                    ['label' => '🎯 มัดจำ', 'text' => 'มัดจำ'],
+                                    ['label' => '❌ ยกเลิก', 'text' => 'ยกเลิก'],
+                                ]
+                            ];
+                            
+                            $meta['reason'] = 'product_code_with_interest_checkout';
+                            return ['reply_text' => $checkoutReply, 'actions' => $actionsOut, 'meta' => $meta];
                         }
 
                         if ($sessionId) {
@@ -939,6 +2440,27 @@ class RouterV1Handler implements BotHandlerInterface
                         return [
                             'reply_text' => $replyText,
                             'actions' => $actionsOut,
+                            'meta' => $meta,
+                        ];
+                    } else {
+                        // ✅ FIX: Product code detected but not found - return clear message
+                        $notFoundReply = $templates['product_not_found']
+                            ?? "❌ ไม่พบสินค้ารหัส **{$detectedCode}** ในระบบค่ะ\n\nลองค้นหาด้วยรหัสอื่น หรือส่งรูปสินค้ามาให้แอดมินช่วยเช็คได้เลยนะคะ 😊";
+
+                        if ($sessionId) {
+                            $this->storeMessage($sessionId, 'assistant', $notFoundReply);
+                        }
+                        $this->logBotReply($context, $notFoundReply, 'text');
+
+                        Logger::info('[ROUTER_V1] Product code not found', [
+                            'code' => $detectedCode,
+                            'trace_id' => $traceId ?? null
+                        ]);
+
+                        $meta['reason'] = 'product_not_found';
+                        return [
+                            'reply_text' => $notFoundReply,
+                            'actions' => [],
                             'meta' => $meta,
                         ];
                     }
@@ -1222,12 +2744,58 @@ class RouterV1Handler implements BotHandlerInterface
 
                 // =========================================================
                 // ✅ KEYWORD-BASED INTENT FALLBACK when LLM fails to detect
+                // ✅ CRITICAL: Skip if already in checkout flow
                 // =========================================================
-                if (empty($intent)) {
+                $keywordCheckoutStep = trim((string) ($lastSlots['checkout_step'] ?? ''));
+                $isInCheckoutFlowForKeyword = in_array($keywordCheckoutStep, ['ask_payment', 'ask_delivery', 'ask_address', 'order_confirmed', 'address_received'], true);
+
+                if (empty($intent) && !$isInCheckoutFlowForKeyword) {
                     $textLower = mb_strtolower($text, 'UTF-8');
 
+                    // =========================================================
+                    // ✅ CONFIRMATION QUESTION DETECTION (Priority 1)
+                    // Detect "ใช่ไหม", "ใช่มั้ย", "ใช่เหรอ" etc. patterns
+                    // These need direct YES answer, not repeated info
+                    // =========================================================
+                    $isConfirmationQuestion = preg_match('/ใช่(ไหม|มั้ย|เหรอ|ป่ะ|รึเปล่า)|ถูก(ต้อง)?ไหม|หมายถึง.*ใช่|หมายความว่า.*ใช่/u', $textLower);
+
+                    if ($isConfirmationQuestion) {
+                        $intent = 'confirmation_response';
+                        Logger::info("[INTENT_FALLBACK] Confirmation question detected - will confirm understanding", ['text' => $text]);
+                    }
+                    // =========================================================
+                    // ✅ NEW INTENT PATTERNS - Added for dynamic conversation
+                    // =========================================================
+                    // Price negotiation (ลดราคา, ต่อรอง, discount)
+                    elseif (preg_match('/ลดราคา|ลดได้|ต่อราคา|ต่อรอง|discount|ถูกกว่า|ขอลด|ลดหน่อย|ราคา.*ลด/iu', $textLower)) {
+                        $intent = 'price_negotiation';
+                        Logger::info("[INTENT_FALLBACK] Keyword match: price_negotiation", ['text' => $text]);
+                    }
+                    // Change payment method (เปลี่ยนวิธีจ่าย, จ่ายเต็มแทน)
+                    elseif (preg_match('/เปลี่ยน.*(โอน|ผ่อน|มัดจำ|จ่าย|ชำระ|วิธี)|จ่ายเต็ม.*แทน|เปลี่ยนใจ.*(โอน|ผ่อน)|โอนเต็ม.*ดีกว่า|ผ่อน.*ดีกว่า|ขอเปลี่ยน.*(วิธี|ชำระ)/iu', $textLower)) {
+                        $intent = 'change_payment_method';
+                        Logger::info("[INTENT_FALLBACK] Keyword match: change_payment_method", ['text' => $text]);
+                    }
+                    // Consignment / ฝากขาย
+                    elseif (preg_match('/ฝากขาย|ขายฝาก|เอามาฝาก.*ขาย|ฝาก.*ช่วยขาย|consign/iu', $textLower)) {
+                        $intent = 'consignment';
+                        Logger::info("[INTENT_FALLBACK] Keyword match: consignment", ['text' => $text]);
+                    }
+                    // General installment inquiry (ผ่อนได้ไหม, มีผ่อนไหม)
+                    elseif (preg_match('/(ผ่อน|งวด).*(ได้ไหม|ได้มั้ย|มีไหม|มีมั้ย|รึเปล่า)|มี.*(ผ่อน|งวด).*ไหม/iu', $textLower)) {
+                        $intent = 'installment_inquiry';
+                        Logger::info("[INTENT_FALLBACK] Keyword match: installment_inquiry (asking if available)", ['text' => $text]);
+                    }
+                    // General pawn inquiry (จำนำได้ไหม, รับจำนำไหม)
+                    elseif (preg_match('/(จำนำ|รับฝาก).*(ได้ไหม|ได้มั้ย|มีไหม|มีมั้ย|รึเปล่า)|มี.*จำนำ.*ไหม|จำนำ.*ละ/iu', $textLower)) {
+                        $intent = 'pawn_inquiry';
+                        Logger::info("[INTENT_FALLBACK] Keyword match: pawn_inquiry (asking if available)", ['text' => $text]);
+                    }
+                    // =========================================================
+                    // END NEW INTENT PATTERNS
+                    // =========================================================
                     // Savings keywords
-                    if (preg_match('/ดอก\s*กี่|ดอก\s*เท่าไหร่|ดอกเบี้ย\s*กี่|ดอกเบี้ย\s*เท่าไหร่|ดอก\s*%|ดอกเบี้ย\s*%/u', $textLower)) {
+                    elseif (preg_match('/ดอก\s*กี่|ดอก\s*เท่าไหร่|ดอกเบี้ย\s*กี่|ดอกเบี้ย\s*เท่าไหร่|ดอก\s*%|ดอกเบี้ย\s*%/u', $textLower)) {
                         $intent = 'interest_rate_inquiry';
                         // Determine mode: pawn vs installment
                         $slots['interest_mode'] = (preg_match('/จำนำ|ฝากจำนำ|ต่อดอก|ไถ่ถอน/u', $textLower)) ? 'pawn' : 'installment';
@@ -1241,11 +2809,59 @@ class RouterV1Handler implements BotHandlerInterface
                         $slots['action_type'] = 'new';
                         Logger::info("[INTENT_FALLBACK] Keyword match: savings_new", ['text' => $text]);
                     }
+                    // =========================================================
+                    // ✅ Installment Summary Query Detection (PRIORITY before generic)
+                    // Pattern: ต้องมี (งวด|ผ่อน) + (inquiry words)
+                    // เพื่อแยก "ถามยอดค้าง" vs "ถามโปรโมผ่อน" vs "จ่ายค่างวด"
+                    // =========================================================
+                    elseif (
+                        preg_match(
+                            '/(' .
+                            // Pattern 1: (งวด|ผ่อน) + inquiry (เหลือ|ค้าง|กี่|สรุป|เช็ค)
+                            '(งวด|ผ่อน).{0,10}(เหลือ|ค้าง|กี่บาท|กี่งวด|สรุป|เช็ค|ดู|ขอดู)|' .
+                            // Pattern 2: inquiry + (งวด|ผ่อน)
+                            '(เหลือ|ค้าง|ยอด).{0,10}(งวด|ผ่อน)|' .
+                            // Pattern 3: Explicit summary requests
+                            '(เช็คยอด|ดูยอด|ขอยอด|สรุปยอด).{0,5}(ผ่อน|งวด)|' .
+                            // Pattern 4: "เหลือกี่งวด", "ต้องจ่ายอีกเท่าไหร่"
+                            '(เหลือ.*กี่.*งวด|ต้องจ่าย.*อีก.*เท่าไหร่|จ่ายไปแล้ว.*กี่.*งวด)' .
+                            ')/u',
+                            $textLower
+                        )
+                    ) {
+                        $intent = 'installment_flow';
+                        $slots['action_type'] = 'summary';
+                        Logger::info("[INTENT_FALLBACK] Keyword match: installment_flow (summary query)", ['text' => $text]);
+                    }
+                    // =========================================================
+                    // ✅ Explicit Installment Action Keywords (ปิดยอด, ต่อดอก)
+                    // These are specific installment actions, NOT pawn actions
+                    // Must be checked BEFORE generic installment/pawn patterns
+                    // =========================================================
+                    elseif (preg_match('/ปิดยอด/u', $textLower)) {
+                        $intent = 'installment_flow';
+                        $slots['action_type'] = 'close_check';
+                        Logger::info("[INTENT_FALLBACK] Keyword match: installment_flow (close_check)", ['text' => $text]);
+                    } elseif (preg_match('/ต่อดอก/u', $textLower)) {
+                        // "ต่อดอก" can be installment or pawn context
+                        // Check for pawn context words
+                        $isPawnContext = preg_match('/จำนำ|ฝากจำนำ|ของจำนำ|ไถ่|ไถ่ถอน/u', $textLower);
+                        if ($isPawnContext) {
+                            $intent = 'pawn_new';
+                            $slots['action_type'] = 'extend';
+                            Logger::info("[INTENT_FALLBACK] Keyword match: pawn_new (extend interest)", ['text' => $text]);
+                        } else {
+                            // Default to installment context
+                            $intent = 'installment_flow';
+                            $slots['action_type'] = 'extend_interest';
+                            Logger::info("[INTENT_FALLBACK] Keyword match: installment_flow (extend_interest)", ['text' => $text]);
+                        }
+                    }
                     // Installment keywords - SMART DETECTION
                     // Distinguish: Promotion inquiry vs Actual payment
                     elseif (preg_match('/ผ่อน|งวด|ผ่อนชำระ/u', $textLower)) {
                         // Check if this is PAYMENT context (จ่าย/โอน/ชำระ + งวด)
-                        $isPaymentContext = preg_match('/จ่าย.*(งวด|ผ่อน)|โอน.*(งวด|ผ่อน)|ชำระ.*(งวด|ผ่อน)|งวดที่|ต่อดอก|ปิดยอด/u', $textLower);
+                        $isPaymentContext = preg_match('/จ่าย.*(งวด|ผ่อน)|โอน.*(งวด|ผ่อน)|ชำระ.*(งวด|ผ่อน)|งวดที่/u', $textLower);
 
                         if ($isPaymentContext) {
                             // Customer is making a payment
@@ -1258,8 +2874,9 @@ class RouterV1Handler implements BotHandlerInterface
                             Logger::info("[INTENT_FALLBACK] Keyword match: interest_rate_inquiry (promotion question)", ['text' => $text]);
                         }
                     }
-                    // Pawn keywords
-                    elseif (preg_match('/จำนำ|ฝากจำนำ|ต่อดอก|ไถ่ถอน/u', $textLower)) {
+                    // Pawn keywords (จำนำ context)
+                    // Note: ต่อดอก is handled above with context detection
+                    elseif (preg_match('/จำนำ|ฝากจำนำ|ไถ่ถอน/u', $textLower)) {
                         $intent = 'pawn_new';
                         $slots['action_type'] = 'new';
                         Logger::info("[INTENT_FALLBACK] Keyword match: pawn_new", ['text' => $text]);
@@ -1276,10 +2893,47 @@ class RouterV1Handler implements BotHandlerInterface
                         $slots['action_type'] = 'new';
                         Logger::info("[INTENT_FALLBACK] Keyword match: deposit_new", ['text' => $text]);
                     }
-                    // Product inquiry keywords
-                    elseif (preg_match('/สนใจ|ดู|มี.*ไหม|ราคา|แหวน|สร้อย|นาฬิกา|กำไล|ต่างหู/u', $textLower)) {
+                    // Buy-back / Sell-back keywords (เอามาขาย/เทิร์น)
+                    elseif (preg_match('/เอามาขาย|ขายคืน|เทิร์น|รับซื้อไหม|รับซื้อมั้ย|จะขาย/u', $textLower)) {
+                        $intent = 'buy_back';
+                        Logger::info("[INTENT_FALLBACK] Keyword match: buy_back", ['text' => $text]);
+                    }
+                    // Repair status keywords (เช็คสถานะซ่อม)
+                    elseif (preg_match('/สถานะ.*(ซ่อม|งาน)|ซ่อมเสร็จ.*ยัง|งานซ่อม.*(ไหน|เมื่อไหร่)|เมื่อไหร่.*(ซ่อม|เสร็จ)/u', $textLower)) {
+                        $intent = 'repair_inquiry';
+                        $slots['action_type'] = 'inquiry';
+                        Logger::info("[INTENT_FALLBACK] Keyword match: repair_inquiry (status check)", ['text' => $text]);
+                    }
+                    // Product inquiry keywords (general - LLM handles brand/product extraction)
+                    // ✅ IMPORTANT: Only trigger product_availability if there's a REAL product indicator
+                    // Short generic keywords like "สนใจ", "ราคา", "ดู" alone should NOT trigger product search
+                    elseif (preg_match('/แหวน|สร้อย|นาฬิกา|กำไล|ต่างหู|กระเป๋า|เพชร|ทอง|แบบไหน.*บ้าง|มีอะไรบ้าง/iu', $textLower)) {
                         $intent = 'product_availability';
-                        Logger::info("[INTENT_FALLBACK] Keyword match: product_availability", ['text' => $text]);
+                        // If asking "มีแบบไหนบ้าง" without specifying, try to get from previous context
+                        if (preg_match('/แบบไหน.*บ้าง|มีอะไรบ้าง|มีอะไร/u', $textLower)) {
+                            if (!empty($lastSlots['product_name'])) {
+                                $slots['product_name'] = $lastSlots['product_name'];
+                                Logger::info("[INTENT_FALLBACK] Using product_name from previous context", ['product_name' => $slots['product_name']]);
+                            } elseif (!empty($lastSlots['last_product_query'])) {
+                                $slots['product_name'] = $lastSlots['last_product_query'];
+                                Logger::info("[INTENT_FALLBACK] Using last_product_query from previous context", ['product_name' => $slots['product_name']]);
+                            }
+                        }
+                        Logger::info("[INTENT_FALLBACK] Keyword match: product_availability (has product indicator)", ['text' => $text, 'slots' => $slots]);
+                    }
+                    // Generic interest keywords (สนใจ, ดู, ราคา, มีไหม) - only match if combined with product context
+                    elseif (preg_match('/สนใจ|ดู|มี.*ไหม|ราคา/iu', $textLower)) {
+                        // Check if there's product context from previous conversation
+                        if (!empty($lastSlots['product_name']) || !empty($lastSlots['product_code']) || !empty($lastSlots['last_product_query'])) {
+                            $intent = 'product_availability';
+                            $slots['product_name'] = $lastSlots['product_name'] ?? ($lastSlots['last_product_query'] ?? null);
+                            $slots['product_code'] = $lastSlots['product_code'] ?? null;
+                            Logger::info("[INTENT_FALLBACK] Generic keyword with product context", ['text' => $text, 'slots' => $slots]);
+                        } else {
+                            // No product context - let LLM handle or ask for clarification
+                            Logger::info("[INTENT_FALLBACK] Generic keyword without product context - letting LLM handle", ['text' => $text]);
+                            // Don't set intent - let it fall through to LLM
+                        }
                     }
                 }
 
@@ -1292,6 +2946,17 @@ class RouterV1Handler implements BotHandlerInterface
                 $meta['missing_slots'] = $missingSlots;
                 if ($confidence !== null)
                     $meta['confidence'] = (float) $confidence;
+
+                // =========================================================
+                // ✅ PERSIST PRODUCT CONTEXT: Save product_name for follow-up questions
+                // =========================================================
+                if (!empty($slots['product_name']) && $sessionId) {
+                    $this->updateSessionState((int) $sessionId, 'product_context', [
+                        'product_name' => $slots['product_name'],
+                        'last_product_query' => $slots['product_name'],
+                    ]);
+                    Logger::info('[CONTEXT] Saved product_name for follow-up', ['product_name' => $slots['product_name']]);
+                }
 
                 // =========================================================
                 // ✅ AUTO-CREATE CASE when intent detected (via API)
@@ -1811,6 +3476,7 @@ class RouterV1Handler implements BotHandlerInterface
                         'product_name' => $products[0]['title'] ?? $products[0]['name'] ?? null,
                         'product_price' => $products[0]['price'] ?? null,
                         'product_ref_id' => $products[0]['ref_id'] ?? null,
+                        'product_image_url' => $products[0]['thumbnail_url'] ?? null,
                     ];
                     $case = $caseEngine->getOrCreateCase(CaseEngine::CASE_PRODUCT_INQUIRY, $caseSlots);
                     Logger::info('[ROUTER_V1] Created/updated case for product inquiry', [
@@ -1826,11 +3492,25 @@ class RouterV1Handler implements BotHandlerInterface
                 $slots = $this->attachProductCandidatesToSlots($slots, $products, $code, $config['session_policy'] ?? []);
                 $slots = $this->mergeSlots($slots, [
                     'product_ref_id' => $products[0]['ref_id'] ?? null,
+                    'product_code' => $code,
                     'product_name' => $products[0]['title'] ?? ($products[0]['name'] ?? null),
                     'product_price' => $products[0]['price'] ?? null,
+                    'product_image_url' => $products[0]['thumbnail_url'] ?? null,
                 ]);
 
                 $actionsOut = $this->buildImageActionsFromProducts($products, 3);
+
+                // ✅ Add Quick Reply buttons for guided checkout (LINE/Facebook)
+                if (count($products) === 1) {
+                    $actionsOut[] = [
+                        'type' => 'quick_reply',
+                        'items' => [
+                            ['label' => '🛍️ สนใจ', 'text' => 'สนใจ'],
+                            ['label' => '💳 ดูตารางผ่อน', 'text' => 'ผ่อน'],
+                            ['label' => '💬 สอบถามเพิ่ม', 'text' => 'สอบถาม'],
+                        ]
+                    ];
+                }
 
                 return [
                     'handled' => true,
@@ -1905,9 +3585,24 @@ class RouterV1Handler implements BotHandlerInterface
             }
 
             // If incoming text mentions product types (สร้อย, แหวน, กำไล, etc.), use that for search
-            $categoryKeywords = ['สร้อย', 'แหวน', 'กำไล', 'ต่างหู', 'จี้', 'เพชร', 'ทอง', 'สายสร้อย', 'กำไล', 'พระ', 'นาฬิกา'];
+            // LLM handles brand extraction via slots - no hardcode here
+            $categoryKeywords = ['สร้อย', 'แหวน', 'กำไล', 'ต่างหู', 'จี้', 'เพชร', 'ทอง', 'สายสร้อย', 'พระ', 'นาฬิกา', 'กระเป๋า'];
 
-            // Check category keywords only if no product_code
+            // Check category keywords
+            if ($searchKeyword === '') {
+                foreach ($categoryKeywords as $cat) {
+                    if (mb_strpos($incomingText, $cat) !== false) {
+                        $searchKeyword = $cat;
+                        Logger::info('[ROUTER_V1] Product search - using category from text', [
+                            'category' => $cat,
+                            'incoming_text' => $incomingText
+                        ]);
+                        break;
+                    }
+                }
+            }
+
+            // Check category keywords only if no brand/product_code
             if ($searchKeyword === '') {
                 foreach ($categoryKeywords as $cat) {
                     if (mb_strpos($incomingText, $cat) !== false) {
@@ -1929,20 +3624,86 @@ class RouterV1Handler implements BotHandlerInterface
                 ]);
             }
 
-            // Third priority: Use product_name
-            if ($searchKeyword === '' && $productName !== '') {
+            // Third priority: Use product_name from slots (may come from previous context)
+            // ✅ FIX: จะใช้ product_name เดิมค้นหา ก็ต่อเมื่อในประโยคใหม่มีคำค้นหาเท่านั้น
+            // ไม่ใช่เอะอะก็ค้นของเดิม (ป้องกัน Search Loop)
+            $reSearchTriggers = ['มี', 'หา', 'ดู', 'ราคา', 'เท่าไหร่', 'รายละเอียด', 'สภาพ', 'เช็ค', 'ตรวจ'];
+            $shouldReSearch = false;
+            foreach ($reSearchTriggers as $trig) {
+                if (mb_stripos($incomingText, $trig) !== false) {
+                    $shouldReSearch = true;
+                    break;
+                }
+            }
+
+            if ($searchKeyword === '' && $productName !== '' && $shouldReSearch) {
                 $searchKeyword = $productName;
+                Logger::info('[ROUTER_V1] Product search - using product_name from slots (re-search triggered)', [
+                    'product_name' => $productName,
+                    'trigger_found' => true
+                ]);
             }
 
-            // Fallback: Use incoming text as search query
-            if ($searchKeyword === '') {
-                $searchKeyword = $incomingText;
+            // Fourth priority: Check last_product_query from session (context from previous message)
+            if ($searchKeyword === '' && !empty($lastSlots['last_product_query'])) {
+                $searchKeyword = $lastSlots['last_product_query'];
+                Logger::info('[ROUTER_V1] Product search - using last_product_query from context', [
+                    'last_product_query' => $searchKeyword
+                ]);
             }
 
-            if ($searchKeyword === '') {
-                // Use fallback template instead of non-existent product_availability template
-                $tpl = $templates['fallback'] ?? 'ลูกค้าสนใจสินค้าไหมค่ะ 😊 ช่วยอธิบายรายละเอียดเพิ่มอีกนิดทีค่ะ เช่น รุ่น/รหัส';
-                return ['handled' => false, 'reply_text' => $tpl, 'reason' => 'missing_product_name', 'slots' => $slots];
+            // =========================================================
+            // ✅ SMART FALLBACK: Don't use generic keywords as search query
+            // Keywords like "สนใจ", "ราคา", "ดู" alone are NOT product names
+            // =========================================================
+            $genericKeywords = [
+                'สนใจ',
+                'ดู',
+                'ราคา',
+                'ราคาเท่าไหร่',
+                'ราคาเท่าไร',
+                'มีไหม',
+                'มีมั้ย',
+                'เท่าไหร่',
+                'เท่าไร',
+                'กี่บาท',
+                'ขาย',
+                'ซื้อ',
+                'เอา',
+                'รับ',
+                'ตกลง',
+                'ใช่',
+                'โอเค',
+                'ok',
+                'yes',
+                'อยากได้',
+                'อยาก',
+                'ต้องการ',
+                'หา'
+            ];
+            $textLowerTrimmed = mb_strtolower(trim($incomingText), 'UTF-8');
+            $isGenericOnly = in_array($textLowerTrimmed, $genericKeywords, true)
+                || preg_match('/^(สนใจ|ดู|ราคา|มี)$/u', $textLowerTrimmed);
+
+            // Fallback: Use incoming text as search query (only if it's a real product name)
+            if ($searchKeyword === '' && !$isGenericOnly) {
+                // Only use if text looks like a product name (has length > 2 and is not just a greeting)
+                if (mb_strlen($incomingText, 'UTF-8') > 2 && !preg_match('/^(สวัสดี|hello|hi|ดีค่ะ|ดีครับ|หวัดดี)$/iu', $incomingText)) {
+                    $searchKeyword = $incomingText;
+                    Logger::info('[ROUTER_V1] Product search - using incoming text as fallback', [
+                        'incoming_text' => $incomingText
+                    ]);
+                }
+            }
+
+            // If still no search keyword, ask user to specify
+            if ($searchKeyword === '' || $isGenericOnly) {
+                $tpl = $templates['ask_product_name'] ?? 'สนใจสินค้าอะไรคะ 😊 ช่วยบอกชื่อรุ่น/รหัส/แบรนด์ได้เลยค่ะ';
+                Logger::info('[ROUTER_V1] Product search - no valid keyword, asking for product name', [
+                    'incoming_text' => $incomingText,
+                    'is_generic_only' => $isGenericOnly
+                ]);
+                return ['handled' => true, 'reply_text' => $tpl, 'reason' => 'ask_product_name', 'slots' => $slots];
             }
 
             $endpoint = $ep(['product_search']);
@@ -2138,15 +3899,14 @@ class RouterV1Handler implements BotHandlerInterface
             $rules = $config['business_rules'] ?? [];
 
             if ($mode === 'pawn') {
-                $rate = $rules['pawn_interest_rate_percent_default'] ?? $rules['pawn_interest_rate_percent'] ?? null;
-                $tpl = $templates['pawn_interest_rate_info']
-                    ?? "ดอกเบี้ยจำนำจะขึ้นกับเงื่อนไขสัญญา/ประเภทสินค้าเป็นหลักค่ะ 😊
-" .
-                    "ตอนนี้อัตราโดยทั่วไปอยู่ประมาณ {{interest_rate}}%/เดือน (ถ้าไม่ตรง รบกวนแจ้งเลขสัญญา/ส่งรูปสัญญา เดี๋ยวเช็คให้ได้ค่ะ)";
+                $rate = $rules['pawn_interest_rate_percent_default'] ?? $rules['pawn_interest_rate_percent'] ?? 2;
+                $tpl = $templates['deposit_interest_rate_info']
+                    ?? "ดอกเบี้ยการรับฝากอยู่ที่ {{interest_rate}}% ต่อเดือนค่ะ 😊\n" .
+                    "📌 เงื่อนไข:\n• รับฝากเฉพาะสินค้าที่ซื้อจากทางร้านเท่านั้น\n• ต้องมีใบรับประกันตัวจริงมาแสดง\n• ชำระดอกเบี้ยทุก 30 วัน";
                 $reply = $this->renderTemplate($tpl, [
-                    'interest_rate' => ($rate === null || $rate === '') ? '-' : (string) $rate,
+                    'interest_rate' => ($rate === null || $rate === '') ? '2' : (string) $rate,
                 ]);
-                return ['handled' => true, 'reply_text' => $reply, 'reason' => 'interest_rate_info_pawn', 'slots' => $slots];
+                return ['handled' => true, 'reply_text' => $reply, 'reason' => 'interest_rate_info_deposit', 'slots' => $slots];
             }
 
             // Default: installment
@@ -2161,6 +3921,492 @@ class RouterV1Handler implements BotHandlerInterface
                 'interest_rate' => ($rate === null || $rate === '') ? '-' : (string) $rate,
             ]);
             return ['handled' => true, 'reply_text' => $reply, 'reason' => 'interest_rate_info_installment', 'slots' => $slots];
+        }
+
+        // -------------------------
+        // Intent: confirmation_response (ลูกค้าถามยืนยันความเข้าใจ - ใช่ไหม, ถูกต้องไหม)
+        // -------------------------
+        if ($intent === 'confirmation_response') {
+            $textLower = mb_strtolower($text, 'UTF-8');
+
+            // Context-aware confirmation based on what they're asking about
+            if (preg_match('/ผ่อนครบ.*ถึง.*ได้ของ|ผ่อนครบ.*ได้ของ|ได้ของ.*หลังผ่อนครบ/u', $textLower)) {
+                // Confirming installment completion = get product
+                $reply = $templates['confirm_installment_receive']
+                    ?? "ใช่ค่ะ ถูกต้องเลย ✅\n\nผ่อนครบ 3 งวด รับของได้ทันทีเลยค่ะ 🎁\nสนใจให้คำนวณยอดงวดแรกไหมคะ? 😊";
+            } elseif (preg_match('/ไม่ต้อง.*เอกสาร|ไม่ใช้.*เอกสาร/u', $textLower)) {
+                // Confirming no documents needed
+                $reply = $templates['confirm_no_documents']
+                    ?? "ใช่ค่ะ ถูกต้อง ✅\n\nไม่ต้องใช้เอกสารใดๆ เลยค่ะ ง่ายมากๆ 😊";
+            } elseif (preg_match('/ผ่อน.*3.*งวด|3.*งวด.*ผ่อน/u', $textLower)) {
+                // Confirming 3 installments
+                $reply = $templates['confirm_3_installments']
+                    ?? "ใช่ค่ะ ✅ ผ่อน 3 งวด ภายใน 60 วัน\nค่าดำเนินการ 3% จ่ายพร้อมงวดแรกค่ะ 😊";
+            } else {
+                // Generic confirmation
+                $reply = $templates['confirm_understanding']
+                    ?? "ใช่ค่ะ ถูกต้องเลย ✅\nมีอะไรให้ช่วยเพิ่มเติมไหมคะ? 😊";
+            }
+
+            return ['handled' => true, 'reply_text' => $reply, 'reason' => 'confirmation_answered', 'slots' => $slots];
+        }
+
+        // =========================================================
+        // ✅ NEW INTENT HANDLERS - For dynamic conversation
+        // =========================================================
+
+        // -------------------------
+        // Intent: price_negotiation (ลดราคาได้ไหม, ต่อราคาได้ไหม)
+        // -------------------------
+        if ($intent === 'price_negotiation') {
+            // Note: $slots already merged with lastSlots from caller
+            $productName = trim((string) ($slots['product_name'] ?? ''));
+            $productPrice = (float) ($slots['product_price'] ?? 0);
+
+            if ($productPrice > 0 && $productName !== '') {
+                $reply = $templates['price_negotiation_with_product']
+                    ?? "ราคา " . number_format($productPrice) . " บาท สำหรับ {$productName} เป็นราคาพิเศษแล้วนะคะ 🙏||SPLIT||แต่ถ้าลูกค้าสนใจหลายชิ้น หรือซื้อพร้อมบริการอื่น ลองปรึกษาได้ค่ะ เดี๋ยวช่วยดูให้ 😊";
+            } else {
+                $reply = $templates['price_negotiation'] 
+                    ?? "ราคาที่แจ้งเป็นราคาพิเศษแล้วค่ะ 🙏||SPLIT||ถ้าลูกค้าสนใจซื้อหลายชิ้น สามารถปรึกษาได้นะคะ เดี๋ยวลองดูให้ค่ะ 😊";
+            }
+            return ['handled' => true, 'reply_text' => $reply, 'reason' => 'price_negotiation_answered', 'slots' => $slots];
+        }
+
+        // -------------------------
+        // Intent: change_payment_method (เปลี่ยนวิธีชำระเงิน)
+        // -------------------------
+        if ($intent === 'change_payment_method') {
+            // Note: $slots already merged with lastSlots from caller
+            $productName = trim((string) ($slots['product_name'] ?? ''));
+            $productCode = trim((string) ($slots['product_code'] ?? ''));
+            $productPrice = (float) ($slots['product_price'] ?? 0);
+            $newPaymentMethod = trim((string) ($slots['new_payment_method'] ?? ''));
+
+            // ✅ If user explicitly asked for deposit/booking
+            if ($newPaymentMethod === 'deposit' && $productPrice > 0) {
+                $depositPolicy = $config['policies']['deposit'] ?? [];
+                $depositPercent = (float) ($depositPolicy['percent'] ?? 10);
+                $holdDays = (int) ($depositPolicy['hold_days'] ?? 14);
+                $depositAmount = round($productPrice * ($depositPercent / 100));
+
+                $reply = "ได้ค่ะ เปลี่ยนเป็นมัดจำได้เลยค่ะ 🎯\n\n";
+                $reply .= "📦 สินค้า: " . ($productName ?: $productCode ?: 'รายการที่เลือก') . "\n";
+                $reply .= "💰 ราคาเต็ม: " . number_format($productPrice) . " บาท\n";
+                $reply .= "🎯 ยอดมัดจำ: " . number_format($depositAmount) . " บาท ({$depositPercent}%)\n";
+                $reply .= "📅 เก็บสินค้าให้: {$holdDays} วัน\n\n";
+                $reply .= "สะดวกรับสินค้าช่องทางไหนคะ?\n";
+                $reply .= "🏢 พิมพ์ 1 = รับที่ร้าน (สีลม 5)\n";
+                $reply .= "📦 พิมพ์ 2 = จัดส่ง EMS (+150 บาท)";
+
+                // Update slots for next step
+                $slots['checkout_step'] = 'ask_delivery';
+                $slots['payment_method'] = 'deposit';
+                $slots['deposit_amount'] = $depositAmount;
+
+                return ['handled' => true, 'reply_text' => $reply, 'reason' => 'change_to_deposit', 'slots' => $slots];
+            }
+
+            if ($productPrice > 0) {
+                // คำนวณยอดผ่อน
+                $feePercent = (float) ($config['policies']['installment']['service_fee_percent'] ?? 3);
+                $fee = round($productPrice * ($feePercent / 100));
+                $depositAmount = round($productPrice * 0.10);
+
+                $reply = "ได้ค่ะ 😊 เปลี่ยนได้เลยค่ะ\n\n";
+                $reply .= "📦 สินค้า: " . ($productName ?: 'รายการที่เลือก') . "\n";
+                $reply .= "💰 ราคา: " . number_format($productPrice) . " บาท\n\n";
+                $reply .= "เลือกวิธีชำระได้เลยค่ะ:\n";
+                $reply .= "1️⃣ โอนเต็มจำนวน " . number_format($productPrice) . " บาท\n";
+                $reply .= "2️⃣ ผ่อน 3 งวด (+" . number_format($fee) . " ค่าธรรมเนียม)\n";
+                $reply .= "3️⃣ มัดจำ " . number_format($depositAmount) . " บาท (10%)\n";
+                
+                // Update checkout step
+                $slots['checkout_step'] = 'payment_selection';
+            } else {
+                $reply = $templates['change_payment_method'] 
+                    ?? "ได้ค่ะ 😊 ลูกค้าต้องการเปลี่ยนเป็นวิธีไหนดีคะ?||SPLIT||1️⃣ โอนเต็มจำนวน||SPLIT||2️⃣ ผ่อน 3 งวด (+3%)||SPLIT||3️⃣ มัดจำ 10%";
+            }
+            return ['handled' => true, 'reply_text' => $reply, 'reason' => 'change_payment_answered', 'slots' => $slots];
+        }
+
+        // -------------------------
+        // Intent: consignment (ฝากขาย)
+        // -------------------------
+        if ($intent === 'consignment') {
+            $reply = $templates['consignment'] 
+                ?? "ขอบคุณที่สนใจค่ะ 💎||SPLIT||ทางร้านรับฝากขายเฉพาะสินค้าที่ซื้อจากร้าน ฮ.เฮง เฮง ค่ะ||SPLIT||รบกวนถ่ายรูปสินค้าพร้อมใบรับประกันส่งมาให้ประเมินได้เลยนะคะ 📸";
+            return ['handled' => true, 'reply_text' => $reply, 'reason' => 'consignment_answered', 'slots' => $slots];
+        }
+
+        // -------------------------
+        // Intent: pawn_inquiry (จำนำได้ไหม, รับจำนำไหม)
+        // -------------------------
+        if ($intent === 'pawn_inquiry') {
+            $pawnPolicy = $config['policies']['pawn'] ?? [];
+            $interestRate = (float) ($pawnPolicy['interest_rate_monthly'] ?? 2);
+
+            $reply = $templates['pawn_info'] 
+                ?? "บริการรับฝาก/จำนำค่ะ 💎||SPLIT||⚠️ รับเฉพาะสินค้าที่ซื้อจากร้าน ฮ.เฮง เฮง เท่านั้นนะคะ||SPLIT||• ดอกเบี้ย {$interestRate}%/เดือน||SPLIT||ถ่ายรูปสินค้า+ใบรับประกันมาให้ประเมินได้เลยค่ะ 📸";
+            return ['handled' => true, 'reply_text' => $reply, 'reason' => 'pawn_inquiry_answered', 'slots' => $slots];
+        }
+
+        // =========================================================
+        // END NEW INTENT HANDLERS
+        // =========================================================
+
+        // -------------------------
+        // Intent: installment_inquiry (ถามเงื่อนไขผ่อน/ออม - คำนวณยอด)
+        // -------------------------
+        if ($intent === 'installment_inquiry') {
+            $policies = $config['policies'] ?? [];
+            $installmentPolicy = $policies['installment'] ?? [];
+            $periods = (int) ($installmentPolicy['periods'] ?? 3);
+            $feePercent = (float) ($installmentPolicy['service_fee_percent'] ?? 3);
+
+            // ✅ FIX: ดึง product_price จาก slots ก่อน ถ้าไม่มีให้ใช้จาก lastSlots (session context)
+            $productPrice = (float) ($slots['product_price'] ?? ($lastSlots['product_price'] ?? 0));
+            $productName = trim((string) ($slots['product_name'] ?? ($lastSlots['product_name'] ?? '')));
+
+            if ($productPrice > 0) {
+                // Calculate following spec:
+                // - Service fee: 3% TOTAL (not per month)
+                // - Period 1 & 2: equal (rounded up to nearest 500)
+                // - Period 3: remaining balance
+                $fee = round($productPrice * ($feePercent / 100));
+
+                $baseAmount = $productPrice / 3;
+                $p1 = ceil($baseAmount / 500) * 500;
+                $p2 = $p1;
+                $p3 = $productPrice - $p1 - $p2;
+
+                if ($p3 < 0) {
+                    $p1 = ceil($productPrice / 3);
+                    $p2 = $p1;
+                    $p3 = $productPrice - $p1 - $p2;
+                    if ($p3 < 0) {
+                        $p2 += $p3;
+                        $p3 = 0;
+                    }
+                }
+
+                $firstPeriod = $p1 + $fee;
+
+                $tpl = $templates['installment_calculate']
+                    ?? "คำนวณให้แล้วค่ะ 💎\n• ราคาสินค้า: {{price}} บาท\n• ค่าดำเนินการ {$feePercent}%: {{fee}} บาท\n• งวดที่ 1: {{p1}} + {{fee}} = {{period1}} บาท\n• งวดที่ 2: {{period2}} บาท\n• งวดที่ 3: {{period3}} บาท\nสนใจทำรายการเลยไหมคะ? 😊";
+                $reply = $this->renderTemplate($tpl, [
+                    'name' => $productName ?: 'สินค้า',
+                    'price' => number_format($productPrice, 0),
+                    'fee' => number_format($fee, 0),
+                    'p1' => number_format($p1, 0),
+                    'period1' => number_format($firstPeriod, 0),
+                    'period2' => number_format($p2, 0),
+                    'period3' => number_format($p3, 0),
+                ]);
+
+                Logger::info('[ROUTER_V1] Installment calculated', [
+                    'product_price' => $productPrice,
+                    'fee' => $fee,
+                    'period1' => $firstPeriod,
+                    'period2' => $p2,
+                    'period3' => $p3
+                ]);
+            } else {
+                // ไม่มีราคา แสดงเงื่อนไขทั่วไป
+                $tpl = $templates['installment_info']
+                    ?? "ผ่อน/ออม ได้ค่ะ ✅\n• ผ่อน {$periods} งวด (60 วัน) ไม่ต้องใช้เอกสาร\n• มีค่าดำเนินการ {$feePercent}% (ชำระพร้อมงวดแรก)\n• ผ่อนครบรับของทันทีค่ะ\nสนใจสินค้าตัวไหนคะ? 😊";
+                $reply = $tpl;
+            }
+
+            return ['handled' => true, 'reply_text' => $reply, 'reason' => 'installment_inquiry_answered', 'slots' => $slots];
+        }
+
+        // -------------------------
+        // Intent: purchase_intent (ลูกค้าต้องการซื้อ - Guided Checkout Flow)
+        // -------------------------
+        if ($intent === 'purchase_intent' || (in_array($intent, ['handoff_to_admin']) && !empty($slots['action']) && $slots['action'] === 'buy')) {
+            $productName = trim((string) ($slots['product_name'] ?? ($lastSlots['product_name'] ?? '')));
+            $productCode = trim((string) ($slots['product_code'] ?? ($lastSlots['product_code'] ?? '')));
+            $productPrice = (float) ($slots['product_price'] ?? ($lastSlots['product_price'] ?? 0));
+
+            // =========================================================
+            // ✅ NEW: If we have product_code but no price, search for product first
+            // =========================================================
+            if ($productCode !== '' && $productPrice <= 0) {
+                Logger::info('[ROUTER_V1] Purchase intent with code but no price - searching product', [
+                    'product_code' => $productCode
+                ]);
+                
+                // Try to search product by code
+                $productResult = $this->searchProductByCode($productCode, $config, $context);
+                
+                if ($productResult && !empty($productResult['product'])) {
+                    $foundProduct = $productResult['product'];
+                    $productPrice = (float) ($foundProduct['sale_price'] ?? $foundProduct['price'] ?? 0);
+                    $productName = $foundProduct['title'] ?? $foundProduct['name'] ?? $productName;
+                    
+                    // Update slots with found product
+                    $slots['product_name'] = $productName;
+                    $slots['product_code'] = $productCode;
+                    $slots['product_price'] = $productPrice;
+                    $slots['product_ref_id'] = $foundProduct['ref_id'] ?? null;
+                    $slots['product_image_url'] = $foundProduct['thumbnail_url'] ?? $foundProduct['image_url'] ?? null;
+                    
+                    Logger::info('[ROUTER_V1] Product found by code', [
+                        'product_code' => $productCode,
+                        'product_name' => $productName,
+                        'product_price' => $productPrice
+                    ]);
+                } else {
+                    // Product not found by code
+                    Logger::info('[ROUTER_V1] Product not found by code', [
+                        'product_code' => $productCode
+                    ]);
+                    
+                    $reply = "ไม่พบสินค้ารหัส {$productCode} ค่ะ 🔍\n\nลองเช็ครหัสอีกครั้งนะคะ หรือพิมพ์ชื่อสินค้าที่สนใจได้เลยค่ะ 😊";
+                    return ['handled' => true, 'reply_text' => $reply, 'reason' => 'product_not_found', 'slots' => $slots];
+                }
+            }
+
+            // ถ้ามีข้อมูลสินค้าครบ แต่ยังไม่ได้เลือกวิธีชำระ → ถามวิธีชำระ
+            $paymentMethod = trim((string) ($slots['payment_method'] ?? ($lastSlots['payment_method'] ?? '')));
+            $deliveryMethod = trim((string) ($slots['delivery_method'] ?? ($lastSlots['delivery_method'] ?? '')));
+
+            // =========================================================
+            // ✅ SMART CHECKOUT: Skip payment question if already discussed installment
+            // If customer already saw installment calculation, they're choosing installment
+            // =========================================================
+            $installmentCalculated = !empty($lastSlots['installment_calculated']);
+            if ($paymentMethod === '' && $installmentCalculated) {
+                $paymentMethod = 'installment';
+                $slots['payment_method'] = 'installment';
+                Logger::info('[SMART_CHECKOUT] Auto-set payment_method=installment from previous calculation');
+            }
+
+            if ($productPrice > 0 && $paymentMethod === '') {
+                // Step 1: ถามวิธีชำระเงิน
+                $tpl = $templates['confirm_buy_ask_payment']
+                    ?? "รับทราบค่ะ ✅\nสินค้า: {{name}}\nราคา: {{price}} บาท\n\nชำระแบบไหนดีคะ?\n1️⃣ โอนเต็ม\n2️⃣ ผ่อน 3 งวด (+3%)\n3️⃣ มัดจำ 10%";
+                $reply = $this->renderTemplate($tpl, [
+                    'name' => $productName ?: 'สินค้า',
+                    'code' => $productCode,
+                    'price' => number_format($productPrice, 0),
+                ]);
+
+                // Update session state to track checkout step
+                $slots['checkout_step'] = 'ask_payment';
+                $this->updateSessionState((int) $sessionId, 'checkout_ask_payment', $slots);
+
+                return ['handled' => true, 'reply_text' => $reply, 'reason' => 'checkout_ask_payment', 'slots' => $slots];
+            }
+
+            // Step 2: ถ้าเลือกวิธีชำระแล้ว แต่ยังไม่ได้เลือกจัดส่ง → ถามจัดส่ง
+            if ($paymentMethod !== '' && $deliveryMethod === '') {
+                $policies = $config['policies'] ?? [];
+                $installmentPolicy = $policies['installment'] ?? [];
+                $depositPolicy = $policies['deposit'] ?? [];
+                $feePercent = (float) ($installmentPolicy['service_fee_percent'] ?? 3);
+                $depositPercent = (float) ($depositPolicy['percent'] ?? 10);
+
+                if ($paymentMethod === 'installment' || $paymentMethod === '2') {
+                    // คำนวณผ่อนตาม spec: 3% ตลอดสัญญา, งวด 1&2 เท่ากัน, งวด 3 ยอดคงเหลือ
+                    $periods = (int) ($installmentPolicy['periods'] ?? 3);
+                    $fee = round($productPrice * ($feePercent / 100));
+
+                    $baseAmount = $productPrice / 3;
+                    $p1 = ceil($baseAmount / 500) * 500;
+                    $p2 = $p1;
+                    $p3 = $productPrice - $p1 - $p2;
+                    if ($p3 < 0) {
+                        $p1 = ceil($productPrice / 3);
+                        $p2 = $p1;
+                        $p3 = $productPrice - $p1 - $p2;
+                        if ($p3 < 0) {
+                            $p2 += $p3;
+                            $p3 = 0;
+                        }
+                    }
+
+                    $firstPeriod = $p1 + $fee;
+
+                    $tpl = $templates['installment_calculate_ask_delivery']
+                        ?? "ผ่อน 3 งวดค่ะ (ภายใน 60 วัน)\n• งวดที่ 1: {{p1}} + {{fee}} = {{period1}} บาท\n• งวดที่ 2: {{period2}} บาท\n• งวดที่ 3: {{period3}} บาท\n\nรับสินค้าแบบไหนคะ?\n1️⃣ รับที่ร้าน\n2️⃣ จัดส่ง (+150)";
+                    $reply = $this->renderTemplate($tpl, [
+                        'name' => $productName ?: 'สินค้า',
+                        'price' => number_format($productPrice, 0),
+                        'fee' => number_format($fee, 0),
+                        'p1' => number_format($p1, 0),
+                        'period1' => number_format($firstPeriod, 0),
+                        'period2' => number_format($p2, 0),
+                        'period3' => number_format($p3, 0),
+                    ]);
+                    $slots['payment_method'] = 'installment';
+                    $slots['first_payment'] = $firstPeriod;
+                } elseif ($paymentMethod === 'deposit' || $paymentMethod === '3') {
+                    // มัดจำ
+                    $depositAmount = $productPrice * ($depositPercent / 100);
+                    $tpl = $templates['deposit_ask_delivery']
+                        ?? "ยอดมัดจำ 10% = {{deposit_amount}} บาท\n(เก็บให้ 14 วัน)\n\nรับสินค้าแบบไหนคะ?\n1️⃣ รับที่ร้าน\n2️⃣ จัดส่ง (+150)";
+                    $reply = $this->renderTemplate($tpl, [
+                        'name' => $productName ?: 'สินค้า',
+                        'deposit_amount' => number_format($depositAmount, 0),
+                    ]);
+                    $slots['payment_method'] = 'deposit';
+                    $slots['first_payment'] = $depositAmount;
+                } else {
+                    // โอนเต็ม
+                    $tpl = $templates['full_payment_ask_delivery']
+                        ?? "ยอดโอนเต็ม {{price}} บาท\n\nรับสินค้าแบบไหนคะ?\n1️⃣ รับที่ร้าน\n2️⃣ จัดส่ง (+150)";
+                    $reply = $this->renderTemplate($tpl, [
+                        'price' => number_format($productPrice, 0),
+                    ]);
+                    $slots['payment_method'] = 'full';
+                    $slots['first_payment'] = $productPrice;
+                }
+
+                $slots['checkout_step'] = 'ask_delivery';
+                $this->updateSessionState((int) $sessionId, 'checkout_ask_delivery', $slots);
+
+                return ['handled' => true, 'reply_text' => $reply, 'reason' => 'checkout_ask_delivery', 'slots' => $slots];
+            }
+
+            // Step 3: ถ้าเลือกทั้ง payment + delivery แล้ว → สรุปออเดอร์
+            if ($paymentMethod !== '' && $deliveryMethod !== '') {
+                $paymentLabel = match ($paymentMethod) {
+                    'installment' => 'ผ่อน 3 งวด',
+                    'deposit' => 'มัดจำ 10%',
+                    default => 'โอนเต็มจำนวน',
+                };
+
+                $totalAmount = $slots['first_payment'] ?? $productPrice;
+
+                if ($deliveryMethod === 'pickup' || $deliveryMethod === '1') {
+                    $tpl = $templates['order_summary_pickup']
+                        ?? "สรุปออเดอร์ค่ะ 📦\nสินค้า: {{name}}\nยอดชำระ: {{total_amount}} บาท ({{payment_type}})\nรับที่ร้าน สีลม 5\n\nสักครู่ค่ะ ระบบกำลังส่งเลขบัญชี 🙏";
+                    $reply = $this->renderTemplate($tpl, [
+                        'name' => $productName ?: 'สินค้า',
+                        'total_amount' => number_format($totalAmount, 0),
+                        'payment_type' => $paymentLabel,
+                    ]);
+                    $slots['delivery_method'] = 'pickup';
+                } else {
+                    $tpl = $templates['order_summary_delivery']
+                        ?? "สรุปออเดอร์ค่ะ 📦\nสินค้า: {{name}}\nยอดชำระ: {{total_amount}} บาท ({{payment_type}})\nจัดส่ง EMS (+150 บาท)\n\nรบกวนแจ้ง ชื่อ-ที่อยู่-เบอร์ด้วยนะคะ 📝";
+                    $reply = $this->renderTemplate($tpl, [
+                        'name' => $productName ?: 'สินค้า',
+                        'total_amount' => number_format($totalAmount, 0),
+                        'payment_type' => $paymentLabel,
+                    ]);
+                    $slots['delivery_method'] = 'delivery';
+                }
+
+                $slots['checkout_step'] = '';  // ✅ Reset เพื่อให้ลูกค้าถามเพิ่มเติมได้
+                $slots['order_status'] = 'pending_payment';  // เก็บสถานะว่าสั่งซื้อแล้ว
+                $this->updateSessionState((int) $sessionId, 'completed', $slots);
+
+                Logger::info('[ROUTER_V1] Checkout flow completed', [
+                    'product_name' => $productName,
+                    'product_price' => $productPrice,
+                    'payment_method' => $paymentMethod,
+                    'delivery_method' => $deliveryMethod,
+                ]);
+
+                // Return with handoff flag for admin to send bank account
+                return [
+                    'handled' => true,
+                    'reply_text' => $reply,
+                    'reason' => 'checkout_complete_handoff',
+                    'slots' => $slots,
+                    'handoff_to_admin' => true
+                ];
+            }
+
+            // =========================================================
+            // ✅ MISSING PRODUCT: ลูกค้าอยากซื้อแต่ยังไม่มีสินค้าใน Context
+            // =========================================================
+            if ($productPrice <= 0 && $productName === '' && $productCode === '') {
+                $reply = $templates['purchase_missing_product']
+                    ?? "คุณลูกค้าสนใจรับสินค้าชิ้นไหนดีคะ? 😊\n\nรบกวนส่ง **รหัสสินค้า** หรือ **รูปภาพ** ให้แอดมินได้เลยนะคะ เดี๋ยวแอดมินเช็คสต็อกและทำรายการให้ค่ะ 🙏";
+                return ['handled' => true, 'reply_text' => $reply, 'reason' => 'purchase_missing_product', 'slots' => $slots];
+            }
+        }
+
+        // -------------------------
+        // Intent: pawn_inquiry (ถามจำนำ - เน้นของร้านเท่านั้น)
+        // -------------------------
+        if ($intent === 'pawn_inquiry') {
+            $policies = $config['policies'] ?? [];
+            $pawnPolicy = $policies['pawn'] ?? [];
+            $interestRate = $pawnPolicy['interest_rate'] ?? '2% ต่อเดือน';
+
+            $tpl = $templates['pawn_info']
+                ?? "ทางร้านรับฝาก/จำนำ เฉพาะสินค้าที่ซื้อจากร้าน ฮ.เฮง เฮง เท่านั้นนะคะ 💎\nดอกเบี้ย {$interestRate}ค่ะ\nถ้ามีใบรับประกัน ถ่ายรูปส่งมาประเมินได้เลยค่ะ";
+            $reply = $tpl;
+
+            return ['handled' => true, 'reply_text' => $reply, 'reason' => 'pawn_inquiry_answered', 'slots' => $slots];
+        }
+
+        // -------------------------
+        // Intent: repair_inquiry (ถามซ่อม - ขอรูป)
+        // -------------------------
+        if ($intent === 'repair_inquiry') {
+            $tpl = $templates['repair_info']
+                ?? "รับซ่อม/เซอร์วิสค่ะ 🔧\nรบกวนถ่ายรูปจุดที่เสียหายส่งมาให้ช่างประเมินเบื้องต้นได้เลยนะคะ";
+            $reply = $tpl;
+
+            return ['handled' => true, 'reply_text' => $reply, 'reason' => 'repair_inquiry_answered', 'slots' => $slots];
+        }
+
+        // -------------------------
+        // Intent: exchange_return_policy (ถามเปลี่ยน/คืน)
+        // -------------------------
+        if ($intent === 'exchange_return_policy') {
+            // ✅ ใช้ policy handler - ดึงตัวเลขจาก config โดยตรง ไม่กิน LLM tokens
+            $reply = $this->generateExchangeReturnPolicyReply($config);
+            return ['handled' => true, 'reply_text' => $reply, 'reason' => 'exchange_return_policy_answered', 'slots' => $slots];
+        }
+
+        // -------------------------
+        // Intent: pawn_policy (ถามเรื่องจำนำ/ฝาก)
+        // -------------------------
+        if ($intent === 'pawn_policy') {
+            // ✅ ใช้ policy handler
+            $reply = $this->generatePawnPolicyReply($config);
+            return ['handled' => true, 'reply_text' => $reply, 'reason' => 'pawn_policy_answered', 'slots' => $slots];
+        }
+
+        // -------------------------
+        // Intent: installment_policy (ถามเรื่องผ่อน/ออม ทั่วไป)
+        // -------------------------
+        if ($intent === 'installment_policy') {
+            // ✅ ใช้ policy handler
+            $reply = $this->generateInstallmentPolicyReply($config);
+            return ['handled' => true, 'reply_text' => $reply, 'reason' => 'installment_policy_answered', 'slots' => $slots];
+        }
+
+        // -------------------------
+        // Intent: credit_card_policy (ถามเรื่องบัตรเครดิต)
+        // -------------------------
+        if ($intent === 'credit_card_policy') {
+            // ✅ ใช้ policy handler
+            $reply = $this->generateCreditCardPolicyReply($config);
+            return ['handled' => true, 'reply_text' => $reply, 'reason' => 'credit_card_policy_answered', 'slots' => $slots];
+        }
+
+        // -------------------------
+        // Intent: buy_back (ลูกค้าต้องการขายคืน/เทิร์นสินค้า)
+        // -------------------------
+        if ($intent === 'buy_back' || $intent === 'sell_back') {
+            $policies = $config['policies'] ?? [];
+            $exchangePolicy = $policies['exchange_return'] ?? [];
+            $returnDed = $exchangePolicy['return_deduction'] ?? '15%';
+            $rolexDed = $exchangePolicy['rolex_deduction'] ?? '35%';
+
+            $tpl = $templates['buy_back_info']
+                ?? "ทางร้านรับซื้อคืน/เทิร์นสินค้าค่ะ 💎||SPLIT||• สินค้าทั่วไป: หัก {$returnDed} จากราคาซื้อ\n• Rolex: หัก {$rolexDed}||SPLIT||⚠️ ต้องมีใบรับประกันตัวจริง\nรบกวนส่งรูปสินค้า+ใบรับประกัน มาให้ประเมินได้เลยค่ะ 😊";
+            $reply = $tpl;
+
+            return ['handled' => true, 'reply_text' => $reply, 'reason' => 'buy_back_info_answered', 'slots' => $slots];
         }
 
         // Intent: installment_flow
@@ -2692,9 +4938,13 @@ class RouterV1Handler implements BotHandlerInterface
                 ]);
 
                 // Create case for admin follow-up
+                // Get user_id from channel
+                $channelUser = $this->db->queryOne("SELECT user_id FROM customer_channels WHERE id = ? LIMIT 1", [$channelId]);
+                $caseUserId = $channelUser['user_id'] ?? null;
+                
                 $this->db->execute(
-                    "INSERT INTO cases (channel_id, external_user_id, case_type, status, subject, description, priority) VALUES (?, ?, 'pawn', 'open', ?, ?, 'high')",
-                    [$channelId, $externalUserId, "ลูกค้าต้องการจำนำ: {$itemDesc}", $itemDesc]
+                    "INSERT INTO cases (channel_id, external_user_id, case_type, status, subject, description, priority, user_id) VALUES (?, ?, 'pawn', 'open', ?, ?, 'high', ?)",
+                    [$channelId, $externalUserId, "ลูกค้าต้องการจำนำ: {$itemDesc}", $itemDesc, $caseUserId]
                 );
 
                 return ['handled' => true, 'reply_text' => $reply, 'reason' => 'pawn_handoff_to_admin', 'handoff' => true, 'slots' => $slots];
@@ -2891,9 +5141,13 @@ class RouterV1Handler implements BotHandlerInterface
                 $endpoint = $ep(['repair_create']);
                 if (!$endpoint) {
                     // Fallback: create case and handoff
+                    // Get user_id from channel
+                    $channelUser = $this->db->queryOne("SELECT user_id FROM customer_channels WHERE id = ? LIMIT 1", [$channelId]);
+                    $caseUserId = $channelUser['user_id'] ?? null;
+                    
                     $this->db->execute(
-                        "INSERT INTO cases (channel_id, external_user_id, case_type, status, subject, description, priority) VALUES (?, ?, 'repair', 'open', ?, ?, 'medium')",
-                        [$channelId, $externalUserId, "ลูกค้าต้องการซ่อม: {$itemDesc}", "{$itemDesc}\nอาการ: {$issueDesc}"]
+                        "INSERT INTO cases (channel_id, external_user_id, case_type, status, subject, description, priority, user_id) VALUES (?, ?, 'repair', 'open', ?, ?, 'medium', ?)",
+                        [$channelId, $externalUserId, "ลูกค้าต้องการซ่อม: {$itemDesc}", "{$itemDesc}\nอาการ: {$issueDesc}", $caseUserId]
                     );
 
                     $tpl = $templates['repair_handoff'] ?? "รับทราบค่ะ 🔧\nสินค้า: {{item_description}}\nอาการ: {{issue_description}}\n\nเจ้าหน้าที่จะติดต่อกลับเพื่อนัดรับของและประเมินราคาซ่อมค่ะ ✨";
@@ -3015,10 +5269,11 @@ class RouterV1Handler implements BotHandlerInterface
             case 'product_availability':
                 return $templates['product_availability']
                     ?? 'ลูกค้าสนใจเช็คของใช่ไหมคะ 😊 รบกวนส่ง “ชื่อรุ่น/รหัสสินค้า” หรือส่งรูปสินค้ามาได้เลย เดี๋ยวเช็คให้ค่ะ';
-            default:
             // Deposit intents
             case 'deposit_new':
                 return $templates['ask_product_for_deposit'] ?? 'สนใจมัดจำสินค้าตัวไหนคะ? 🎁';
+            case 'deposit_flow':
+                return $templates['deposit_flow_ask_product'] ?? 'รับทราบค่ะ สนใจจองสินค้านะคะ 🎯||SPLIT||รบกวนบอกชื่อรุ่น/รหัส หรือส่งรูปสินค้าที่ต้องการจองมาให้แอดมินได้เลยค่ะ||SPLIT||แอดมินจะรีบเช็คและคำนวณยอดมัดจำให้นะคะ 😊';
             case 'deposit_payment':
                 return $templates['ask_deposit_slip'] ?? 'รบกวนส่งรูปสลิปโอนมัดจำด้วยนะคะ 📷';
             case 'deposit_inquiry':
@@ -3037,8 +5292,120 @@ class RouterV1Handler implements BotHandlerInterface
                 return $templates['ask_repair_item'] ?? 'ต้องการซ่อมสินค้าชิ้นไหนคะ? 🔧';
             case 'repair_inquiry':
                 return $templates['repair_inquiry'] ?? 'ต้องการเช็คสถานะงานซ่อมใช่ไหมคะ? 🔧';
+            // =========================================================
+            // ✅ NEW INTENT TEMPLATES - Dynamic conversation responses
+            // =========================================================
+            case 'price_negotiation':
+                return $templates['price_negotiation'] ?? 'ราคาที่แจ้งเป็นราคาพิเศษแล้วค่ะ 🙏||SPLIT||ถ้าลูกค้าสนใจซื้อหลายชิ้น สามารถปรึกษาได้นะคะ เดี๋ยวลองดูให้ค่ะ 😊';
+            case 'change_payment_method':
+                return $templates['change_payment_method'] ?? 'ได้ค่ะ 😊 ลูกค้าต้องการเปลี่ยนเป็นวิธีไหนดีคะ?||SPLIT||1️⃣ โอนเต็มจำนวน||SPLIT||2️⃣ ผ่อน 3 งวด (+3%)||SPLIT||3️⃣ มัดจำ 10%';
+            case 'consignment':
+                return $templates['consignment'] ?? 'ขอบคุณที่สนใจค่ะ 💎||SPLIT||ทางร้านรับฝากขายเฉพาะสินค้าที่ซื้อจากร้าน ฮ.เฮง เฮง ค่ะ||SPLIT||รบกวนถ่ายรูปสินค้าพร้อมใบรับประกันส่งมาให้ประเมินได้เลยนะคะ 📸';
+            case 'installment_inquiry':
+                return $templates['installment_short'] ?? 'ผ่อน/ออมได้ค่ะ! ✅||SPLIT||• 3 งวด (60 วัน) ไม่ใช้เอกสาร||SPLIT||• ค่าธรรมเนียม 3%||SPLIT||สนใจสินค้าตัวไหนคะ? เดี๋ยวคำนวณยอดงวดแรกให้ดูเลยค่ะ 😊';
+            case 'pawn_inquiry':
+                return $templates['pawn_info'] ?? 'บริการรับฝาก/จำนำค่ะ 💎||SPLIT||⚠️ รับเฉพาะสินค้าที่ซื้อจากร้าน ฮ.เฮง เฮง เท่านั้นนะคะ||SPLIT||• ดอกเบี้ย 2%/เดือน||SPLIT||ถ่ายรูปสินค้า+ใบรับประกันมาให้ประเมินได้เลยค่ะ 📸';
+            // =========================================================
+            // END NEW INTENT TEMPLATES
+            // =========================================================
+            default:
                 return $fallback;
         }
+    }
+
+    // =========================================================
+    // ✅ Policy Template Handlers - ดึงตัวเลขจาก config ไม่กิน LLM tokens
+    // =========================================================
+
+    /**
+     * Generate exchange/return policy reply from config (ไม่ต้องใช้ LLM)
+     */
+    protected function generateExchangeReturnPolicyReply(array $config): string
+    {
+        $p = $config['policies']['exchange_return'] ?? [];
+        $upgradeDeduct = $p['exchange_upgrade_deduction'] ?? 10;
+        $downgradeDeduct = $p['exchange_downgrade_deduction'] ?? 15;
+        $returnDeduct = $p['return_cash_deduction'] ?? 15;
+        $rolexDeduct = $p['rolex_deduction'] ?? 35;
+        $nonRolexRule = $p['non_rolex_rule'] ?? 'ขายขาด ไม่รับคืน';
+        $minValue = $p['min_value_for_exchange'] ?? 30000;
+
+        $reply = "นโยบายเปลี่ยน/คืนค่ะ 📋\n\n";
+        $reply .= "💎 งานเพชร (" . number_format($minValue) . "+ บาท):\n";
+        $reply .= "• เปลี่ยนตัวแพงขึ้น: หัก {$upgradeDeduct}%\n";
+        $reply .= "• เปลี่ยนตัวถูกลง/คืนเงิน: หัก {$returnDeduct}%\n\n";
+        $reply .= "⌚ นาฬิกา Rolex: หัก {$rolexDeduct}%\n";
+        $reply .= "👜 แบรนด์อื่น: {$nonRolexRule}\n\n";
+        $reply .= "⚠️ ต้องมีใบรับประกันตัวจริงนะคะ";
+
+        return $reply;
+    }
+
+    /**
+     * Generate pawn policy reply from config (ไม่ต้องใช้ LLM)
+     */
+    protected function generatePawnPolicyReply(array $config): string
+    {
+        $p = $config['policies']['pawn'] ?? [];
+        $onlyStore = $p['only_store_products'] ?? true;
+        $appraisalMin = $p['appraisal_percent_min'] ?? 65;
+        $appraisalMax = $p['appraisal_percent_max'] ?? 70;
+        $interestRate = $p['interest_rate_monthly'] ?? 2;
+        $cycleDays = $p['payment_cycle_days'] ?? 30;
+
+        $reply = "บริการรับฝาก/จำนำค่ะ 💎\n\n";
+        if ($onlyStore) {
+            $reply .= "⚠️ รับเฉพาะสินค้าที่ซื้อจากทางร้านเท่านั้นนะคะ\n\n";
+        }
+        $reply .= "📊 ราคาประเมิน: {$appraisalMin}-{$appraisalMax}% ของราคาซื้อ\n";
+        $reply .= "💰 ดอกเบี้ย: {$interestRate}% ต่อเดือน\n";
+        $reply .= "📅 ชำระดอก: ทุก {$cycleDays} วัน\n\n";
+        $reply .= "📸 ส่งรูปสินค้า + ใบรับประกัน มาให้ประเมินได้เลยค่ะ";
+
+        return $reply;
+    }
+
+    /**
+     * Generate installment policy reply from config (ไม่ต้องใช้ LLM)
+     */
+    protected function generateInstallmentPolicyReply(array $config): string
+    {
+        $p = $config['policies']['installment'] ?? [];
+        $periods = $p['periods'] ?? 3;
+        $fee = $p['service_fee_percent'] ?? 3;
+        $maxDays = $p['max_days'] ?? 60;
+        $deliveryRule = $p['delivery_rule'] ?? 'ส่งของเมื่อผ่อนครบ';
+        $cancelDays = $p['cancel_refund_days'] ?? 7;
+        $cancelFeeRefund = $p['cancel_fee_refund'] ?? false;
+
+        $reply = "บริการผ่อน/ออมค่ะ ✅\n\n";
+        $reply .= "📝 เงื่อนไข:\n";
+        $reply .= "• ผ่อน {$periods} งวด (ภายใน {$maxDays} วัน)\n";
+        $reply .= "• ค่าธรรมเนียม {$fee}% (จ่ายงวดแรก)\n";
+        $reply .= "• ไม่ต้องใช้เอกสาร\n\n";
+        $reply .= "📦 {$deliveryRule}\n\n";
+        $reply .= "❌ ยกเลิก: คืนเงินต้น" . ($cancelFeeRefund ? "+ค่าธรรมเนียม" : " (ไม่คืนค่าธรรมเนียม)") . " ภายใน {$cancelDays} วัน\n\n";
+        $reply .= "สนใจให้คำนวณยอดงวดไหมคะ? 😊";
+
+        return $reply;
+    }
+
+    /**
+     * Generate credit card policy reply from config
+     */
+    protected function generateCreditCardPolicyReply(array $config): string
+    {
+        $p = $config['policies']['credit_card'] ?? [];
+        $surcharge = $p['surcharge_percent'] ?? 3;
+        $availableAt = $p['available_at'] ?? 'หน้าร้านเท่านั้น';
+
+        $reply = "บัตรเครดิตค่ะ 💳\n\n";
+        $reply .= "✅ รับบัตรเครดิต: " . $availableAt . "\n";
+        $reply .= "💰 ค่าธรรมเนียม: {$surcharge}% (บวกเพิ่มจากราคาสินค้า)\n\n";
+        $reply .= "รับทุกธนาคาร Visa/Mastercard/JCB\n\n";
+        $reply .= "สนใจมาชำระที่ร้านเลยนะคะ 😊";
+
+        return $reply;
     }
 
     // =========================================================
@@ -3231,9 +5598,79 @@ class RouterV1Handler implements BotHandlerInterface
                             . "\n🛒 ตรงกับออเดอร์: #{$matchedOrderNo}"
                             . "\nรอเจ้าหน้าที่ตรวจสอบนะคะ 😊";
                     } else {
-                        $reply = "ได้รับสลิปเรียบร้อยแล้วค่ะ 💳\n\n" . $extractedInfo
-                            . "\n📝 เลขที่รายการ: {$paymentNo}"
-                            . "\nรอเจ้าหน้าที่ตรวจสอบและ matching กับออเดอร์นะคะ 😊";
+                        // =========================================================
+                        // ✅ SMART SLIP: No auto-match - check for pending orders
+                        // =========================================================
+                        $externalUserId = $context['external_user_id'] ?? null;
+                        $pendingOrders = [];
+                        $quickReplyItems = [];
+
+                        if ($externalUserId) {
+                            $pendingOrders = $this->findPendingOrdersForCustomer(
+                                (string) $externalUserId,
+                                $context['channel']['id'] ?? null,
+                                $slipAmount  // Exclude exact match (already handled by PaymentService)
+                            );
+                        }
+
+                        if (count($pendingOrders) > 0) {
+                            // Found pending orders - show as options
+                            $reply = "ได้รับสลิปเรียบร้อยแล้วค่ะ 💳\n\n" . $extractedInfo
+                                . "\n📝 เลขที่รายการ: {$paymentNo}";
+
+                            if (count($pendingOrders) == 1) {
+                                // Single pending order - likely this one
+                                $order = $pendingOrders[0];
+                                $orderNo = $order['order_number'];
+                                $productName = $order['product_name'] ?? 'สินค้า';
+                                $balance = number_format((float) ($order['balance'] ?? $order['total_amount']), 0);
+
+                                $reply .= "\n\n💡 พบออเดอร์ค้างชำระ:"
+                                    . "\n• #{$orderNo} - {$productName}"
+                                    . "\n• ยอดคงเหลือ: {$balance} บาท"
+                                    . "\n\nสลิปนี้ต้องการจ่ายค่าออเดอร์นี้ใช่ไหมคะ?";
+
+                                $quickReplyItems = [
+                                    ['label' => "✅ ใช่ค่ะ #{$orderNo}", 'text' => "ยืนยันจ่าย {$orderNo}"],
+                                    ['label' => '❌ ไม่ใช่', 'text' => 'ไม่ใช่ออเดอร์นี้'],
+                                ];
+                                $meta['pending_orders'] = $pendingOrders;
+                                $meta['suggested_order_no'] = $orderNo;
+
+                            } else {
+                                // Multiple pending orders - ask to select
+                                $reply .= "\n\n💡 พบหลายออเดอร์ค้างชำระ:";
+                                $i = 1;
+                                foreach ($pendingOrders as $order) {
+                                    $orderNo = $order['order_number'];
+                                    $productName = mb_substr($order['product_name'] ?? 'สินค้า', 0, 20, 'UTF-8');
+                                    $balance = number_format((float) ($order['balance'] ?? $order['total_amount']), 0);
+
+                                    $reply .= "\n{$i}. #{$orderNo} - {$productName} ({$balance} บาท)";
+
+                                    // Add quick reply (max 4 items typical limit)
+                                    if ($i <= 4) {
+                                        $quickReplyItems[] = [
+                                            'label' => "#{$orderNo}",
+                                            'text' => "จ่ายค่า {$orderNo}"
+                                        ];
+                                    }
+                                    $i++;
+                                }
+                                $reply .= "\n\nสลิปนี้ต้องการจ่ายค่าออเดอร์ไหนคะ?";
+                                $meta['pending_orders'] = $pendingOrders;
+                            }
+                        } else {
+                            // No pending orders found - generic response
+                            $reply = "ได้รับสลิปเรียบร้อยแล้วค่ะ 💳\n\n" . $extractedInfo
+                                . "\n📝 เลขที่รายการ: {$paymentNo}"
+                                . "\nรอเจ้าหน้าที่ตรวจสอบและ matching กับออเดอร์นะคะ 😊";
+                        }
+
+                        // Add quick replies if available
+                        if (!empty($quickReplyItems)) {
+                            $meta['quick_reply_items'] = $quickReplyItems;
+                        }
                     }
 
                 } elseif (!empty($paymentResult['is_duplicate'])) {
@@ -3301,7 +5738,93 @@ class RouterV1Handler implements BotHandlerInterface
             if ($sessionId && $reply !== '')
                 $this->storeMessage($sessionId, 'assistant', $reply);
             $this->logBotReply($context, $reply, 'text');
-            return ['reply_text' => $reply, 'actions' => [], 'meta' => $meta];
+
+            // ✅ Include quick replies if available (from smart slip detection)
+            $actions = [];
+            if (!empty($meta['quick_reply_items'])) {
+                $actions[] = [
+                    'type' => 'quick_reply',
+                    'items' => $meta['quick_reply_items']
+                ];
+            }
+
+            return ['reply_text' => $reply, 'actions' => $actions, 'meta' => $meta];
+        }
+
+        // =========================================================
+        // ✅ CONTEXT-AWARE IMAGE ROUTING: Check if customer was discussing pawn/repair
+        // If they send product image AFTER asking about pawn -> create pawn case
+        // If they send product image AFTER asking about repair -> create repair case
+        // =========================================================
+        $lastIntent = $lastSlots['last_intent'] ?? null;
+        $isPawnContext = in_array($lastIntent, ['pawn_new', 'pawn_inquiry']) ||
+            preg_match('/จำนำ|ฝาก|ต่อดอก/u', $lastSlots['last_message'] ?? '');
+        $isRepairContext = in_array($lastIntent, ['repair_new', 'repair_inquiry']) ||
+            preg_match('/ซ่อม|ชำรุด|เสีย|ขาด/u', $lastSlots['last_message'] ?? '');
+
+        // Handle pawn context image - create case instead of product search
+        if ($detectedRoute === 'product_image' && $isPawnContext) {
+            Logger::info('[IMAGE_CONTEXT] Pawn context detected - creating pawn case instead of product search');
+
+            $reply = $templates['pawn_image_received']
+                ?? "รับรูปเรียบร้อยแล้วค่ะ 💎||SPLIT||เดี๋ยวช่างประเมินราคาจำนำให้นะคะ||SPLIT||จะรีบติดต่อกลับโดยเร็วค่ะ 🙏";
+
+            // Create pawn case
+            try {
+                $caseEngine = new CaseEngine($config, $context);
+                $caseSlots = [
+                    'image_url' => $imageUrl,
+                    'gemini_details' => $geminiDetails,
+                    'item_description' => $geminiDetails['description'] ?? ($geminiDetails['brand'] . ' ' . ($geminiDetails['model'] ?? '')),
+                ];
+                $case = $caseEngine->getOrCreateCase(CaseEngine::CASE_PAWN, $caseSlots);
+                $meta['case'] = ['id' => $case['id'] ?? null, 'case_no' => $case['case_no'] ?? null];
+
+                if (!empty($case['case_no'])) {
+                    $reply .= "||SPLIT||📋 เลขเคส: " . $case['case_no'];
+                }
+            } catch (Throwable $e) {
+                Logger::error('[IMAGE_CONTEXT] Failed to create pawn case', ['error' => $e->getMessage()]);
+            }
+
+            $meta['reason'] = 'pawn_image_case_created';
+            if ($sessionId && $reply !== '')
+                $this->storeMessage($sessionId, 'assistant', $reply);
+            $this->logBotReply($context, $reply, 'text');
+            return ['reply_text' => $reply, 'actions' => [], 'meta' => $meta, 'handoff_to_admin' => true];
+        }
+
+        // Handle repair context image - create case instead of product search
+        if ($detectedRoute === 'product_image' && $isRepairContext) {
+            Logger::info('[IMAGE_CONTEXT] Repair context detected - creating repair case instead of product search');
+
+            $reply = $templates['repair_image_received']
+                ?? "รับรูปเรียบร้อยแล้วค่ะ 🔧||SPLIT||เดี๋ยวช่างประเมินค่าซ่อมให้นะคะ||SPLIT||จะรีบติดต่อกลับโดยเร็วค่ะ 🙏";
+
+            // Create repair case
+            try {
+                $caseEngine = new CaseEngine($config, $context);
+                $caseSlots = [
+                    'image_url' => $imageUrl,
+                    'gemini_details' => $geminiDetails,
+                    'item_description' => $geminiDetails['description'] ?? 'งานซ่อม',
+                    'damage_description' => $visionText,
+                ];
+                $case = $caseEngine->getOrCreateCase(CaseEngine::CASE_REPAIR, $caseSlots);
+                $meta['case'] = ['id' => $case['id'] ?? null, 'case_no' => $case['case_no'] ?? null];
+
+                if (!empty($case['case_no'])) {
+                    $reply .= "||SPLIT||📋 เลขเคส: " . $case['case_no'];
+                }
+            } catch (Throwable $e) {
+                Logger::error('[IMAGE_CONTEXT] Failed to create repair case', ['error' => $e->getMessage()]);
+            }
+
+            $meta['reason'] = 'repair_image_case_created';
+            if ($sessionId && $reply !== '')
+                $this->storeMessage($sessionId, 'assistant', $reply);
+            $this->logBotReply($context, $reply, 'text');
+            return ['reply_text' => $reply, 'actions' => [], 'meta' => $meta, 'handoff_to_admin' => true];
         }
 
         // product image => call image_search (searchImage)
@@ -3485,7 +6008,7 @@ class RouterV1Handler implements BotHandlerInterface
                     'url' => $_img
                 ];
                 Logger::info("[RENDER_PRODUCTS] ✅ Added image #{$i}", [
-                    'image_url' => $p['image_url'],
+                    'image_url' => $_img,
                     'product_name' => $name
                 ]);
             } elseif ($i <= 3) {
@@ -3520,14 +6043,59 @@ class RouterV1Handler implements BotHandlerInterface
     protected function detectInstallmentActionTypeFromText(string $text): ?string
     {
         $t = mb_strtolower($text, 'UTF-8');
-        if (mb_strpos($t, 'ปิดยอด', 0, 'UTF-8') !== false)
-            return 'close_check';
-        if (mb_strpos($t, 'ต่อดอก', 0, 'UTF-8') !== false || mb_strpos($t, 'ต่อ', 0, 'UTF-8') !== false)
-            return 'extend_interest';
-        if (mb_strpos($t, 'ชำระ', 0, 'UTF-8') !== false || mb_strpos($t, 'ส่งงวด', 0, 'UTF-8') !== false || mb_strpos($t, 'งวด', 0, 'UTF-8') !== false)
-            return 'pay';
-        if (mb_strpos($t, 'เช็ค', 0, 'UTF-8') !== false || mb_strpos($t, 'สรุป', 0, 'UTF-8') !== false)
+
+        // =========================================================
+        // ✅ Priority 1: SUMMARY patterns (check balance, remaining)
+        // Uses compound patterns to avoid false positives
+        // =========================================================
+        if (
+            preg_match(
+                '/(' .
+                // Pattern: inquiry + งวด/ผ่อน context
+                '(เหลือ|ค้าง|ยอด|สรุป).{0,10}(งวด|ผ่อน)|' .
+                '(งวด|ผ่อน).{0,10}(เหลือ|ค้าง|เท่าไหร่|กี่)|' .
+                // Pattern: explicit summary keywords
+                '(เช็คยอด|ดูยอด|ขอยอด|สรุปยอด)|' .
+                // Pattern: specific questions
+                '(เหลือ.*กี่.*งวด|จ่ายไปแล้ว.*กี่|ต้องจ่ายอีก)' .
+                ')/u',
+                $t
+            )
+        ) {
             return 'summary';
+        }
+
+        // =========================================================
+        // ✅ Priority 2: CLOSE_CHECK (ปิดยอด)
+        // =========================================================
+        if (mb_strpos($t, 'ปิดยอด', 0, 'UTF-8') !== false) {
+            return 'close_check';
+        }
+
+        // =========================================================
+        // ✅ Priority 3: EXTEND_INTEREST (ต่อดอก)
+        // Note: 'ต่อดอก' only, not 'ต่อ' alone (too broad)
+        // =========================================================
+        if (mb_strpos($t, 'ต่อดอก', 0, 'UTF-8') !== false) {
+            return 'extend_interest';
+        }
+
+        // =========================================================
+        // ✅ Priority 4: PAY (payment context)
+        // Requires payment action words, not just 'งวด' alone
+        // =========================================================
+        if (preg_match('/(ชำระ|โอน|จ่าย|ส่งงวด|แจ้งโอน|จ่ายงวด)/u', $t)) {
+            return 'pay';
+        }
+
+        // =========================================================
+        // ✅ Fallback: Check for generic summary words
+        // Only match if 'เช็ค' or 'สรุป' appears (with context)
+        // =========================================================
+        if (mb_strpos($t, 'เช็ค', 0, 'UTF-8') !== false || mb_strpos($t, 'สรุป', 0, 'UTF-8') !== false) {
+            return 'summary';
+        }
+
         return null;
     }
 
@@ -3723,6 +6291,73 @@ class RouterV1Handler implements BotHandlerInterface
         }
     }
 
+    /**
+     * Search product by code using backend API
+     * ✅ NEW: Helper method to search product by code
+     * @param string $productCode Product code to search
+     * @param array $config Bot config
+     * @param array $context Chat context
+     * @return array|null ['product' => [...]] or null if not found
+     */
+    protected function searchProductByCode(string $productCode, array $config, array $context): ?array
+    {
+        $backendCfg = $config['backend_api'] ?? [];
+        
+        if (empty($backendCfg['enabled'])) {
+            Logger::info('[ROUTER_V1] searchProductByCode - backend not enabled');
+            return null;
+        }
+        
+        $endpoints = $backendCfg['endpoints'] ?? [];
+        $endpoint = $endpoints['product_search'] ?? null;
+        
+        if (!$endpoint) {
+            Logger::info('[ROUTER_V1] searchProductByCode - no product_search endpoint');
+            return null;
+        }
+        
+        $channelId = $context['channel']['id'] ?? null;
+        $externalUserId = $context['external_user_id'] ?? null;
+        
+        $payload = [
+            'channel_id' => $channelId,
+            'external_user_id' => $externalUserId,
+            'product_code' => $productCode,
+            'keyword' => $productCode,
+        ];
+        
+        $resp = $this->callBackendJson($backendCfg, $endpoint, $payload);
+        
+        if (!$resp['ok']) {
+            Logger::warning('[ROUTER_V1] searchProductByCode - API error', [
+                'product_code' => $productCode,
+                'error' => $resp['error'] ?? 'unknown'
+            ]);
+            return null;
+        }
+        
+        $data = $resp['data'] ?? [];
+        $products = $data['products'] ?? ($data['items'] ?? $data);
+        
+        if (!is_array($products) || empty($products)) {
+            Logger::info('[ROUTER_V1] searchProductByCode - no products found', [
+                'product_code' => $productCode
+            ]);
+            return null;
+        }
+        
+        // Return first matching product
+        $product = $products[0];
+        
+        Logger::info('[ROUTER_V1] searchProductByCode - found product', [
+            'product_code' => $productCode,
+            'product_name' => $product['title'] ?? $product['name'] ?? null,
+            'product_price' => $product['sale_price'] ?? $product['price'] ?? null
+        ]);
+        
+        return ['product' => $product];
+    }
+
     // =========================================================
     // Detectors
     // =========================================================
@@ -3874,9 +6509,10 @@ class RouterV1Handler implements BotHandlerInterface
 
 
     // ✅ Merge session slots instead of overwrite (สำคัญมาก)
+    // ✅ Also update cases.slots for guided checkout flow
     protected function updateSessionState(int $sessionId, ?string $intent, ?array $slots): void
     {
-        $existing = $this->db->queryOne('SELECT last_slots_json FROM chat_sessions WHERE id = ? LIMIT 1', [$sessionId]);
+        $existing = $this->db->queryOne('SELECT last_slots_json, active_case_id FROM chat_sessions WHERE id = ? LIMIT 1', [$sessionId]);
         $oldSlots = [];
         if (!empty($existing['last_slots_json'])) {
             $tmp = json_decode($existing['last_slots_json'], true);
@@ -3898,6 +6534,32 @@ class RouterV1Handler implements BotHandlerInterface
                 $sessionId
             ]
         );
+
+        // ✅ Also update cases.slots if there's an active case
+        // This syncs checkout progress (payment_method, shipping_method, etc.) to the case
+        $activeCaseId = $existing['active_case_id'] ?? null;
+        if ($activeCaseId && !empty($slots)) {
+            // Only sync relevant checkout fields to cases.slots
+            $checkoutFields = ['payment_method', 'shipping_method', 'delivery_method', 'shipping_fee', 'shipping_address', 'checkout_step'];
+            $caseSlotUpdates = array_intersect_key($slots, array_flip($checkoutFields));
+
+            if (!empty($caseSlotUpdates)) {
+                try {
+                    $caseRow = $this->db->queryOne("SELECT slots FROM cases WHERE id = ?", [$activeCaseId]);
+                    if ($caseRow) {
+                        $caseSlots = json_decode($caseRow['slots'] ?? '{}', true) ?: [];
+                        $mergedCaseSlots = array_merge($caseSlots, $caseSlotUpdates);
+                        $this->db->execute(
+                            "UPDATE cases SET slots = ?, updated_at = NOW() WHERE id = ?",
+                            [json_encode($mergedCaseSlots, JSON_UNESCAPED_UNICODE), $activeCaseId]
+                        );
+                    }
+                } catch (\Exception $e) {
+                    // Silently fail - don't break the main flow
+                    error_log("[RouterV1Handler] Failed to sync slots to case {$activeCaseId}: " . $e->getMessage());
+                }
+            }
+        }
     }
 
     protected function getConversationHistory(int $sessionId, int $limit = 10): array
@@ -4295,6 +6957,302 @@ class RouterV1Handler implements BotHandlerInterface
 
         // If split resulted in empty array, return original
         return empty($cleaned) ? [$text] : $cleaned;
+    }
+
+    /**
+     * Parse Thai shipping address from freeform text
+     * Expected format: ชื่อ-นามสกุล, ที่อยู่, เบอร์โทร
+     * 
+     * @param string $text Raw address text from customer
+     * @return array Parsed address components
+     */
+    protected function parseShippingAddress(string $text): array
+    {
+        $result = [
+            'name' => '',
+            'phone' => '',
+            'address_line1' => '',
+            'address_line2' => '',
+            'subdistrict' => '',
+            'district' => '',
+            'province' => '',
+            'postal_code' => '',
+        ];
+
+        // Clean up text
+        $text = preg_replace('/\s+/', ' ', trim($text));
+        $text = preg_replace('/\n+/', ' ', $text);
+
+        // Extract phone number (10 digits, starting with 0)
+        if (preg_match('/(?:0[689]\d{8}|0[1-5]\d{7})/u', $text, $phoneMatch)) {
+            $result['phone'] = $phoneMatch[0];
+            $text = str_replace($phoneMatch[0], '', $text);
+        }
+
+        // Extract postal code (5 digits)
+        if (preg_match('/\b(\d{5})\b/', $text, $postalMatch)) {
+            $result['postal_code'] = $postalMatch[1];
+            $text = str_replace($postalMatch[0], '', $text);
+        }
+
+        // Common Thai provinces
+        $provinces = [
+            'กรุงเทพ',
+            'กรุงเทพฯ',
+            'กทม',
+            'นนทบุรี',
+            'ปทุมธานี',
+            'สมุทรปราการ',
+            'ชลบุรี',
+            'เชียงใหม่',
+            'ขอนแก่น',
+            'นครราชสีมา',
+            'สงขลา',
+            'ภูเก็ต',
+            'ระยอง',
+            'พระนครศรีอยุธยา'
+        ];
+        foreach ($provinces as $prov) {
+            if (mb_stripos($text, $prov) !== false) {
+                $result['province'] = $prov === 'กทม' ? 'กรุงเทพฯ' : $prov;
+                $text = preg_replace('/จ\\.?\\s*' . preg_quote($prov, '/') . '/u', '', $text);
+                $text = preg_replace('/จังหวัด\\s*' . preg_quote($prov, '/') . '/u', '', $text);
+                $text = str_ireplace($prov, '', $text);
+                break;
+            }
+        }
+
+        // Extract district (อำเภอ/เขต)
+        if (preg_match('/(?:อ\\.?|อำเภอ|เขต)\\s*([ก-๙a-zA-Z]+)/u', $text, $districtMatch)) {
+            $result['district'] = $districtMatch[1];
+            $text = str_replace($districtMatch[0], '', $text);
+        }
+
+        // Extract subdistrict (ตำบล/แขวง)
+        if (preg_match('/(?:ต\\.?|ตำบล|แขวง)\\s*([ก-๙a-zA-Z]+)/u', $text, $subdistMatch)) {
+            $result['subdistrict'] = $subdistMatch[1];
+            $text = str_replace($subdistMatch[0], '', $text);
+        }
+
+        // Clean remaining text and split into name and address
+        $text = preg_replace('/\\s+/', ' ', trim($text));
+        $parts = preg_split('/[,\n\\s]{2,}/u', $text, 2);
+
+        if (count($parts) >= 2) {
+            // First part is likely name, second is address
+            $result['name'] = trim($parts[0]);
+            $result['address_line1'] = trim($parts[1]);
+        } else {
+            // Try to extract name (typically first 2-4 words if Thai)
+            if (preg_match('/^([ก-๙]+\\s+[ก-๙]+(?:\\s+[ก-๙]+)?)/u', $text, $nameMatch)) {
+                $result['name'] = trim($nameMatch[1]);
+                $result['address_line1'] = trim(str_replace($nameMatch[1], '', $text));
+            } else {
+                $result['address_line1'] = $text;
+            }
+        }
+
+        // Clean up address_line1
+        $result['address_line1'] = preg_replace('/^[,\\s]+|[,\\s]+$/', '', $result['address_line1']);
+        $result['address_line1'] = preg_replace('/\\s+/', ' ', $result['address_line1']);
+
+        return $result;
+    }
+
+    /**
+     * Check if text looks like an address (vs a general question)
+     * 
+     * @param string $text Text to check
+     * @return bool True if text looks like address info
+     */
+    protected function looksLikeAddressText(string $text): bool
+    {
+        $text = trim($text);
+        $textLen = mb_strlen($text, 'UTF-8');
+        
+        // ✅ Too short to be address (less than 10 chars)
+        if ($textLen < 10) {
+            return false;
+        }
+        
+        // ✅ GUARD: Check for product code pattern - NOT address
+        $productCodePattern = '/\b[A-Z]{2,4}[-_][A-Z]{2,4}[-_]\d{2,4}\b/i';
+        if (preg_match($productCodePattern, $text)) {
+            return false; // This is a product code, not an address
+        }
+        
+        // ✅ GUARD: Check for purchase interest keywords - NOT address
+        $purchaseKeywords = ['สนใจ', 'เอา', 'ซื้อ', 'ตกลง', 'จอง', 'cf', 'เอาเลย', 'ซื้อเลย'];
+        foreach ($purchaseKeywords as $keyword) {
+            if (mb_stripos($text, $keyword, 0, 'UTF-8') !== false) {
+                return false; // This is purchase interest, not an address
+            }
+        }
+        
+        // ✅ Check for phone number (strong indicator)
+        $hasPhone = (bool) preg_match('/0[689]\d{8}|0[1-5]\d{7}/u', $text);
+        if ($hasPhone) {
+            return true;
+        }
+        
+        // ✅ Check for postal code (strong indicator)
+        $hasPostalCode = (bool) preg_match('/\b\d{5}\b/', $text);
+        if ($hasPostalCode) {
+            return true;
+        }
+        
+        // ✅ Check for address indicators
+        $addressIndicators = [
+            '/\d+\/\d+/u',                              // House number like 123/45
+            '/ถ\\.?|ถนน|road|rd/iu',                    // Road
+            '/ซ\\.?|ซอย|soi/iu',                        // Soi
+            '/ม\\.?|หมู่/iu',                           // Moo
+            '/ต\\.?|ตำบล|แขวง/iu',                      // Subdistrict
+            '/อ\\.?|อำเภอ|เขต/iu',                      // District
+            '/จ\\.?|จังหวัด|กรุงเทพ|กทม/iu',            // Province
+            '/บ้านเลขที่|เลขที่/iu',                    // House number prefix
+        ];
+        
+        $addressScore = 0;
+        foreach ($addressIndicators as $pattern) {
+            if (preg_match($pattern, $text)) {
+                $addressScore++;
+            }
+        }
+        
+        // ✅ At least 1 address indicator found
+        if ($addressScore >= 1) {
+            return true;
+        }
+        
+        // ✅ Check for question keywords (NOT address)
+        $questionKeywords = [
+            'ไหม', 'หรือ', 'ยังไง', 'อย่างไร', 'เท่าไหร่', 'เท่าไร', 'กี่',
+            'ทำไม', 'เมื่อไหร่', 'ที่ไหน', 'อะไร', 'ใคร',
+            'ได้ไหม', 'ได้มั้ย', 'ดีไหม', 'มีไหม',
+            'คืน', 'เปลี่ยน', 'รับประกัน', 'warranty', 'return',
+            '?', '？'
+        ];
+        
+        foreach ($questionKeywords as $keyword) {
+            if (mb_stripos($text, $keyword, 0, 'UTF-8') !== false) {
+                return false; // This is a question, not an address
+            }
+        }
+        
+        // ✅ Long text (>30 chars) with numbers might be address
+        if ($textLen > 30 && preg_match('/\d/', $text)) {
+            return true;
+        }
+        
+        // ✅ Check for Thai name pattern at the start
+        if (preg_match('/^(คุณ|นาย|นาง|น\\.ส\\.|นางสาว)?[ก-๙]{2,}/u', $text)) {
+            // Might be "ชื่อ + ที่อยู่" format
+            if ($textLen > 20) {
+                return true;
+            }
+        }
+        
+        // Default: probably not an address
+        return false;
+    }
+
+    /**
+     * Validate if address buffer has enough information (name + address + phone)
+     * 
+     * @param string $buffer Accumulated address text from customer
+     * @return array ['is_complete' => bool, 'missing' => array of missing fields]
+     */
+    protected function validateAddressBuffer(string $buffer): array
+    {
+        $missing = [];
+
+        // Clean buffer
+        $buffer = trim($buffer);
+        $bufferLen = mb_strlen($buffer, 'UTF-8');
+
+        // Check for phone (10 digits starting with 0)
+        $hasPhone = (bool) preg_match('/0[689]\d{8}|0[1-5]\d{7}/u', $buffer);
+        if (!$hasPhone) {
+            $missing[] = 'phone';
+        }
+
+        // Check for Thai name (at least 2 Thai words)
+        // Names like "สมชาย ใจดี" or "นางสาว สมหญิง รักดี"
+        $hasName = (bool) preg_match('/[ก-๙]{2,}[\s]+[ก-๙]{2,}/u', $buffer);
+        if (!$hasName) {
+            // Also accept English names
+            $hasName = (bool) preg_match('/[a-zA-Z]{2,}[\s]+[a-zA-Z]{2,}/u', $buffer);
+        }
+        if (!$hasName) {
+            $missing[] = 'name';
+        }
+
+        // Check for address indicators
+        // Look for: house number, road, soi, moo, province, postal code
+        $addressIndicators = [
+            '/\d+\/\d+/u',                              // House number like 123/45
+            '/ถ\\.?|ถนน|road|rd/iu',                    // Road
+            '/ซ\\.?|ซอย|soi/iu',                        // Soi
+            '/ม\\.?|หมู่/iu',                           // Moo
+            '/ต\\.?|ตำบล|แขวง/iu',                      // Subdistrict
+            '/อ\\.?|อำเภอ|เขต/iu',                      // District
+            '/จ\\.?|จังหวัด|กรุงเทพ|กทม/iu',            // Province
+            '/\b\d{5}\b/',                              // Postal code
+        ];
+
+        $addressScore = 0;
+        foreach ($addressIndicators as $pattern) {
+            if (preg_match($pattern, $buffer)) {
+                $addressScore++;
+            }
+        }
+
+        // Need at least 2 address indicators OR text longer than 40 chars (likely full address)
+        $hasAddress = $addressScore >= 2 || ($bufferLen > 40 && preg_match('/\d/', $buffer));
+        if (!$hasAddress) {
+            $missing[] = 'address';
+        }
+
+        // ✅ BUG FIX: Emergency fallback for long text that looks like address
+        // ป้องกัน Address Loop - ถ้าข้อความยาวมากพอ (≥50 ตัวอักษร) และมี phone หรือ address
+        // ให้ถือว่าพอยอมรับได้ แม้ชื่อจะไม่ชัดเจน
+        if (!empty($missing) && $bufferLen >= 50) {
+            // Count what we have
+            $hasItems = ($hasPhone ? 1 : 0) + ($hasName ? 1 : 0) + ($hasAddress ? 1 : 0);
+
+            // If buffer is long (≥50) and has at least 2 out of 3 items, force accept
+            // เพื่อไม่ให้ลูกค้าวนถามไม่จบ
+            if ($hasItems >= 2 || $bufferLen >= 80) {
+                Logger::info('[ADDRESS_VALIDATE] Emergency fallback accepted - long text', [
+                    'buffer_len' => $bufferLen,
+                    'has_items' => $hasItems,
+                ]);
+                $missing = []; // Clear missing - accept as complete
+                $hasName = true;
+                $hasAddress = true;
+            }
+        }
+
+        $isComplete = empty($missing);
+
+        Logger::info('[ADDRESS_VALIDATE]', [
+            'buffer_len' => $bufferLen,
+            'has_name' => $hasName,
+            'has_phone' => $hasPhone,
+            'has_address' => $hasAddress,
+            'address_score' => $addressScore,
+            'is_complete' => $isComplete,
+            'missing' => $missing,
+        ]);
+
+        return [
+            'is_complete' => $isComplete,
+            'missing' => $missing,
+            'has_name' => $hasName,
+            'has_phone' => $hasPhone,
+            'has_address' => $hasAddress,
+        ];
     }
 
     protected function containsAny(string $haystackLower, array $needles): bool
@@ -4758,6 +7716,23 @@ class RouterV1Handler implements BotHandlerInterface
 
         $parsed = $this->extractJsonObject($content);
         if (!is_array($parsed)) {
+            // ⚠️ CRITICAL FIX: ถ้า content ดูเหมือน JSON แต่ parse ไม่ได้
+            // ให้ใช้ fallback template แทนการส่ง JSON raw ไปให้ลูกค้า
+            $trimmedContent = trim($content);
+            if ($trimmedContent !== '' && $trimmedContent[0] === '{') {
+                // Content looks like JSON but failed to parse - use fallback
+                Logger::warning('[LLM] Content looks like JSON but parse failed - using fallback', [
+                    'content_preview' => mb_substr($content, 0, 200, 'UTF-8'),
+                ]);
+                return [
+                    'reply_text' => null,  // Return null to trigger fallback
+                    'intent' => null,
+                    'slots' => null,
+                    'confidence' => null,
+                    'next_question' => null,
+                    'meta' => ['raw_response' => $data, 'parse_error' => true, 'json_like_content' => true, 'provider' => $isGemini ? 'gemini' : 'openai'],
+                ];
+            }
             return [
                 'reply_text' => $content ?: null,
                 'intent' => null,
@@ -4768,8 +7743,39 @@ class RouterV1Handler implements BotHandlerInterface
             ];
         }
 
+        $replyText = $parsed['reply_text'] ?? null;
+
+        // ✅ CRITICAL FIX: ถ้า reply_text เป็น JSON string ให้ดึง reply_text ออกมา
+        if ($replyText !== null && is_string($replyText)) {
+            $replyTextTrimmed = trim($replyText);
+            // ตรวจสอบว่า reply_text เป็น JSON object ที่มี reply_text ซ้อนอยู่
+            if (strlen($replyTextTrimmed) > 2 && $replyTextTrimmed[0] === '{') {
+                $nestedJson = json_decode($replyTextTrimmed, true);
+                if (is_array($nestedJson) && isset($nestedJson['reply_text'])) {
+                    Logger::warning('[LLM] Nested JSON detected in reply_text - extracting', [
+                        'original_preview' => mb_substr($replyText, 0, 100, 'UTF-8'),
+                    ]);
+                    $replyText = (string)$nestedJson['reply_text'];
+                    // Also merge slots if present
+                    if (isset($nestedJson['slots']) && is_array($nestedJson['slots'])) {
+                        $parsed['slots'] = array_merge($parsed['slots'] ?? [], $nestedJson['slots']);
+                    }
+                    if (isset($nestedJson['intent'])) {
+                        $parsed['intent'] = $nestedJson['intent'];
+                    }
+                }
+            }
+        }
+
+        // ✅ CLEANUP: Strip any JSON object that LLM may have accidentally included in reply_text
+        if ($replyText !== null && strpos($replyText, '{"reply_text"') !== false) {
+            $replyText = preg_replace('/\s*\{["\']reply_text["\'].+$/s', '', $replyText);
+            $replyText = trim($replyText);
+            Logger::warning('[LLM] Stripped JSON from reply_text', ['cleaned' => true]);
+        }
+
         return [
-            'reply_text' => $parsed['reply_text'] ?? null,
+            'reply_text' => $replyText,
             'intent' => $parsed['intent'] ?? null,
             'slots' => $parsed['slots'] ?? null,
             'confidence' => $parsed['confidence'] ?? null,
@@ -5195,6 +8201,64 @@ class RouterV1Handler implements BotHandlerInterface
         return is_array($tmp) ? $tmp : [];
     }
 
+    /**
+     * Find pending orders for a customer by external_user_id
+     * Used for smart slip detection - when customer sends slip without product context
+     * 
+     * @param string $externalUserId Platform user ID (LINE/Facebook)
+     * @param int|null $channelId    Optional channel filter
+     * @param float|null $amount     Optional amount to exclude exact matches (already handled)
+     * @return array List of pending orders
+     */
+    protected function findPendingOrdersForCustomer(string $externalUserId, ?int $channelId = null, ?float $amount = null): array
+    {
+        try {
+            // Query orders via customer_profiles link
+            $sql = "
+                SELECT 
+                    o.id,
+                    o.order_number,
+                    o.total_amount,
+                    o.paid_amount,
+                    (o.total_amount - COALESCE(o.paid_amount, 0)) as balance,
+                    o.status,
+                    o.product_name,
+                    o.created_at
+                FROM orders o
+                JOIN customer_profiles cp ON o.customer_id = cp.id
+                WHERE cp.platform_user_id = :external_id
+                AND o.status IN ('pending_payment', 'awaiting_payment', 'partial', 'confirmed')
+                AND o.created_at > DATE_SUB(NOW(), INTERVAL 60 DAY)
+            ";
+
+            $params = [':external_id' => $externalUserId];
+
+            // Optionally exclude orders with exact amount match (already auto-matched)
+            if ($amount !== null && $amount > 0) {
+                $sql .= " AND o.total_amount != :amount";
+                $params[':amount'] = $amount;
+            }
+
+            $sql .= " ORDER BY o.created_at DESC LIMIT 5";
+
+            $orders = $this->db->queryAll($sql, $params);
+
+            Logger::info('[SMART_SLIP] findPendingOrdersForCustomer', [
+                'external_user_id' => $externalUserId,
+                'found_count' => count($orders),
+            ]);
+
+            return $orders ?: [];
+
+        } catch (\Exception $e) {
+            Logger::error('[SMART_SLIP] findPendingOrdersForCustomer failed', [
+                'error' => $e->getMessage(),
+                'external_user_id' => $externalUserId,
+            ]);
+            return [];
+        }
+    }
+
     protected function extractJsonObject(string $content): ?array
     {
         $trimmed = trim($content);
@@ -5480,6 +8544,53 @@ class RouterV1Handler implements BotHandlerInterface
             Logger::warning('[ROUTER_V1] Failed to get customer profile: ' . $e->getMessage());
             return null;
         }
+    }
+
+    // =========================================================
+    // ✅ Check if slots have valid product context (required_any pattern)
+    // Returns true if we have meaningful product data to show user
+    // =========================================================
+    protected function hasValidProductContext(array $slots, array $options = []): bool
+    {
+        // Default: required_any = at least one of these must be non-empty/non-zero
+        $requiredAny = $options['required_any'] ?? ['product_name', 'product_price', 'product_code'];
+        // Optional: required_all = all of these must be present (stricter)
+        $requiredAll = $options['required_all'] ?? [];
+        
+        // Check required_all first (if specified)
+        foreach ($requiredAll as $field) {
+            $value = $slots[$field] ?? null;
+            if ($this->isEmptyValue($value)) {
+                return false;
+            }
+        }
+        
+        // Check required_any - at least one must be valid
+        $hasAny = false;
+        foreach ($requiredAny as $field) {
+            $value = $slots[$field] ?? null;
+            if (!$this->isEmptyValue($value)) {
+                $hasAny = true;
+                break;
+            }
+        }
+        
+        return $hasAny;
+    }
+    
+    // Helper to check if value is "empty" (null, '', 0, [], etc.)
+    protected function isEmptyValue($value): bool
+    {
+        if ($value === null || $value === '' || $value === []) {
+            return true;
+        }
+        if (is_numeric($value) && (float)$value <= 0) {
+            return true;
+        }
+        if (is_string($value) && trim($value) === '') {
+            return true;
+        }
+        return false;
     }
 
     // =========================================================

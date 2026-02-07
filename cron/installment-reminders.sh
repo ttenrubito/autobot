@@ -38,7 +38,7 @@ try {
     \$threeDaysFromNow = date('Y-m-d', strtotime('+3 days'));
     \$contracts3Days = \$db->queryAll(
         \"SELECT c.*, 
-            (SELECT COUNT(*) FROM installment_payments WHERE contract_id = c.id AND status = 'verified') as paid_periods
+            (SELECT COUNT(*) FROM installment_payments WHERE contract_id = c.id AND status = 'paid') as paid_periods
         FROM installment_contracts c 
         WHERE c.status = 'active' 
         AND c.next_due_date = ?
@@ -85,7 +85,7 @@ try {
     \$tomorrow = date('Y-m-d', strtotime('+1 day'));
     \$contracts1Day = \$db->queryAll(
         \"SELECT c.*, 
-            (SELECT COUNT(*) FROM installment_payments WHERE contract_id = c.id AND status = 'verified') as paid_periods
+            (SELECT COUNT(*) FROM installment_payments WHERE contract_id = c.id AND status = 'paid') as paid_periods
         FROM installment_contracts c 
         WHERE c.status = 'active' 
         AND c.next_due_date = ?
@@ -128,7 +128,7 @@ try {
     // 3. Get overdue contracts (due date is yesterday or earlier)
     \$overdueContracts = \$db->queryAll(
         \"SELECT c.*, 
-            (SELECT COUNT(*) FROM installment_payments WHERE contract_id = c.id AND status = 'verified') as paid_periods,
+            (SELECT COUNT(*) FROM installment_payments WHERE contract_id = c.id AND status = 'paid') as paid_periods,
             DATEDIFF(CURDATE(), c.next_due_date) as days_overdue
         FROM installment_contracts c 
         WHERE c.status IN ('active', 'overdue')

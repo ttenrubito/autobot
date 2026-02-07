@@ -124,7 +124,8 @@ class PushMessageService {
      * Send message via Facebook Messenger Send API
      */
     private function sendFacebook(string $psid, string $message, array $config): array {
-        $pageToken = $config['facebook_page_access_token'] ?? null;
+        // Support both key names: 'facebook_page_access_token' and 'page_access_token'
+        $pageToken = $config['facebook_page_access_token'] ?? $config['page_access_token'] ?? null;
         
         if (!$pageToken) {
             $this->log('error', 'FB Push failed: Missing page token', ['psid' => $psid]);

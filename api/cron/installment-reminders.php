@@ -138,18 +138,25 @@ try {
 
 /**
  * Get contracts for a specific due date that haven't been reminded yet
+ * ใช้ installment_payments เพื่อดึงยอดจริงของแต่ละงวด (รวม 3% ค่าธรรมเนียมงวดแรก)
  */
 function getContractsForReminder($db, $dueDate, $reminderType) {
     return $db->queryAll(
         "SELECT c.*, 
-            (SELECT COUNT(*) FROM installment_payments WHERE contract_id = c.id AND status = 'paid') as paid_periods,
-            (SELECT COALESCE(paid_amount, 0) FROM installment_payments 
-             WHERE contract_id = c.id AND status IN ('pending', 'partial') 
-             ORDER BY period_number ASC LIMIT 1) as next_period_paid,
-            (SELECT amount FROM installment_payments 
-             WHERE contract_id = c.id AND status IN ('pending', 'partial') 
-             ORDER BY period_number ASC LIMIT 1) as next_period_amount
+            o.order_no,
+            c.paid_periods,
+            -- ดึงยอดจาก installment_payments ที่เป็นงวดถัดไป (status = pending/partial/overdue)
+            (SELECT COALESCE(p.paid_amount, 0) FROM installment_payments p 
+             WHERE p.contract_id = c.id AND p.status IN ('pending', 'partial', 'overdue') 
+             ORDER BY p.period_number ASC LIMIT 1) as next_period_paid,
+            (SELECT p.amount FROM installment_payments p 
+             WHERE p.contract_id = c.id AND p.status IN ('pending', 'partial', 'overdue') 
+             ORDER BY p.period_number ASC LIMIT 1) as next_period_amount,
+            (SELECT p.period_number FROM installment_payments p 
+             WHERE p.contract_id = c.id AND p.status IN ('pending', 'partial', 'overdue') 
+             ORDER BY p.period_number ASC LIMIT 1) as next_period_number
         FROM installment_contracts c 
+        LEFT JOIN orders o ON c.order_id = o.id
         WHERE c.status = 'active' 
         AND c.next_due_date = ?
         AND NOT EXISTS (
@@ -167,18 +174,23 @@ function getContractsForReminder($db, $dueDate, $reminderType) {
  * Get overdue contracts for reminder
  * ดึงทุกรายการที่เกินกำหนด (ไม่จำกัดเฉพาะวันที่ 1,3,7,14)
  * แต่จะไม่ส่งซ้ำถ้าเคยส่งใน due_date เดียวกันแล้ว
+ * ใช้ installment_payments เพื่อดึงยอดจริงของแต่ละงวด (รวม 3% ค่าธรรมเนียมงวดแรก)
  */
 function getOverdueContracts($db) {
     return $db->queryAll(
         "SELECT c.*, 
             o.order_no,
-            (SELECT COUNT(*) FROM installment_payments WHERE contract_id = c.id AND status = 'paid') as paid_periods,
-            (SELECT COALESCE(paid_amount, 0) FROM installment_payments 
-             WHERE contract_id = c.id AND status IN ('pending', 'partial') 
-             ORDER BY period_number ASC LIMIT 1) as next_period_paid,
-            (SELECT amount FROM installment_payments 
-             WHERE contract_id = c.id AND status IN ('pending', 'partial') 
-             ORDER BY period_number ASC LIMIT 1) as next_period_amount,
+            c.paid_periods,
+            -- ดึงยอดจาก installment_payments ที่เป็นงวดถัดไป
+            (SELECT COALESCE(p.paid_amount, 0) FROM installment_payments p 
+             WHERE p.contract_id = c.id AND p.status IN ('pending', 'partial', 'overdue') 
+             ORDER BY p.period_number ASC LIMIT 1) as next_period_paid,
+            (SELECT p.amount FROM installment_payments p 
+             WHERE p.contract_id = c.id AND p.status IN ('pending', 'partial', 'overdue') 
+             ORDER BY p.period_number ASC LIMIT 1) as next_period_amount,
+            (SELECT p.period_number FROM installment_payments p 
+             WHERE p.contract_id = c.id AND p.status IN ('pending', 'partial', 'overdue') 
+             ORDER BY p.period_number ASC LIMIT 1) as next_period_number,
             DATEDIFF(CURDATE(), c.next_due_date) as days_overdue
         FROM installment_contracts c 
         LEFT JOIN orders o ON c.order_id = o.id
@@ -196,20 +208,27 @@ function getOverdueContracts($db) {
 
 /**
  * Process reminder for a specific contract
+ * ใช้ installment_payments เพื่อดึงยอดจริงของแต่ละงวด
  */
 function processContractReminder($db, $contractId) {
     $contract = $db->queryOne(
         "SELECT c.*, 
-            (SELECT COUNT(*) FROM installment_payments WHERE contract_id = c.id AND status = 'paid') as paid_periods,
-            (SELECT COALESCE(paid_amount, 0) FROM installment_payments 
-             WHERE contract_id = c.id AND status IN ('pending', 'partial') 
-             ORDER BY period_number ASC LIMIT 1) as next_period_paid,
-            (SELECT amount FROM installment_payments 
-             WHERE contract_id = c.id AND status IN ('pending', 'partial') 
-             ORDER BY period_number ASC LIMIT 1) as next_period_amount,
+            o.order_no,
+            c.paid_periods,
+            -- ดึงยอดจาก installment_payments ที่เป็นงวดถัดไป
+            (SELECT COALESCE(p.paid_amount, 0) FROM installment_payments p 
+             WHERE p.contract_id = c.id AND p.status IN ('pending', 'partial', 'overdue') 
+             ORDER BY p.period_number ASC LIMIT 1) as next_period_paid,
+            (SELECT p.amount FROM installment_payments p 
+             WHERE p.contract_id = c.id AND p.status IN ('pending', 'partial', 'overdue') 
+             ORDER BY p.period_number ASC LIMIT 1) as next_period_amount,
+            (SELECT p.period_number FROM installment_payments p 
+             WHERE p.contract_id = c.id AND p.status IN ('pending', 'partial', 'overdue') 
+             ORDER BY p.period_number ASC LIMIT 1) as next_period_number,
             DATEDIFF(c.next_due_date, CURDATE()) as days_until_due,
             DATEDIFF(CURDATE(), c.next_due_date) as days_overdue
         FROM installment_contracts c 
+        LEFT JOIN orders o ON c.order_id = o.id
         WHERE c.id = ?",
         [$contractId]
     );
@@ -241,7 +260,8 @@ function processContractReminder($db, $contractId) {
  * Send reminder for a contract
  */
 function sendReminder($db, $contract, $reminderType, $daysUntil) {
-    $nextPeriod = ((int)($contract['paid_periods'] ?? 0)) + 1;
+    // ใช้ period number จาก installment_payments ถ้ามี ไม่งั้นคำนวณจาก paid_periods
+    $nextPeriod = (int)($contract['next_period_number'] ?? ((int)($contract['paid_periods'] ?? 0) + 1));
     
     // Prepare message
     $message = buildReminderMessage($contract, $reminderType, $nextPeriod, $daysUntil);
@@ -264,17 +284,17 @@ function sendReminder($db, $contract, $reminderType, $daysUntil) {
         // Send push notification
         $pushResult = sendPushNotification($db, $platform, $platformUserId, $channelId, $message);
         
-        // Record reminder
+        // Record reminder - ใช้ sent_at แบบ datetime format
         $db->execute(
-            "INSERT INTO installment_reminders (contract_id, reminder_type, due_date, period_number, message_sent, sent_at, status, created_at) 
-             VALUES (?, ?, ?, ?, ?, NOW(), 'sent', NOW())",
+            "INSERT INTO installment_reminders (contract_id, reminder_type, due_date, period_number, message_sent, sent_at, status) 
+             VALUES (?, ?, ?, ?, ?, NOW(), 'sent')",
             [$contract['id'], $reminderType, $contract['next_due_date'], $nextPeriod, $message]
         );
         
-        // Log to push_notifications table
+        // Log to push_notifications table - ใช้ column 'status' ไม่ใช่ 'delivery_status'
         $db->execute(
-            "INSERT INTO push_notifications (platform, platform_user_id, channel_id, notification_type, message, sent_at, delivery_status, created_at)
-             VALUES (?, ?, ?, 'installment_reminder', ?, NOW(), ?, NOW())",
+            "INSERT INTO push_notifications (platform, platform_user_id, channel_id, notification_type, message, sent_at, status)
+             VALUES (?, ?, ?, 'installment_reminder', ?, NOW(), ?)",
             [$platform, $platformUserId, $channelId, $message, $pushResult['success'] ? 'sent' : 'failed']
         );
         
@@ -382,9 +402,20 @@ function buildReminderMessage($contract, $reminderType, $periodNumber, $daysUnti
 function sendPushNotification($db, $platform, $platformUserId, $channelId, $message) {
     $channel = null;
     
-    // Try by channel_id first
+    // Try by channel_id first, BUT must match platform type
     if ($channelId) {
         $channel = $db->queryOne("SELECT * FROM customer_channels WHERE id = ?", [$channelId]);
+        
+        // ⚠️ If channel type doesn't match platform, ignore this channel
+        // This happens when contract has wrong channel_id (e.g. LINE user with FB channel_id)
+        if ($channel && $channel['type'] !== $platform) {
+            Logger::warning('[PUSH] Channel type mismatch', [
+                'channel_id' => $channelId,
+                'channel_type' => $channel['type'],
+                'platform' => $platform
+            ]);
+            $channel = null; // Force fallback to find correct channel
+        }
     }
     
     // Fallback: find channel by platform type

@@ -218,10 +218,10 @@ class PushNotificationService
             return $this->lineAccessTokens[$channelId];
         }
 
-        // Try to get from customer_services table
+        // Try to get from customer_channels table
         if ($channelId) {
             $service = $this->db->queryOne(
-                "SELECT config FROM customer_services WHERE id = ? AND platform = 'line'",
+                "SELECT config FROM customer_channels WHERE id = ? AND type = 'line'",
                 [$channelId]
             );
 
@@ -235,10 +235,10 @@ class PushNotificationService
             }
         }
 
-        // Fallback: get first active LINE service
+        // Fallback: get first active LINE channel
         $service = $this->db->queryOne(
-            "SELECT config FROM customer_services 
-             WHERE platform = 'line' AND status = 'active' AND config IS NOT NULL
+            "SELECT config FROM customer_channels 
+             WHERE type = 'line' AND status = 'active' AND config IS NOT NULL
              LIMIT 1"
         );
 
@@ -260,16 +260,20 @@ class PushNotificationService
      */
     private function getFacebookPageToken(?int $channelId): ?string
     {
+        error_log("[PushNotificationService] getFacebookPageToken called with channelId=" . ($channelId ?? 'NULL'));
+
         if ($channelId && isset($this->facebookPageTokens[$channelId])) {
             return $this->facebookPageTokens[$channelId];
         }
 
-        // Try to get from customer_services table
+        // Try to get from customer_channels table
         if ($channelId) {
             $service = $this->db->queryOne(
-                "SELECT config FROM customer_services WHERE id = ? AND platform = 'facebook'",
+                "SELECT config FROM customer_channels WHERE id = ? AND type = 'facebook'",
                 [$channelId]
             );
+
+            error_log("[PushNotificationService] FB Channel {$channelId} config: " . ($service ? substr($service['config'] ?? 'NULL', 0, 100) : 'NOT_FOUND'));
 
             if ($service && $service['config']) {
                 $config = json_decode($service['config'], true);
@@ -281,10 +285,10 @@ class PushNotificationService
             }
         }
 
-        // Fallback: get first active Facebook service
+        // Fallback: get first active Facebook channel
         $service = $this->db->queryOne(
-            "SELECT config FROM customer_services 
-             WHERE platform = 'facebook' AND status = 'active' AND config IS NOT NULL
+            "SELECT config FROM customer_channels 
+             WHERE type = 'facebook' AND status = 'active' AND config IS NOT NULL
              LIMIT 1"
         );
 
@@ -306,10 +310,19 @@ class PushNotificationService
      */
     private function getTemplate(string $templateKey): ?array
     {
-        return $this->db->queryOne(
+        $template = $this->db->queryOne(
             "SELECT * FROM notification_templates WHERE template_key = ? AND is_active = 1",
             [$templateKey]
         );
+
+        // ✅ DEBUG: Log template lookup
+        if ($template) {
+            error_log("[PushNotificationService] getTemplate: Found '{$templateKey}', line_template length=" . strlen($template['line_template'] ?? ''));
+        } else {
+            error_log("[PushNotificationService] getTemplate: Template '{$templateKey}' NOT FOUND in database!");
+        }
+
+        return $template;
     }
 
     /**
@@ -323,13 +336,21 @@ class PushNotificationService
             $templateText = $template['line_template'] ?? $template['facebook_template'] ?? '';
         }
 
-        // Replace variables
+        // Replace variables - ✅ FIX: Use {{key}} format (2 brackets, not 3)
         foreach ($data as $key => $value) {
-            if (is_numeric($value) && strpos($key, 'date') === false && strpos($key, 'period') === false) {
-                $value = number_format($value, 2);
+            // Don't re-format if already formatted or if it's a date/string field
+            if (is_numeric($value) && strpos($key, 'date') === false && strpos($key, 'period') === false && strpos($key, '_due') === false && strpos($key, 'expiry') === false) {
+                // Only format raw numbers, not already formatted ones
+                if (strpos((string) $value, ',') === false) {
+                    $value = number_format((float) $value, 0);
+                }
             }
-            $templateText = str_replace("{{{$key}}}", $value, $templateText);
+            // ✅ FIX: Template uses {{key}}, not {{{key}}}
+            $templateText = str_replace("{{" . $key . "}}", (string) $value, $templateText);
         }
+
+        // ✅ Clean up any unreplaced variables - replace with empty or placeholder
+        $templateText = preg_replace('/\{\{[a-z0-9_]+\}\}/i', '', $templateText);
 
         return $templateText;
     }
@@ -493,10 +514,13 @@ class PushNotificationService
             'installment' => 'order_created_installment',
             'savings' => 'order_created_savings',
             'savings_completion' => 'order_created_savings',
-            'deposit' => 'order_created_full', // Deposit uses full template with deposit info in data
+            'deposit' => 'order_created_deposit', // Use dedicated deposit template
         ];
 
         $templateKey = $templateMap[$orderType] ?? 'order_created_full';
+
+        // ✅ DEBUG: Log template selection
+        error_log("[PushNotificationService] sendOrderCreated: orderType={$orderType}, templateKey={$templateKey}, platform={$platform}");
 
         return $this->send($platform, $platformUserId, $templateKey, $orderData, $channelId);
     }
@@ -530,4 +554,120 @@ class PushNotificationService
             return ['success' => false, 'error' => $e->getMessage()];
         }
     }
+
+    // ==================== PAWN NOTIFICATIONS ====================
+
+    /**
+     * Send notification for new pawn created
+     * 
+     * @param string $platform 'line' or 'facebook'
+     * @param string $platformUserId User ID on the platform
+     * @param array $pawnData Pawn details:
+     *   - pawn_no, item_name, loan_amount, interest_rate, monthly_interest, due_date
+     * @param int|null $channelId Channel ID for token lookup
+     * @return array Result with success status
+     */
+    public function sendPawnCreated(string $platform, string $platformUserId, array $pawnData, ?int $channelId = null): array
+    {
+        // Build message directly since we may not have template yet
+        $pawnNo = $pawnData['pawn_no'] ?? '-';
+        $itemName = $pawnData['item_name'] ?? 'สินค้า';
+        $loanAmount = number_format((float) ($pawnData['loan_amount'] ?? 0), 0);
+        $interestRate = $pawnData['interest_rate'] ?? 2;
+        $monthlyInterest = number_format((float) ($pawnData['monthly_interest'] ?? 0), 0);
+        $dueDate = $pawnData['due_date'] ?? '-';
+
+        $message = "✅ บันทึกจำนำเรียบร้อย\n\n";
+        $message .= "🏷️ รหัส: {$pawnNo}\n";
+        $message .= "📦 สินค้า: {$itemName}\n";
+        $message .= "💰 เงินต้น: ฿{$loanAmount}\n";
+        $message .= "📈 ดอกเบี้ย: {$interestRate}% (฿{$monthlyInterest}/เดือน)\n";
+        $message .= "📅 ครบกำหนด: {$dueDate}\n\n";
+        $message .= "💳 ช่องทางชำระ:\n";
+        $message .= "กรุณาติดต่อร้านเพื่อชำระดอกเบี้ย";
+
+        return $this->sendDirectMessage($platform, $platformUserId, $message, $channelId);
+    }
+
+    /**
+     * Send notification for pawn interest payment verified
+     */
+    public function sendPawnInterestVerified(string $platform, string $platformUserId, array $data, ?int $channelId = null): array
+    {
+        $pawnNo = $data['pawn_no'] ?? '-';
+        $amount = number_format((float) ($data['amount'] ?? 0), 0);
+        $months = $data['months'] ?? 1;
+        $newDueDate = $data['new_due_date'] ?? '-';
+
+        $message = "✅ ต่อดอกสำเร็จ\n\n";
+        $message .= "🏷️ รหัส: {$pawnNo}\n";
+        $message .= "💰 ยอดชำระ: ฿{$amount}\n";
+        $message .= "🔄 ต่อดอก: {$months} เดือน\n";
+        $message .= "📅 ครบกำหนดใหม่: {$newDueDate}\n\n";
+        $message .= "ขอบคุณที่ใช้บริการครับ 🙏";
+
+        return $this->sendDirectMessage($platform, $platformUserId, $message, $channelId);
+    }
+
+    /**
+     * Send notification for pawn redemption verified
+     */
+    public function sendPawnRedemptionVerified(string $platform, string $platformUserId, array $data, ?int $channelId = null): array
+    {
+        $pawnNo = $data['pawn_no'] ?? '-';
+        $itemName = $data['item_name'] ?? 'สินค้า';
+        $principal = number_format((float) ($data['principal'] ?? 0), 0);
+        $interest = number_format((float) ($data['interest'] ?? 0), 0);
+        $total = number_format((float) ($data['total'] ?? 0), 0);
+
+        $message = "🎉 ไถ่ถอนสำเร็จ!\n\n";
+        $message .= "🏷️ รหัส: {$pawnNo}\n";
+        $message .= "📦 สินค้า: {$itemName}\n";
+        $message .= "💰 เงินต้น: ฿{$principal}\n";
+        $message .= "💸 ดอกเบี้ย: ฿{$interest}\n";
+        $message .= "📊 รวม: ฿{$total}\n\n";
+        $message .= "กรุณามารับสินค้าได้ที่ร้านครับ 🏪";
+
+        return $this->sendDirectMessage($platform, $platformUserId, $message, $channelId);
+    }
+
+    /**
+     * Send notification for pawn due date reminder
+     */
+    public function sendPawnDueReminder(string $platform, string $platformUserId, array $data, ?int $channelId = null): array
+    {
+        $pawnNo = $data['pawn_no'] ?? '-';
+        $itemName = $data['item_name'] ?? 'สินค้า';
+        $monthlyInterest = number_format((float) ($data['monthly_interest'] ?? 0), 0);
+        $dueDate = $data['due_date'] ?? '-';
+        $daysRemaining = $data['days_remaining'] ?? 0;
+
+        $message = "⏰ แจ้งเตือนครบกำหนดจำนำ\n\n";
+        $message .= "🏷️ รหัส: {$pawnNo}\n";
+        $message .= "📦 สินค้า: {$itemName}\n";
+        $message .= "📅 ครบกำหนด: {$dueDate}\n";
+        $message .= "⏳ เหลือ: {$daysRemaining} วัน\n";
+        $message .= "💰 ดอกเบี้ย: ฿{$monthlyInterest}\n\n";
+        $message .= "กรุณาชำระดอกเบี้ยก่อนครบกำหนด\nเพื่อไม่ให้สินค้าหลุดจำนำครับ 🙏";
+
+        return $this->sendDirectMessage($platform, $platformUserId, $message, $channelId);
+    }
+
+    /**
+     * Send notification for pawn forfeited
+     */
+    public function sendPawnForfeited(string $platform, string $platformUserId, array $data, ?int $channelId = null): array
+    {
+        $pawnNo = $data['pawn_no'] ?? '-';
+        $itemName = $data['item_name'] ?? 'สินค้า';
+
+        $message = "❌ หลุดจำนำ\n\n";
+        $message .= "🏷️ รหัส: {$pawnNo}\n";
+        $message .= "📦 สินค้า: {$itemName}\n\n";
+        $message .= "สินค้าหลุดจำนำเนื่องจากไม่ชำระดอกเบี้ยตามกำหนด\n";
+        $message .= "หากมีข้อสงสัย กรุณาติดต่อร้านครับ";
+
+        return $this->sendDirectMessage($platform, $platformUserId, $message, $channelId);
+    }
 }
+

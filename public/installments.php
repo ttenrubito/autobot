@@ -23,9 +23,9 @@ include('../includes/customer/sidebar.php');
                 <button class="btn btn-outline" onclick="sendAllReminders()" id="btnSendReminders">
                     <i class="fas fa-bell"></i> <span class="btn-text">ส่งแจ้งเตือนทั้งหมด</span>
                 </button>
-                <button class="btn btn-primary" onclick="openCreateInstallmentModal()">
+                <!-- <button class="btn btn-primary" onclick="openCreateInstallmentModal()">
                     <i class="fas fa-plus"></i> <span class="btn-text">สร้างแผนผ่อนใหม่</span>
-                </button>
+                </button> -->
             </div>
         </div>
     </div>
@@ -59,6 +59,40 @@ include('../includes/customer/sidebar.php');
             <h3 class="card-title">รายการแผนผ่อนชำระ</h3>
         </div>
         <div class="card-body">
+            <!-- Filter Section -->
+            <div class="filter-section" style="margin-bottom:1rem;">
+                <div class="filter-grid">
+                    <div class="filter-item">
+                        <label class="filter-label">🔍 ค้นหา</label>
+                        <input type="text" id="filterSearch" class="form-control"
+                            placeholder="ชื่อลูกค้า, สินค้า, เลขออเดอร์..." onkeyup="debounceFilter()">
+                    </div>
+                    <div class="filter-item">
+                        <label class="filter-label">📊 สถานะ</label>
+                        <select id="filterStatus" class="form-control" onchange="applyFilters()">
+                            <option value="">ทั้งหมด</option>
+                            <option value="active">กำลังผ่อน</option>
+                            <option value="overdue">เลยกำหนด</option>
+                            <option value="completed">ครบแล้ว</option>
+                            <option value="cancelled">ยกเลิก</option>
+                        </select>
+                    </div>
+                    <div class="filter-item">
+                        <label class="filter-label">📅 ตั้งแต่</label>
+                        <input type="date" id="filterDateFrom" class="form-control" onchange="applyFilters()">
+                    </div>
+                    <div class="filter-item">
+                        <label class="filter-label">📅 ถึง</label>
+                        <input type="date" id="filterDateTo" class="form-control" onchange="applyFilters()">
+                    </div>
+                    <div class="filter-item filter-actions">
+                        <button class="btn btn-outline btn-sm" onclick="clearFilters()" title="ล้างตัวกรอง">
+                            <i class="fas fa-times"></i> ล้าง
+                        </button>
+                    </div>
+                </div>
+            </div>
+
             <!-- Desktop Table -->
             <div class="table-container desktop-only">
                 <table>
@@ -287,6 +321,37 @@ include('../includes/customer/sidebar.php');
         color: var(--color-gray);
     }
 
+    /* Filter Section */
+    .filter-section {
+        background: var(--color-light);
+        border-radius: 12px;
+        padding: 1rem;
+    }
+
+    .filter-grid {
+        display: grid;
+        grid-template-columns: 2fr 1fr 1fr 1fr auto;
+        gap: 1rem;
+        align-items: end;
+    }
+
+    .filter-item {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+    }
+
+    .filter-label {
+        font-size: 0.8rem;
+        color: var(--color-gray);
+        font-weight: 500;
+    }
+
+    .filter-actions {
+        display: flex;
+        align-items: flex-end;
+    }
+
     /* Desktop Only / Mobile Only */
     .desktop-only {
         display: block;
@@ -301,9 +366,22 @@ include('../includes/customer/sidebar.php');
         .summary-grid {
             grid-template-columns: repeat(2, 1fr);
         }
+
+        .filter-grid {
+            grid-template-columns: 1fr 1fr;
+        }
     }
 
     @media (max-width: 768px) {
+        /* Prevent sidebar overflow */
+        html, body {
+            overflow-x: hidden !important;
+        }
+
+        .filter-grid {
+            grid-template-columns: 1fr;
+        }
+
         .page-header-content {
             flex-direction: column;
             align-items: flex-start;
@@ -341,6 +419,75 @@ include('../includes/customer/sidebar.php');
 
         .btn-text {
             display: inline;
+        }
+
+        /* Full-screen modal on mobile */
+        body .modal-backdrop,
+        #installmentDetailModal.modal-backdrop,
+        #createInstallmentModal.modal-backdrop {
+            padding: 0 !important;
+        }
+
+        body .modal-content,
+        #installmentDetailModal .modal-content,
+        #createInstallmentModal .modal-content {
+            width: 100% !important;
+            max-width: 100% !important;
+            min-height: 100vh !important;
+            margin: 0 !important;
+            border-radius: 0 !important;
+        }
+
+        body .modal-lg,
+        #installmentDetailModal .modal-lg,
+        #createInstallmentModal .modal-lg {
+            max-width: 100% !important;
+            width: 100% !important;
+            margin: 0 !important;
+        }
+
+        body .modal-content .card,
+        #installmentDetailModal .card,
+        #createInstallmentModal .card {
+            border-radius: 0 !important;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        body .modal-content .card-body,
+        #installmentDetailModal .card-body,
+        #createInstallmentModal .card-body {
+            flex: 1;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            padding: 1rem;
+            max-height: calc(100vh - 70px);
+        }
+
+        body .modal-content .card-header,
+        #installmentDetailModal .card-header,
+        #createInstallmentModal .card-header {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            background: white;
+            padding: 1rem;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .modal-close-btn {
+            width: 36px;
+            height: 36px;
+            padding: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Adjust filter on mobile */
+        .filter-section {
+            padding: 0.75rem;
         }
     }
 
@@ -1131,13 +1278,21 @@ include('../includes/customer/sidebar.php');
                     <p>กำลังโหลดข้อมูล...</p>
                 </div>
             </div>
-            <div class="card-footer" style="display: flex; gap: 1rem; justify-content: flex-end;">
-                <a href="payment-history.php" id="viewSlipHistoryBtn" class="btn btn-primary">
-                    <i class="fas fa-receipt"></i> ดูประวัติสลิป
-                </a>
-                <button class="btn btn-outline" onclick="closeInstallmentDetailModal()">
-                    <i class="fas fa-times"></i> ปิด
-                </button>
+            <div class="card-footer" style="display: flex; gap: 1rem; justify-content: space-between; flex-wrap: wrap;">
+                <div>
+                    <button id="cancelInstallmentBtn" class="btn btn-danger" onclick="cancelInstallment()"
+                        style="display: none;">
+                        <i class="fas fa-ban"></i> ยกเลิกแผน
+                    </button>
+                </div>
+                <div style="display: flex; gap: 1rem;">
+                    <a href="payment-history.php" id="viewSlipHistoryBtn" class="btn btn-primary">
+                        <i class="fas fa-receipt"></i> ดูประวัติสลิป
+                    </a>
+                    <button class="btn btn-outline" onclick="closeInstallmentDetailModal()">
+                        <i class="fas fa-times"></i> ปิด
+                    </button>
+                </div>
             </div>
         </div>
     </div>
@@ -1229,6 +1384,44 @@ include('../includes/customer/sidebar.php');
         }
     }
 
+    // Filter functions
+    let filterDebounceTimer = null;
+
+    function debounceFilter() {
+        clearTimeout(filterDebounceTimer);
+        filterDebounceTimer = setTimeout(() => {
+            applyFilters();
+        }, 300);
+    }
+
+    function getFilterParams() {
+        const params = new URLSearchParams();
+
+        const search = document.getElementById('filterSearch')?.value?.trim();
+        const status = document.getElementById('filterStatus')?.value;
+        const dateFrom = document.getElementById('filterDateFrom')?.value;
+        const dateTo = document.getElementById('filterDateTo')?.value;
+
+        if (search) params.append('search', search);
+        if (status) params.append('status', status);
+        if (dateFrom) params.append('date_from', dateFrom);
+        if (dateTo) params.append('date_to', dateTo);
+
+        return params.toString();
+    }
+
+    function applyFilters() {
+        loadInstallments(1); // Reset to page 1 when filtering
+    }
+
+    function clearFilters() {
+        document.getElementById('filterSearch').value = '';
+        document.getElementById('filterStatus').value = '';
+        document.getElementById('filterDateFrom').value = '';
+        document.getElementById('filterDateTo').value = '';
+        applyFilters();
+    }
+
     async function loadInstallments(page = 1) {
         currentPage = page;
         const tbody = document.getElementById('installmentsTableBody');
@@ -1238,7 +1431,10 @@ include('../includes/customer/sidebar.php');
         mobileContainer.innerHTML = '<div class="loading-placeholder"><div class="spinner"></div><p>กำลังโหลดข้อมูล...</p></div>';
 
         try {
-            const res = await apiCall(API_ENDPOINTS.CUSTOMER_INSTALLMENTS + `?page=${currentPage}&limit=${ITEMS_PER_PAGE}`);
+            // Build URL with filters
+            const filterParams = getFilterParams();
+            const url = API_ENDPOINTS.CUSTOMER_INSTALLMENTS + `?page=${currentPage}&limit=${ITEMS_PER_PAGE}` + (filterParams ? '&' + filterParams : '');
+            const res = await apiCall(url);
 
             // API returns { success: true, data: [...], summary: {...}, pagination: {...} }
             if (!res.success || !res.data) {
@@ -1295,6 +1491,8 @@ include('../includes/customer/sidebar.php');
                         <div style="display:flex;flex-direction:column;gap:0.25rem;">
                             ${customerBadgeHtml}
                             <small style="color:#6b7280;">${escapeHtml(displayName)}</small>
+                            ${i.contract_no ? `<small style="color:#8b5cf6;font-weight:500;">📋 ${escapeHtml(i.contract_no)}</small>` : ''}
+                            ${i.order_number ? `<small style="color:#3b82f6;font-weight:500;">📦 ${escapeHtml(i.order_number)}</small>` : ''}
                         </div>
                     </td>
                     <td style="text-align:right;">฿${formatNumber(totalAmount)}</td>
@@ -1348,7 +1546,11 @@ include('../includes/customer/sidebar.php');
                 return `
                 <div class="mobile-card">
                     <div class="mobile-card-header">
-                        <div class="mobile-card-title">${escapeHtml(displayName)}</div>
+                        <div>
+                            <div class="mobile-card-title">${escapeHtml(displayName)}</div>
+                            ${i.contract_no ? `<div style="font-size:0.8rem;color:#8b5cf6;font-weight:500;">📋 ${escapeHtml(i.contract_no)}</div>` : ''}
+                            ${i.order_number ? `<div style="font-size:0.8rem;color:#3b82f6;font-weight:500;">📦 ${escapeHtml(i.order_number)}</div>` : ''}
+                        </div>
                         <span class="badge badge-${getStatusBadge(i.status)}">${getStatusLabel(i.status)}</span>
                     </div>
                     <div class="mobile-card-row">
@@ -1825,7 +2027,7 @@ include('../includes/customer/sidebar.php');
             ${paymentsHtml}
         </div>
     `;
-    
+
         // Update "ดูประวัติสลิป" button with correct filter URL
         const viewSlipBtn = document.getElementById('viewSlipHistoryBtn');
         if (viewSlipBtn) {
@@ -1836,6 +2038,9 @@ include('../includes/customer/sidebar.php');
             viewSlipBtn.href = filterUrl;
             console.log('📍 Updated slip history URL:', filterUrl);
         }
+
+        // แสดง/ซ่อนปุ่มยกเลิกตามสถานะ
+        updateCancelButtonVisibility(contract.status);
     }
 
     function getPaymentStatusBadge(status, reason) {
@@ -1857,6 +2062,64 @@ include('../includes/customer/sidebar.php');
         if (!dateStr) return '-';
         const d = new Date(dateStr);
         return d.toLocaleDateString('th-TH') + ' ' + d.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+    }
+
+    /**
+     * ยกเลิกแผนผ่อนชำระ
+     */
+    async function cancelInstallment() {
+        if (!currentDetailInstallmentId) {
+            showToast('❌ ไม่พบรหัสแผนผ่อนชำระ', 'error');
+            return;
+        }
+
+        const reason = prompt('กรุณาระบุเหตุผลในการยกเลิก (ถ้ามี):');
+        if (reason === null) return; // User clicked cancel
+
+        if (!confirm('⚠️ ยืนยันยกเลิกแผนผ่อนชำระนี้?\n\nการยกเลิกจะไม่สามารถย้อนกลับได้')) {
+            return;
+        }
+
+        const btn = document.getElementById('cancelInstallmentBtn');
+        const originalHTML = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> กำลังยกเลิก...';
+        btn.disabled = true;
+
+        try {
+            const res = await apiCall(`/api/customer/installments.php?action=cancel&id=${currentDetailInstallmentId}`, {
+                method: 'POST',
+                body: JSON.stringify({
+                    id: currentDetailInstallmentId,
+                    reason: reason || null
+                })
+            });
+
+            if (res.success) {
+                showToast('✅ ยกเลิกแผนผ่อนชำระเรียบร้อยแล้ว', 'success');
+                closeInstallmentDetailModal();
+                loadInstallments(); // Reload list
+            } else {
+                showToast('❌ ' + (res.message || 'เกิดข้อผิดพลาด'), 'error');
+            }
+        } catch (e) {
+            console.error('cancelInstallment error:', e);
+            showToast('❌ เกิดข้อผิดพลาดในการยกเลิก', 'error');
+        } finally {
+            btn.innerHTML = originalHTML;
+            btn.disabled = false;
+        }
+    }
+
+    /**
+     * แสดง/ซ่อนปุ่มยกเลิกตาม status
+     */
+    function updateCancelButtonVisibility(status) {
+        const btn = document.getElementById('cancelInstallmentBtn');
+        if (!btn) return;
+
+        // แสดงปุ่มยกเลิกเฉพาะสถานะ active, overdue, pending_approval
+        const canCancel = ['active', 'overdue', 'pending_approval'].includes(status);
+        btn.style.display = canCancel ? 'inline-flex' : 'none';
     }
 
 </script>

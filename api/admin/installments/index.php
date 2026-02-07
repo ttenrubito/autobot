@@ -60,6 +60,9 @@ try {
         rejectPayment($db, (int)$contractId, $adminId);
     } elseif ($method === 'POST' && $contractId && $action === 'manual-payment') {
         addManualPayment($db, (int)$contractId, $adminId);
+    } elseif ($method === 'POST' && $contractId && $action === 'close-period') {
+        // ✅ NEW: Manual close period when admin confirms payment is sufficient
+        closePeriod($db, (int)$contractId, $adminId);
     } elseif ($method === 'POST' && $contractId && $action === 'update-due-date') {
         updateDueDate($db, (int)$contractId, $adminId);
     } elseif ($method === 'POST' && $contractId && $action === 'cancel') {
@@ -415,10 +418,12 @@ function verifyPayment($db, int $contractId, $adminId) {
             $newStatus = 'completed';
             $nextDueDate = null;
         } else {
-            // Calculate next period due date
+            // Calculate next period due date (นโยบาย ฮ.เฮง เฮง: Day 0, 30, 60)
             $contract = $db->queryOne("SELECT start_date FROM installment_contracts WHERE id = ?", [$contractId]);
             $nextPeriod = $newPaidPeriods + 1;
-            $nextDueDate = date('Y-m-d', strtotime($contract['start_date'] . " +" . ($nextPeriod - 1) . " months"));
+            $periodDays = [1 => 0, 2 => 30, 3 => 60]; // Day 0, 30, 60
+            $daysToAdd = $periodDays[$nextPeriod] ?? (($nextPeriod - 1) * 30);
+            $nextDueDate = date('Y-m-d', strtotime($contract['start_date'] . " +{$daysToAdd} days"));
         }
         
         $db->execute(
@@ -599,8 +604,10 @@ function addManualPayment($db, int $contractId, $adminId) {
     // Generate payment number
     $paymentNo = 'INSPAY-' . date('Ymd') . '-' . strtoupper(substr(bin2hex(random_bytes(3)), 0, 5));
     
-    // Calculate due date
-    $dueDate = date('Y-m-d', strtotime($contract['start_date'] . " +" . ($periodNumber - 1) . " months"));
+    // Calculate due date (นโยบาย ฮ.เฮง เฮง: Day 0, 30, 60)
+    $periodDays = [1 => 0, 2 => 30, 3 => 60];
+    $daysToAdd = $periodDays[$periodNumber] ?? (($periodNumber - 1) * 30);
+    $dueDate = date('Y-m-d', strtotime($contract['start_date'] . " +{$daysToAdd} days"));
     
     $db->beginTransaction();
     
@@ -645,7 +652,10 @@ function addManualPayment($db, int $contractId, $adminId) {
             $newStatus = 'completed';
         } else {
             $nextPeriod = $newPaidPeriods + 1;
-            $nextDueDate = date('Y-m-d', strtotime($contract['start_date'] . " +" . ($nextPeriod - 1) . " months"));
+            // นโยบาย ฮ.เฮง เฮง: Day 0, 30, 60
+            $periodDays = [1 => 0, 2 => 30, 3 => 60];
+            $daysToAdd = $periodDays[$nextPeriod] ?? (($nextPeriod - 1) * 30);
+            $nextDueDate = date('Y-m-d', strtotime($contract['start_date'] . " +{$daysToAdd} days"));
         }
         
         $db->execute(
@@ -740,6 +750,147 @@ function updateDueDate($db, int $contractId, $adminId) {
 }
 
 /**
+ * ✅ NEW: Manually close a period when admin confirms payment is sufficient
+ * This allows flexible payment collection before marking period as paid
+ */
+function closePeriod($db, int $contractId, $adminId) {
+    $input = json_decode(file_get_contents('php://input'), true);
+    $periodNumber = (int)($input['period_number'] ?? 0);
+    $notes = $input['notes'] ?? null;
+    
+    if ($periodNumber < 1 || $periodNumber > 3) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'Invalid period number (1-3)']);
+        return;
+    }
+    
+    $contract = $db->queryOne("SELECT * FROM installment_contracts WHERE id = ?", [$contractId]);
+    
+    if (!$contract) {
+        http_response_code(404);
+        echo json_encode(['success' => false, 'message' => 'Contract not found']);
+        return;
+    }
+    
+    // Check if period is already closed
+    $existingPeriod = $db->queryOne("
+        SELECT * FROM installment_payments 
+        WHERE contract_id = ? AND period_number = ?
+    ", [$contractId, $periodNumber]);
+    
+    if ($existingPeriod && $existingPeriod['status'] === 'paid') {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => "งวดที่ {$periodNumber} ปิดไปแล้ว"]);
+        return;
+    }
+    
+    // Calculate expected amount for this period
+    $productPrice = (float)($contract['product_price'] ?? $contract['financed_amount']);
+    $totalPeriods = (int)$contract['total_periods'];
+    $serviceFee = round($productPrice * 0.03);
+    $basePerPeriod = floor($productPrice / $totalPeriods);
+    $remainder = $productPrice - ($basePerPeriod * $totalPeriods);
+    
+    $periodAmounts = [
+        1 => $basePerPeriod + $serviceFee,
+        2 => $basePerPeriod,
+        3 => $basePerPeriod + $remainder
+    ];
+    $expectedAmount = $periodAmounts[$periodNumber] ?? $basePerPeriod;
+    
+    $pdo = $db->getPdo();
+    $pdo->beginTransaction();
+    
+    try {
+        // Update installment_payments - mark as paid
+        if ($existingPeriod) {
+            $stmt = $pdo->prepare("
+                UPDATE installment_payments
+                SET status = 'paid',
+                    paid_date = CURDATE(),
+                    notes = CONCAT(COALESCE(notes, ''), '\n[MANUAL CLOSE] By admin #', ?, ': ', ?)
+                WHERE contract_id = ? AND period_number = ?
+            ");
+            $stmt->execute([$adminId, $notes ?? 'Manual period close', $contractId, $periodNumber]);
+        } else {
+            // Insert new payment record if not exists
+            $stmt = $pdo->prepare("
+                INSERT INTO installment_payments 
+                (contract_id, period_number, amount, due_date, status, paid_date, notes)
+                VALUES (?, ?, ?, CURDATE(), 'paid', CURDATE(), ?)
+            ");
+            $stmt->execute([$contractId, $periodNumber, $expectedAmount, "[MANUAL CLOSE] By admin #{$adminId}"]);
+        }
+        
+        // Update installment_contracts
+        $newPaidPeriods = $contract['paid_periods'] + 1;
+        $isComplete = $newPaidPeriods >= $totalPeriods;
+        
+        // Calculate next due date
+        $nextDueDateValue = null;
+        if (!$isComplete) {
+            $dueDateDays = [1 => 0, 2 => 30, 3 => 60];
+            $nextPeriodNum = $periodNumber + 1;
+            $daysFromStart = $dueDateDays[$nextPeriodNum] ?? (($nextPeriodNum - 1) * 30);
+            $startDate = $contract['start_date'] ?? $contract['created_at'];
+            $nextDueDateValue = date('Y-m-d', strtotime($startDate . " +{$daysFromStart} days"));
+        }
+        
+        $stmt = $pdo->prepare("
+            UPDATE installment_contracts
+            SET paid_periods = ?,
+                next_due_date = ?,
+                status = CASE WHEN ? >= total_periods THEN 'completed' ELSE status END,
+                completed_at = CASE WHEN ? >= total_periods THEN NOW() ELSE completed_at END,
+                admin_notes = CONCAT(COALESCE(admin_notes, ''), '\n[', NOW(), '] Period ', ?, ' closed by admin #', ?),
+                updated_at = NOW()
+            WHERE id = ?
+        ");
+        $stmt->execute([
+            $newPaidPeriods,
+            $nextDueDateValue,
+            $newPaidPeriods,
+            $newPaidPeriods,
+            $periodNumber,
+            $adminId,
+            $contractId
+        ]);
+        
+        $pdo->commit();
+        
+        Logger::info("Period {$periodNumber} closed for contract #{$contractId}", [
+            'contract_id' => $contractId,
+            'period_number' => $periodNumber,
+            'admin_id' => $adminId,
+            'is_complete' => $isComplete
+        ]);
+        
+        echo json_encode([
+            'success' => true,
+            'message' => $isComplete 
+                ? "🎉 ปิดงวดที่ {$periodNumber} แล้ว - สัญญาผ่อนชำระเสร็จสมบูรณ์!"
+                : "✅ ปิดงวดที่ {$periodNumber} แล้ว (ยังเหลืออีก " . ($totalPeriods - $newPaidPeriods) . " งวด)",
+            'data' => [
+                'period_closed' => $periodNumber,
+                'paid_periods' => $newPaidPeriods,
+                'total_periods' => $totalPeriods,
+                'is_complete' => $isComplete
+            ]
+        ]);
+        
+    } catch (Exception $e) {
+        $pdo->rollBack();
+        Logger::error("Failed to close period", [
+            'contract_id' => $contractId,
+            'period_number' => $periodNumber,
+            'error' => $e->getMessage()
+        ]);
+        http_response_code(500);
+        echo json_encode(['success' => false, 'message' => 'Failed to close period: ' . $e->getMessage()]);
+    }
+}
+
+/**
  * Cancel contract
  */
 function cancelContract($db, int $contractId, $adminId) {
@@ -821,7 +972,10 @@ function buildPaymentSchedule($contract, $payments): array {
     }
     
     for ($i = 1; $i <= $totalPeriods; $i++) {
-        $dueDate = date('Y-m-d', strtotime($startDate . " +" . ($i - 1) . " months"));
+        // นโยบาย ฮ.เฮง เฮง: Day 0, 30, 60
+        $periodDays = [1 => 0, 2 => 30, 3 => 60];
+        $daysToAdd = $periodDays[$i] ?? (($i - 1) * 30);
+        $dueDate = date('Y-m-d', strtotime($startDate . " +{$daysToAdd} days"));
         $periodPayments = $paymentsByPeriod[$i] ?? [];
         
         $status = 'upcoming';

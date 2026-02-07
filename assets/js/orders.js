@@ -32,22 +32,34 @@ function buildAddressesLinkForOrder(order) {
 
 /**
  * Render payment progress bar showing % paid
+ * For installment orders, use financed_amount (includes 3% fee) as the base
  */
 function renderPaymentProgress(order) {
-    const total = parseFloat(order.total_amount) || 0;
-    const paid = parseFloat(order.paid_amount) || 0;
+    // ✅ For installment orders, use financed_amount (product + 3% fee)
+    const isInstallment = order.order_type === 'installment' || order.payment_type === 'installment';
+    const financedAmount = parseFloat(order.financed_amount) || 0;
+    const productPrice = parseFloat(order.product_price) || parseFloat(order.total_amount) || 0;
+    const serviceFee = parseFloat(order.service_fee) || (financedAmount - productPrice);
     
+    // Use financed_amount for installment, else total_amount
+    const total = isInstallment && financedAmount > 0 ? financedAmount : (parseFloat(order.total_amount) || 0);
+    
+    // For installment, prefer contract_paid_amount over order.paid_amount
+    const paid = isInstallment && order.contract_paid_amount !== undefined 
+        ? parseFloat(order.contract_paid_amount) || 0 
+        : parseFloat(order.paid_amount) || 0;
+
     if (total <= 0) return '';
-    
+
     const percent = Math.min(100, Math.round((paid / total) * 100));
     const remaining = total - paid;
-    
+
     // Color based on progress
     let color = '#dc2626'; // red - not paid
     if (percent >= 100) color = '#059669'; // green - fully paid
     else if (percent >= 50) color = '#0284c7'; // blue - half paid
     else if (percent > 0) color = '#d97706'; // orange - partial
-    
+
     return `
         <div style="margin-top:4px;">
             <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:#6b7280;">
@@ -127,14 +139,14 @@ function prefillOrderFromUrlParams() {
         const el = document.getElementById('productImageUrl');
         if (el) el.value = productImage;
         console.log('[prefillOrder] Set productImageUrl:', productImage);
-        
+
         // Also display the product image in the UI
         const imgEl = document.getElementById('selectedProductImg');
         if (imgEl) {
             imgEl.src = productImage;
             console.log('[prefillOrder] Set product image src:', productImage);
         }
-        
+
         // Show the product card (it's hidden by default)
         const cardEl = document.getElementById('selectedProductCard');
         if (cardEl) {
@@ -189,7 +201,7 @@ function prefillOrderFromUrlParams() {
             }
         }
     }
-    
+
     // ✅ NEW: Fill shipping address from case checkout flow
     const shippingAddress = params.get('shipping_address');
     const recipientName = params.get('recipient_name');
@@ -198,7 +210,16 @@ function prefillOrderFromUrlParams() {
     const district = params.get('district');
     const province = params.get('province');
     const postalCode = params.get('postal_code');
-    
+
+    // ✅ FIX: If we have shipping_address, make sure to show the address fields first
+    if (shippingAddress || addressLine1) {
+        const addressFields = document.getElementById('shippingAddressFields');
+        if (addressFields) {
+            addressFields.style.display = 'block';
+            console.log('[prefillOrder] Force showing shippingAddressFields for address data');
+        }
+    }
+
     if (shippingAddress) {
         const el = document.getElementById('shippingAddress');
         if (el) {
@@ -289,7 +310,7 @@ async function autoSelectProductFromParams(params) {
                 ? API_ENDPOINTS.PRODUCTS_SEARCH_V1
                 : '/api/v1/products/search';
 
-            const searchBody = product_code 
+            const searchBody = product_code
                 ? { product_code: product_code, page: { limit: 5 } }
                 : { keyword: product_name, page: { limit: 5 } };
 
@@ -473,14 +494,17 @@ function goToPage(page) {
 
 function renderOrders(orders) {
     const tbody = document.getElementById('ordersTableBody');
+    const mobileContainer = document.getElementById('ordersMobileCards');
 
     const targetOrderNo = getQueryParam('order_no');
 
     if (!orders || orders.length === 0) {
         tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:2rem;color:var(--color-gray);">ไม่พบคำสั่งซื้อ</td></tr>';
+        if (mobileContainer) mobileContainer.innerHTML = '<div style="text-align:center;padding:2rem;color:var(--color-gray);">ไม่พบคำสั่งซื้อ</div>';
         return;
     }
 
+    // Render desktop table
     tbody.innerHTML = orders.map(order => {
         // Map status to badge class (supports both old and new status names)
         const statusClass = {
@@ -531,6 +555,18 @@ function renderOrders(orders) {
         // Format created_at for display
         const createdDate = order.created_at ? formatDateTime(order.created_at) : '-';
 
+        // ✅ For installment, show financed_amount (includes 3% fee) with breakdown
+        const financedAmount = parseFloat(order.financed_amount) || 0;
+        const productPrice = parseFloat(order.product_price) || parseFloat(order.total_amount) || 0;
+        const serviceFee = parseFloat(order.service_fee) || (financedAmount - productPrice);
+        const displayAmount = isInstallment && financedAmount > 0 ? financedAmount : order.total_amount;
+        
+        // Show fee breakdown for installment orders
+        const amountHtml = isInstallment && serviceFee > 0 
+            ? `<strong>฿${formatNumber(displayAmount)}</strong>
+               <div style="font-size:0.7rem;color:#d97706;">(สินค้า ฿${formatNumber(productPrice)} + ${Math.round((serviceFee/productPrice)*100)}%)</div>`
+            : `<strong>฿${formatNumber(order.total_amount)}</strong>`;
+
         return `
             <tr onclick="viewOrderDetail(${order.id})" style="cursor:pointer;${rowStyle}">
                 <td><strong>${order.order_no || order.order_number || '-'}</strong></td>
@@ -540,7 +576,7 @@ function renderOrders(orders) {
                     <small style="color:var(--color-gray);">${order.product_code || ''}</small>
                 </td>
                 <td style="text-align:right;">
-                    <strong>฿${formatNumber(order.total_amount)}</strong>
+                    ${amountHtml}
                     ${renderPaymentProgress(order)}
                 </td>
                 <td>
@@ -558,6 +594,83 @@ function renderOrders(orders) {
             </tr>
         `;
     }).join('');
+
+    // Render mobile cards
+    if (mobileContainer) {
+        mobileContainer.innerHTML = orders.map(order => {
+            const statusClass = {
+                'draft': 'secondary',
+                'pending': 'warning',
+                'pending_payment': 'warning',
+                'paid': 'success',
+                'processing': 'info',
+                'shipped': 'primary',
+                'delivered': 'success',
+                'cancelled': 'danger',
+                'refunded': 'danger'
+            }[order.status] || 'secondary';
+
+            const statusText = {
+                'draft': 'ร่าง',
+                'pending': 'รอดำเนินการ',
+                'pending_payment': 'รอชำระเงิน',
+                'paid': 'ชำระแล้ว',
+                'processing': 'กำลังเตรียม',
+                'shipped': 'จัดส่งแล้ว',
+                'delivered': 'ส่งถึงแล้ว',
+                'cancelled': 'ยกเลิก',
+                'refunded': 'คืนเงิน'
+            }[order.status] || order.status;
+
+            const customerName = order.customer_display_name || order.customer_name || 'ไม่ระบุ';
+            const customerAvatar = order.customer_avatar_url || order.customer_avatar;
+            const customerInitial = customerName.charAt(0).toUpperCase();
+
+            const paymentType = order.payment_type || order.order_type || 'full_payment';
+            const isFullPayment = paymentType === 'full' || paymentType === 'full_payment';
+            const isInstallment = paymentType === 'installment';
+            const isDeposit = paymentType === 'deposit';
+            const installmentMonths = order.installment_months || 0;
+
+            const paymentTypeText = isFullPayment ? '💳 จ่ายเต็ม'
+                : (isInstallment ? '📅 ผ่อน ' + installmentMonths + ' งวด'
+                    : (isDeposit ? '💎 มัดจำ' : '💰 ออมครบ'));
+
+            const createdDate = order.created_at ? formatDateTime(order.created_at) : '-';
+
+            // ✅ For installment, show financed_amount
+            const financedAmount = parseFloat(order.financed_amount) || 0;
+            const mobileDisplayAmount = isInstallment && financedAmount > 0 ? financedAmount : order.total_amount;
+
+            return `
+                <div class="order-mobile-card" onclick="viewOrderDetail(${order.id})">
+                    <div class="order-mobile-header">
+                        <span class="order-mobile-id">${order.order_no || '-'}</span>
+                        <span class="order-mobile-amount">฿${formatNumber(mobileDisplayAmount)}</span>
+                    </div>
+                    <div class="order-mobile-product">${order.product_name || '-'}</div>
+                    <div class="order-mobile-row">
+                        <span>ลูกค้า</span>
+                        <div class="order-mobile-customer">
+                            ${customerAvatar
+                    ? `<img src="${customerAvatar}" alt="${customerName}" onerror="this.style.display='none'">`
+                    : `<span class="avatar-placeholder-sm">${customerInitial}</span>`
+                }
+                            <span>${customerName}</span>
+                        </div>
+                    </div>
+                    <div class="order-mobile-row">
+                        <span>วันที่สั่ง</span>
+                        <span>${createdDate}</span>
+                    </div>
+                    <div class="order-mobile-badges">
+                        <span class="badge badge-${isFullPayment ? 'success' : (isDeposit ? 'warning' : 'info')}">${paymentTypeText}</span>
+                        <span class="badge badge-${statusClass}">${statusText}</span>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
 }
 
 async function viewOrderDetail(orderId) {
@@ -620,7 +733,12 @@ function renderOrderDetails(order) {
             <div class="detail-grid">
                 <div class="detail-item">
                     <div class="detail-label">เลขที่คำสั่งซื้อ</div>
-                    <div class="detail-value">${order.order_no || order.order_number || '-'}</div>
+                    <div class="detail-value" style="display:flex;align-items:center;gap:0.5rem;">
+                        <span id="orderNo-${order.id}">${order.order_no || order.order_number || '-'}</span>
+                        <button onclick="copyOrderNo('${order.order_no || order.order_number}')" style="background:none;border:none;cursor:pointer;padding:0.25rem;color:#6b7280;" title="คัดลอก">
+                            <i class="fas fa-copy"></i>
+                        </button>
+                    </div>
                 </div>
                 <div class="detail-item">
                     <div class="detail-label">สถานะ</div>
@@ -633,13 +751,21 @@ function renderOrderDetails(order) {
                     <div class="detail-value">${formatDateTime(order.created_at)}</div>
                 </div>
                 <div class="detail-item">
+                    <div class="detail-label">อัปเดตล่าสุด</div>
+                    <div class="detail-value">${formatDateTime(order.updated_at || order.created_at)}</div>
+                </div>
+                <div class="detail-item">
                     <div class="detail-label">แหล่งที่มา</div>
                     <div class="detail-value">${order.source || '-'}</div>
                 </div>
+                ${order.case_id ? `
                 <div class="detail-item">
-                    <div class="detail-label">🚚 ช่องทางรับสินค้า</div>
-                    <div class="detail-value">${getShippingMethodLabel(order.shipping_method)}</div>
+                    <div class="detail-label">🔗 จาก Case</div>
+                    <div class="detail-value">
+                        <a href="/cases.php?case_id=${order.case_id}" style="color:#3b82f6;text-decoration:none;">ดู Case #${order.case_id} →</a>
+                    </div>
                 </div>
+                ` : ''}
             </div>
         </div>
         
@@ -666,10 +792,6 @@ function renderOrderDetails(order) {
                 <div class="detail-item">
                     <div class="detail-label">จำนวน</div>
                     <div class="detail-value">${order.quantity || 1} ชิ้น</div>
-                </div>
-                <div class="detail-item">
-                    <div class="detail-label">ยอดรวม</div>
-                    <div class="detail-value detail-value-lg">฿${formatNumber(order.total_amount)}</div>
                 </div>
             </div>
         </div>
@@ -701,6 +823,16 @@ function renderOrderDetails(order) {
         <!-- Shipping Address -->
         ${addressHtml}
         
+        <!-- Notes -->
+        ${order.notes ? `
+        <div class="detail-section">
+            <div class="detail-section-title">📝 หมายเหตุ</div>
+            <div style="padding: 0.75rem 1rem; background: #fefce8; border-radius: 8px; border: 1px solid #fef08a; color: #854d0e;">
+                ${order.notes}
+            </div>
+        </div>
+        ` : ''}
+        
         <!-- Installment Schedule -->
         ${installmentHtml}
         
@@ -713,9 +845,11 @@ function renderOrderDetails(order) {
                 <a class="btn-action" href="${buildPaymentHistoryLinkForOrderNo(order.order_no || order.order_number)}">
                     <i class="fas fa-receipt"></i> ดูประวัติการชำระเงิน
                 </a>
-                <a class="btn-action" href="${buildAddressesLinkForOrder(order)}">
-                    <i class="fas fa-map-marker-alt"></i> ดูที่อยู่จัดส่ง
-                </a>
+                ${order.status !== 'cancelled' && order.status !== 'delivered' ? `
+                <button class="btn-action btn-cancel" onclick="confirmCancelOrder(${order.id}, '${order.order_no || order.order_number}')" style="background:#fee2e2;color:#dc2626;border-color:#fecaca;">
+                    <i class="fas fa-times-circle"></i> ยกเลิกคำสั่งซื้อ
+                </button>
+                ` : ''}
             </div>
         </div>
     `;
@@ -804,17 +938,17 @@ function buildAddressSection(order) {
 
     // Check if we have shipping_address_detail from API (from customer_addresses join)
     const addr = order.shipping_address_detail || {};
-    
+
     // Check if we have address info - either from join or from direct fields
     const recipientName = addr.recipient_name || order.shipping_name || order.recipient_name;
     const phone = addr.phone || order.shipping_phone || order.phone;
     const addressLine1 = addr.address_line1 || order.address_line1;
-    
+
     // Link to addresses page if we have shipping_address_id
-    const addressLink = order.shipping_address_id 
-        ? buildAddressesLinkForOrder(order) 
+    const addressLink = order.shipping_address_id
+        ? buildAddressesLinkForOrder(order)
         : null;
-    
+
     if (!recipientName && !addressLine1 && !order.shipping_address) {
         return '';
     }
@@ -842,11 +976,25 @@ function buildAddressSection(order) {
         addr.postal_code || order.postal_code
     ].filter(Boolean);
 
+    // Build tracking number section
+    const trackingNo = order.tracking_number || order.tracking_no;
+    const trackingHtml = trackingNo ? `
+        <div style="margin-top: 0.75rem; padding: 0.5rem 0.75rem; background: #eff6ff; border-radius: 6px; display: flex; align-items: center; justify-content: space-between;">
+            <div>
+                <span style="font-size: 0.75rem; color: #6b7280;">📦 เลข Tracking:</span>
+                <span style="font-weight: 600; color: #1d4ed8; margin-left: 0.5rem;" id="tracking-${order.id}">${trackingNo}</span>
+            </div>
+            <button onclick="copyTrackingNo('${trackingNo}')" style="background:#3b82f6;color:#fff;border:none;padding:0.25rem 0.5rem;border-radius:4px;cursor:pointer;font-size:0.75rem;">
+                <i class="fas fa-copy"></i> คัดลอก
+            </button>
+        </div>
+    ` : '';
+
     // Build link button if we have address_id
-    const viewAddressBtn = addressLink 
+    const viewAddressBtn = addressLink
         ? `<a href="${addressLink}" class="btn btn-sm btn-outline" style="margin-top: 0.75rem; display: inline-flex; align-items: center; gap: 0.25rem;">
             <i class="fas fa-external-link-alt"></i> ดูรายละเอียดที่อยู่
-           </a>` 
+           </a>`
         : '';
 
     return `
@@ -856,6 +1004,7 @@ function buildAddressSection(order) {
                 <div class="address-name">${recipientName || '-'}</div>
                 <div class="address-phone">${phone || '-'}</div>
                 <div>${addressParts.join(' ') || '-'}</div>
+                ${trackingHtml}
                 ${viewAddressBtn}
             </div>
         </div>
@@ -866,6 +1015,28 @@ function buildInstallmentSection(order) {
     // Check for installment_schedule (from API) or installments
     const installments = order.installment_schedule || order.installments || [];
     
+    // Get installment fee info from installment_info
+    const installmentInfo = order.installment_info || {};
+    const financedAmount = parseFloat(installmentInfo.financed_amount) || 0;
+    const productPrice = parseFloat(installmentInfo.product_price) || parseFloat(order.total_amount) || 0;
+    
+    // ✅ Use interest_rate from API if available (stored at contract creation)
+    // Fallback to calculation for backward compatibility
+    const apiInterestRate = parseFloat(installmentInfo.interest_rate);
+    const apiFeeAmount = parseFloat(installmentInfo.total_interest);
+    
+    let feeRate, feeAmount;
+    if (!isNaN(apiInterestRate) && apiInterestRate > 0) {
+        // Use stored values from database
+        feeRate = apiInterestRate;
+        feeAmount = !isNaN(apiFeeAmount) ? apiFeeAmount : (productPrice * feeRate / 100);
+    } else {
+        // Fallback: Calculate from amounts (for old contracts without interest_rate)
+        feeAmount = financedAmount > 0 && productPrice > 0 ? financedAmount - productPrice : 0;
+        feeRate = productPrice > 0 && feeAmount > 0 ? Math.round((feeAmount / productPrice) * 100) : 0;
+    }
+    const hasInstallmentFee = feeAmount > 0;
+
     if (!installments || installments.length === 0) {
         // If order is installment type but no schedule yet, show info
         if (order.payment_type === 'installment' || order.order_type === 'installment') {
@@ -886,10 +1057,35 @@ function buildInstallmentSection(order) {
     const paidCount = installments.filter(i => i.status === 'paid').length;
     const totalCount = installments.length;
     const installmentProgress = totalCount > 0 ? Math.round((paidCount / totalCount) * 100) : 0;
+    
+    // Build fee breakdown HTML if applicable
+    const feeBreakdownHtml = hasInstallmentFee ? `
+        <div style="margin-bottom: 1rem; padding: 0.75rem 1rem; background: #fffbeb; border-radius: 8px; border: 1px solid #fcd34d;">
+            <div style="font-size: 0.85rem; color: #92400e; font-weight: 500; margin-bottom: 0.5rem;">
+                <i class="fas fa-info-circle"></i> รายละเอียดยอดผ่อน
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.9rem;">
+                <div style="display: flex; justify-content: space-between; color: #78716c;">
+                    <span>ราคาสินค้า</span>
+                    <span>฿${formatNumber(productPrice)}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; color: #d97706;">
+                    <span>ค่าธรรมเนียมผ่อน ${feeRate}%</span>
+                    <span>+฿${formatNumber(feeAmount)}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; font-weight: 600; color: #1f2937; border-top: 1px dashed #e5e7eb; padding-top: 0.5rem; margin-top: 0.25rem;">
+                    <span>ยอดผ่อนรวม</span>
+                    <span>฿${formatNumber(financedAmount)}</span>
+                </div>
+            </div>
+        </div>
+    ` : '';
 
     return `
         <div class="detail-section">
             <div class="detail-section-title">📅 ตารางผ่อนชำระ</div>
+            
+            ${feeBreakdownHtml}
             
             <!-- Installment Progress Bar -->
             <div style="margin-bottom: 1rem; padding: 1rem; background: #f0f9ff; border-radius: 8px; border: 1px solid #bae6fd;">
@@ -916,10 +1112,10 @@ function buildInstallmentSection(order) {
                 </thead>
                 <tbody>
                     ${installments.map(inst => {
-                        const paidAmt = parseFloat(inst.paid_amount) || 0;
-                        const dueAmt = parseFloat(inst.amount) || 0;
-                        const isFullyPaid = paidAmt >= dueAmt;
-                        return `
+        const paidAmt = parseFloat(inst.paid_amount) || 0;
+        const dueAmt = parseFloat(inst.amount) || 0;
+        const isFullyPaid = paidAmt >= dueAmt;
+        return `
                             <tr style="${inst.status === 'overdue' ? 'background: #fef2f2;' : inst.status === 'paid' ? 'background: #f0fdf4;' : ''}">
                                 <td><strong>${inst.period_number}</strong></td>
                                 <td>${formatDate(inst.due_date)}</td>
@@ -932,7 +1128,7 @@ function buildInstallmentSection(order) {
                                 </td>
                             </tr>
                         `;
-                    }).join('')}
+    }).join('')}
                 </tbody>
             </table>
         </div>
@@ -946,7 +1142,7 @@ function buildInstallmentSection(order) {
  */
 function buildDepositSection(order) {
     const paymentType = order.payment_type || order.order_type || 'full';
-    
+
     // Only show for deposit orders
     if (paymentType !== 'deposit') {
         return '';
@@ -957,7 +1153,7 @@ function buildDepositSection(order) {
     const paidAmount = parseFloat(order.paid_amount) || 0;
     const remainingAmount = Math.max(0, totalAmount - paidAmount);
     const depositExpiry = order.deposit_expiry;
-    
+
     // Check if deposit is expired
     let isExpired = false;
     let daysRemaining = null;
@@ -976,7 +1172,7 @@ function buildDepositSection(order) {
     let statusBg = '#fef3c7';
     let statusIcon = '💎';
     let statusText = 'รอชำระมัดจำ';
-    
+
     if (paidAmount > 0 && paidAmount < totalAmount) {
         statusColor = '#0ea5e9'; // info/blue
         statusBg = '#e0f2fe';
@@ -1025,18 +1221,27 @@ function buildDepositSection(order) {
  * แสดง Progress Bar และยอดคงเหลือ รวมถึงยอดรอตรวจสอบ
  */
 function buildPaymentProgressSection(order) {
-    const totalAmount = parseFloat(order.total_amount) || 0;
+    // For installment orders, use financed_amount (includes fee) instead of total_amount
+    const isInstallment = order.order_type === 'installment' || order.payment_type === 'installment';
+    const installmentInfo = order.installment_info || {};
+    const financedAmount = parseFloat(installmentInfo.financed_amount) || 0;
+    
+    // Use financed_amount for installment orders if available
+    const totalAmount = (isInstallment && financedAmount > 0) 
+        ? financedAmount 
+        : (parseFloat(order.total_amount) || 0);
+    
     const paidAmount = parseFloat(order.paid_amount) || 0;
     const pendingAmount = parseFloat(order.paid_amount_pending) || 0;
     const remainingAmount = parseFloat(order.remaining_amount) || Math.max(0, totalAmount - paidAmount);
     const percentage = totalAmount > 0 ? Math.min(100, (paidAmount / totalAmount) * 100) : 0;
     const pendingPercentage = totalAmount > 0 ? Math.min(100 - percentage, (pendingAmount / totalAmount) * 100) : 0;
-    
+
     // Determine progress bar color based on percentage
     let progressColor = '#e5e7eb'; // gray
     let statusIcon = '○';
     let statusText = 'ยังไม่ชำระ';
-    
+
     if (percentage >= 100) {
         progressColor = '#22c55e'; // green - paid
         statusIcon = '✓';
@@ -1046,7 +1251,7 @@ function buildPaymentProgressSection(order) {
         statusIcon = '◐';
         statusText = 'ชำระบางส่วน';
     }
-    
+
     // Build pending amount indicator if there are pending payments
     const pendingHtml = pendingAmount > 0 ? `
         <div style="margin-top: 0.5rem; padding: 0.5rem 0.75rem; background: #fef3c7; border-radius: 6px; display: flex; align-items: center; gap: 0.5rem;">
@@ -1057,7 +1262,10 @@ function buildPaymentProgressSection(order) {
             </span>
         </div>
     ` : '';
-    
+
+    // Label for total - show "ยอดผ่อน" for installment, "ยอดรวม" for others
+    const totalLabel = (isInstallment && financedAmount > 0) ? 'ยอดผ่อน' : 'ยอดรวม';
+
     return `
         <div class="payment-progress-container" style="margin-bottom: 1rem; padding: 1rem; background: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
@@ -1080,7 +1288,7 @@ function buildPaymentProgressSection(order) {
                     <div style="font-weight: 600; color: ${remainingAmount > 0 ? '#d97706' : '#22c55e'};">฿${formatNumber(remainingAmount)}</div>
                 </div>
                 <div style="text-align: center; padding: 0.5rem; background: #eff6ff; border-radius: 6px;">
-                    <div style="color: #9ca3af; font-size: 0.75rem;">ยอดรวม</div>
+                    <div style="color: #9ca3af; font-size: 0.75rem;">${totalLabel}</div>
                     <div style="font-weight: 600; color: #3b82f6;">฿${formatNumber(totalAmount)}</div>
                 </div>
             </div>
@@ -1109,7 +1317,7 @@ function getShippingMethodLabel(shippingMethod) {
  */
 function getPaymentTypeLabel(order) {
     const paymentType = order.payment_type || order.order_type || 'full';
-    
+
     if (paymentType === 'full' || paymentType === 'full_payment') {
         return '💳 ชำระเต็มจำนวน';
     } else if (paymentType === 'installment') {
@@ -1164,7 +1372,7 @@ function buildPaymentHistorySection(order) {
             </div>
         `;
     }
-    
+
     return `
         <div style="margin-top: 1rem;">
             <div style="font-size: 0.8rem; color: #6b7280; margin-bottom: 0.5rem; font-weight: 500;">ประวัติการชำระเงิน (${order.payments.length} รายการ)</div>
@@ -1418,7 +1626,7 @@ function selectProduct(product) {
     // Set hidden fields
     document.getElementById('selectedProductId').value = product.id || product.product_id || '';
     document.getElementById('selectedProductSku').value = code;
-    
+
     // ✅ FIX: Also set product image URL for saving to order
     const productImageUrlEl = document.getElementById('productImageUrl');
     if (productImageUrlEl) {
@@ -1549,18 +1757,18 @@ function calculateInstallment() {
     // Service fee: 3% TOTAL (not per month)
     const serviceFeeRate = 0.03;
     const serviceFee = Math.round(remaining * serviceFeeRate);
-    
+
     // Calculate installment amounts following the spec:
     // งวด 1 = floor(ราคา/3) + ค่าธรรมเนียม
     // งวด 2 = floor(ราคา/3)
     // งวด 3 = floor(ราคา/3) + เศษ
     const baseAmount = Math.floor(remaining / 3);
     const remainder = remaining - (baseAmount * 3);
-    
+
     let p1 = baseAmount;
     let p2 = baseAmount;
     let p3 = baseAmount + remainder;
-    
+
     // Period 1 includes service fee
     const period1Total = p1 + serviceFee;
     const grandTotal = remaining + serviceFee;
@@ -1656,8 +1864,8 @@ function updateMessageTemplate() {
             const period2 = basePerPeriod;
             const period3 = basePerPeriod + remainder;
             const period1Due = new Date().toLocaleDateString('th-TH');
-            const period2Due = new Date(Date.now() + 30*24*60*60*1000).toLocaleDateString('th-TH');
-            const period3Due = new Date(Date.now() + 60*24*60*60*1000).toLocaleDateString('th-TH');
+            const period2Due = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString('th-TH');
+            const period3Due = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toLocaleDateString('th-TH');
 
             template = `🛒 สร้างคำสั่งซื้อผ่อนชำระเรียบร้อยแล้วค่ะ
 
@@ -1687,7 +1895,7 @@ function updateMessageTemplate() {
             // มัดจำ 10%
             const depositNum = parseFloat(totalAmount) || 0;
             const depositAmount = Math.round(depositNum * 0.1);
-            const depositExpiry = new Date(Date.now() + 7*24*60*60*1000).toLocaleDateString('th-TH');
+            const depositExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString('th-TH');
 
             template = `🛒 สร้างคำสั่งซื้อมัดจำเรียบร้อยแล้วค่ะ
 
@@ -1770,7 +1978,7 @@ function updateSubmitButtonText() {
     const submitBtn = document.getElementById('submitOrderBtn');
     const warningEl = document.getElementById('sendMessageWarning');
     const externalUserId = document.getElementById('externalUserId')?.value || '';
-    
+
     if (submitBtn) {
         if (sendMessageChecked) {
             submitBtn.innerHTML = '<i class="fas fa-paper-plane"></i> บันทึก & ส่งข้อความ';
@@ -1778,7 +1986,7 @@ function updateSubmitButtonText() {
             submitBtn.innerHTML = '<i class="fas fa-save"></i> บันทึกเท่านั้น';
         }
     }
-    
+
     // แสดง warning ถ้าติ๊กส่งข้อความแต่ไม่มี external_user_id
     if (warningEl) {
         if (sendMessageChecked && !externalUserId) {
@@ -1865,14 +2073,14 @@ async function submitCreateOrder(event) {
     try {
         // Build order data
         const paymentType = document.querySelector('input[name="payment_type"]:checked')?.value || 'full';
-        
+
         // Get external_user_id from hidden field
         const externalUserIdValue = document.getElementById('externalUserId')?.value || null;
         const productImageValue = document.getElementById('productImageUrl')?.value || null;
-        
+
         // Get from_case from hidden field (NOT URL params - URL is cleared after prefill)
         const fromCaseId = document.getElementById('fromCaseId')?.value || null;
-        
+
         console.log('[submitCreateOrder] external_user_id:', externalUserIdValue);
         console.log('[submitCreateOrder] product_image:', productImageValue);
         console.log('[submitCreateOrder] from_case:', fromCaseId);
@@ -1898,9 +2106,14 @@ async function submitCreateOrder(event) {
             // Push message fields
             bank_account: document.getElementById('bankAccount')?.value || null,
             customer_message: document.getElementById('customerMessage')?.value?.trim() || null,
-            send_message: document.getElementById('sendMessageCheckbox')?.checked || false
+            send_message: document.getElementById('sendMessageCheckbox')?.checked || false,
+            // ✅ FIX: Add shipping fields - these were missing!
+            shipping_method: document.getElementById('shippingMethod')?.value || 'pickup',
+            shipping_address: document.getElementById('shippingAddress')?.value?.trim() || null,
+            shipping_fee: parseFloat(document.getElementById('shippingFee')?.value) || 0,
+            tracking_number: document.getElementById('trackingNumber')?.value?.trim() || null
         };
-        
+
         console.log('[submitCreateOrder] Full orderData:', JSON.stringify(orderData, null, 2));
 
         // Add installment fields if applicable (no down payment - full installment)
@@ -2142,11 +2355,11 @@ function selectCustomer(customer) {
 
     // Set hidden field
     document.getElementById('selectedCustomerId').value = customer.id || customer.customer_id || customer.external_user_id || '';
-    
+
     // ✅ Set external_user_id for push message (LINE/Facebook ID)
     const externalId = customer.platform_user_id || customer.external_user_id || customer.line_user_id || '';
     document.getElementById('externalUserId').value = externalId;
-    
+
     // ✅ Update submit button text (hide warning if customer has platform ID)
     updateSubmitButtonText();
 
@@ -2343,6 +2556,92 @@ function showEditOrderForm(order) {
             </form>
         </div>
     `;
+}
+
+/**
+ * Confirm and Cancel Order
+ */
+async function confirmCancelOrder(orderId, orderNo) {
+    const reason = prompt(`❌ ยืนยันยกเลิกคำสั่งซื้อ #${orderNo}\n\nกรุณาระบุเหตุผล (ถ้ามี):`, 'ลูกค้าแจ้งยกเลิก');
+    
+    // User clicked Cancel
+    if (reason === null) return;
+    
+    await cancelOrder(orderId, reason || 'ลูกค้าแจ้งยกเลิก');
+}
+
+/**
+ * Copy Order Number to Clipboard
+ */
+function copyOrderNo(orderNo) {
+    navigator.clipboard.writeText(orderNo).then(() => {
+        showToast('📋 คัดลอกเลขที่คำสั่งซื้อแล้ว: ' + orderNo, 'success');
+    }).catch(() => {
+        // Fallback for older browsers
+        const textArea = document.createElement('textarea');
+        textArea.value = orderNo;
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+        showToast('📋 คัดลอกเลขที่คำสั่งซื้อแล้ว: ' + orderNo, 'success');
+    });
+}
+
+/**
+ * Copy Tracking Number to Clipboard
+ */
+function copyTrackingNo(trackingNo) {
+    navigator.clipboard.writeText(trackingNo).then(() => {
+        showToast('📦 คัดลอกเลข Tracking แล้ว: ' + trackingNo, 'success');
+    }).catch(() => {
+        // Fallback for older browsers
+        const textArea = document.createElement('textarea');
+        textArea.value = trackingNo;
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+        showToast('📦 คัดลอกเลข Tracking แล้ว: ' + trackingNo, 'success');
+    });
+}
+
+/**
+ * Cancel Order API Call
+ */
+async function cancelOrder(orderId, reason) {
+    try {
+        const formData = new FormData();
+        formData.append('id', orderId);
+        formData.append('action', 'update');
+        formData.append('status', 'cancelled');
+        formData.append('notes', `[ยกเลิก] ${reason}`);
+
+        const apiUrl = (typeof API_ENDPOINTS !== 'undefined' && API_ENDPOINTS.CUSTOMER_ORDERS)
+            ? API_ENDPOINTS.CUSTOMER_ORDERS + '?action=update'
+            : '/api/customer/orders?action=update';
+
+        const response = await fetch(apiUrl, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+            },
+            body: formData
+        });
+
+        const result = await response.json();
+
+        if (result && result.success) {
+            showToast('✅ ยกเลิกคำสั่งซื้อเรียบร้อย', 'success');
+            closeOrderModal();
+            await loadOrders(currentPage);
+        } else {
+            showToast('❌ ' + (result?.message || 'ไม่สามารถยกเลิกได้'), 'error');
+        }
+    } catch (error) {
+        console.error('Cancel order error:', error);
+        showToast('❌ เกิดข้อผิดพลาดในการยกเลิก', 'error');
+    }
 }
 
 /**

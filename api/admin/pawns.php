@@ -386,6 +386,105 @@ try {
         $action = $_GET['action'];
         $input = json_decode(file_get_contents('php://input'), true);
 
+        // ==================== Send Reminders Action ====================
+        if ($action === 'send-reminders') {
+            require_once __DIR__ . '/../../includes/services/PushNotificationService.php';
+            $pushService = new PushNotificationService($db);
+
+            $results = [
+                'three_day' => 0,
+                'one_day' => 0,
+                'overdue_updated' => 0,
+                'errors' => []
+            ];
+
+            // Get pawns due in 3 days
+            $threeDayPawns = $db->query(
+                "SELECT p.*, 
+                        cp.platform, cp.platform_user_id, cp.display_name, cp.channel_id,
+                        DATEDIFF(p.due_date, CURDATE()) as days_remaining,
+                        (p.loan_amount * p.interest_rate / 100) as monthly_interest
+                 FROM pawns p
+                 LEFT JOIN customer_profiles cp ON p.customer_id = cp.id
+                 WHERE p.status IN ('active', 'extended')
+                   AND DATEDIFF(p.due_date, CURDATE()) = 3
+                   AND cp.platform_user_id IS NOT NULL"
+            );
+
+            foreach ($threeDayPawns as $pawn) {
+                try {
+                    $result = $pushService->sendPawnDueReminder(
+                        $pawn['platform'] ?? 'line',
+                        $pawn['platform_user_id'],
+                        [
+                            'pawn_no' => $pawn['pawn_no'],
+                            'item_name' => $pawn['item_description'] ?? $pawn['item_name'] ?? 'สินค้า',
+                            'monthly_interest' => $pawn['monthly_interest'],
+                            'due_date' => date('d/m/Y', strtotime($pawn['due_date'])),
+                            'days_remaining' => 3
+                        ],
+                        $pawn['channel_id']
+                    );
+                    if ($result['success'])
+                        $results['three_day']++;
+                } catch (Exception $e) {
+                    $results['errors'][] = $pawn['pawn_no'] . ': ' . $e->getMessage();
+                }
+            }
+
+            // Get pawns due in 1 day
+            $oneDayPawns = $db->query(
+                "SELECT p.*, 
+                        cp.platform, cp.platform_user_id, cp.display_name, cp.channel_id,
+                        DATEDIFF(p.due_date, CURDATE()) as days_remaining,
+                        (p.loan_amount * p.interest_rate / 100) as monthly_interest
+                 FROM pawns p
+                 LEFT JOIN customer_profiles cp ON p.customer_id = cp.id
+                 WHERE p.status IN ('active', 'extended')
+                   AND DATEDIFF(p.due_date, CURDATE()) = 1
+                   AND cp.platform_user_id IS NOT NULL"
+            );
+
+            foreach ($oneDayPawns as $pawn) {
+                try {
+                    $result = $pushService->sendPawnDueReminder(
+                        $pawn['platform'] ?? 'line',
+                        $pawn['platform_user_id'],
+                        [
+                            'pawn_no' => $pawn['pawn_no'],
+                            'item_name' => $pawn['item_description'] ?? $pawn['item_name'] ?? 'สินค้า',
+                            'monthly_interest' => $pawn['monthly_interest'],
+                            'due_date' => date('d/m/Y', strtotime($pawn['due_date'])),
+                            'days_remaining' => 1
+                        ],
+                        $pawn['channel_id']
+                    );
+                    if ($result['success'])
+                        $results['one_day']++;
+                } catch (Exception $e) {
+                    $results['errors'][] = $pawn['pawn_no'] . ': ' . $e->getMessage();
+                }
+            }
+
+            // Update overdue status
+            $overdueResult = $db->execute(
+                "UPDATE pawns 
+                 SET status = 'overdue', updated_at = NOW() 
+                 WHERE status = 'active' 
+                   AND due_date < CURDATE()"
+            );
+            $results['overdue_updated'] = $overdueResult;
+
+            $totalSent = $results['three_day'] + $results['one_day'];
+
+            echo json_encode([
+                'success' => true,
+                'message' => "ส่งแจ้งเตือน {$totalSent} รายการ, อัพเดทสถานะเกินกำหนด {$results['overdue_updated']} รายการ",
+                'data' => $results
+            ]);
+            exit;
+        }
+
         if ($action === 'verify-interest') {
             // Admin verifies interest payment
             $pawnPaymentId = $input['payment_id'] ?? null;
@@ -522,7 +621,7 @@ try {
                         [$payment['case_id']]
                     );
                 }
-                
+
                 // Also close any open pawn_redemption case for this pawn
                 $db->execute(
                     "UPDATE cases SET 
@@ -540,18 +639,18 @@ try {
                     try {
                         require_once __DIR__ . '/../../includes/services/PushMessageService.php';
                         $pushService = new \App\Services\PushMessageService(getDB());
-                        
+
                         $platformUserId = $payment['external_user_id'] ?: $payment['platform_user_id'];
                         $productName = $payment['product_name'] ?? $payment['product_description'] ?? 'สินค้า';
                         $loanAmount = $payment['pawn_amount'] ?? $payment['principal_amount'] ?? 0;
-                        
+
                         $message = "🎉 ไถ่ถอนสำเร็จค่ะ!\n\n"
                             . "📋 รหัสจำนำ: {$payment['pawn_no']}\n"
                             . "📦 สินค้า: {$productName}\n"
                             . "💰 เงินต้น: ฿" . number_format($loanAmount, 0) . "\n"
                             . "💵 ยอดชำระ: ฿" . number_format($payment['amount'] ?? 0, 0) . "\n\n"
                             . "✅ กรุณานัดหมายรับสินค้าคืนที่ร้านค่ะ 😊";
-                        
+
                         $pushService->sendMessage(
                             $payment['platform'] ?? 'line',
                             $platformUserId,

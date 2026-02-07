@@ -158,9 +158,14 @@ function createInstallmentContract($db) {
     $totalAmount = $financedAmount + $totalInterest;
     $amountPerPeriod = $input['amount_per_period'] ?? round($totalAmount / $totalPeriods, 2);
     
-    // Calculate dates
-    $startDate = $input['start_date'] ?? date('Y-m-d', strtotime('+1 month'));
-    $endDate = date('Y-m-d', strtotime($startDate . " +{$totalPeriods} months"));
+    // Calculate dates (นโยบาย 60 วัน สำหรับ 3 งวด: งวด 1=วันนี้, งวด 2=+20 วัน, งวด 3=+40 วัน)
+    if ($totalPeriods == 3) {
+        $startDate = $input['start_date'] ?? date('Y-m-d'); // เริ่มวันนี้
+        $endDate = date('Y-m-d', strtotime($startDate . " +60 days")); // สิ้นสุดใน 60 วัน
+    } else {
+        $startDate = $input['start_date'] ?? date('Y-m-d', strtotime('+1 month'));
+        $endDate = date('Y-m-d', strtotime($startDate . " +{$totalPeriods} months"));
+    }
     
     $contractNo = generateContractNo();
     
@@ -430,8 +435,15 @@ function submitPayment($db, int $contractId) {
     $paymentType = $input['payment_type'] ?? 'regular';
     $slipOcrData = isset($input['slip_ocr_data']) ? json_encode($input['slip_ocr_data']) : null;
     
-    // Get due date for this period
-    $dueDate = date('Y-m-d', strtotime($contract['start_date'] . " +" . ($periodNumber - 1) . " months"));
+    // Get due date for this period (นโยบาย ฮ.เฮง เฮง: Day 0, 30, 60)
+    $totalPeriods = (int)$contract['total_periods'];
+    if ($totalPeriods == 3) {
+        $periodDays = [1 => 0, 2 => 30, 3 => 60];
+        $daysToAdd = $periodDays[$periodNumber] ?? (($periodNumber - 1) * 30);
+        $dueDate = date('Y-m-d', strtotime($contract['start_date'] . " +{$daysToAdd} days"));
+    } else {
+        $dueDate = date('Y-m-d', strtotime($contract['start_date'] . " +" . ($periodNumber - 1) . " months"));
+    }
     
     $sql = "INSERT INTO installment_payments (
         contract_id, payment_no, period_number,

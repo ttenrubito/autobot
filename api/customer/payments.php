@@ -30,15 +30,12 @@ if (!$auth['valid']) {
 }
 
 $user_id = $auth['user_id'];
+$tenant_id = $auth['tenant_id'] ?? 'default'; // ✅ FIX: Add tenant_id for link_order/link_repair
 $method = $_SERVER['REQUEST_METHOD'];
 $uri = $_SERVER['REQUEST_URI'];
 
-// Get tenant_id for this user
-$pdo_init = getDB();
-$stmt = $pdo_init->prepare("SELECT tenant_id FROM users WHERE id = ?");
-$stmt->execute([$user_id]);
-$user_row = $stmt->fetch(PDO::FETCH_ASSOC);
-$tenant_id = $user_row['tenant_id'] ?? 'default';
+// ✅ FIX: Use shop_owner_id for data isolation instead of tenant_id
+// shop_owner_id = logged-in user_id (each shop owner only sees their own payments)
 
 // Parse payment ID from URI path (/payments/34) or query string (?id=34)
 $uri_parts = explode('/', trim(parse_url($uri, PHP_URL_PATH), '/'));
@@ -68,6 +65,8 @@ try {
                     p.id,
                     p.payment_no,
                     p.order_id,
+                    p.repair_id,
+                    p.pawn_id,
                     p.customer_id,
                     p.tenant_id,
                     p.amount,
@@ -93,14 +92,22 @@ try {
                     cp.platform as customer_platform,
                     cp.platform_user_id as customer_platform_id,
                     COALESCE(cp.avatar_url, cp.profile_pic_url) as customer_avatar,
-                    cp.phone as customer_phone
+                    cp.phone as customer_phone,
+                    -- Repair info
+                    r.repair_no,
+                    r.item_name as repair_item_name,
+                    -- Pawn info
+                    pw.pawn_no,
+                    pw.item_name as pawn_item_name
                 FROM payments p
                 LEFT JOIN customer_profiles cp ON 
                     cp.platform_user_id = COALESCE(p.platform_user_id, JSON_UNQUOTE(JSON_EXTRACT(p.payment_details, '$.external_user_id')))
                     AND cp.platform = COALESCE(p.platform, JSON_UNQUOTE(JSON_EXTRACT(p.payment_details, '$.platform')), 'line')
-                WHERE p.id = ? AND p.tenant_id = ?
+                LEFT JOIN repairs r ON r.id = p.repair_id
+                LEFT JOIN pawns pw ON pw.id = p.pawn_id
+                WHERE p.id = ? AND (p.shop_owner_id = ? OR (p.shop_owner_id IS NULL AND p.user_id = ?))
             ");
-            $stmt->execute([$payment_id, $tenant_id]);
+            $stmt->execute([$payment_id, $user_id, $user_id]);
             $payment = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if (!$payment) {
@@ -253,9 +260,10 @@ try {
             $status = isset($_GET['status']) ? $_GET['status'] : null;
             $payment_type = isset($_GET['payment_type']) ? $_GET['payment_type'] : null;
 
-            // Build query - filter by tenant_id (shop's payments)
-            $where = ['p.tenant_id = ?'];
-            $params = [$tenant_id];
+            // Build query - filter by shop_owner_id OR user_id (shop's payments)
+            // Support both columns for backwards compatibility
+            $where = ['(p.shop_owner_id = ? OR (p.shop_owner_id IS NULL AND p.user_id = ?))'];
+            $params = [$user_id, $user_id];
 
             if ($status) {
                 $where[] = 'p.status = ?';
@@ -393,9 +401,9 @@ try {
                     SUM(CASE WHEN status = 'verified' THEN 1 ELSE 0 END) as verified_count,
                     SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected_count
                 FROM payments
-                WHERE tenant_id = ?
+                WHERE shop_owner_id = ? OR (shop_owner_id IS NULL AND user_id = ?)
             ");
-            $stmt->execute([$tenant_id]);
+            $stmt->execute([$user_id, $user_id]);
             $summary = $stmt->fetch(PDO::FETCH_ASSOC);
 
             echo json_encode([
@@ -463,23 +471,29 @@ try {
                     classifyPayment($pdo, $payment, $input, $user_id);
                     break;
                 case 'link_order':
-                    linkOrderToPayment($pdo, $payment, $input, $user_id, $tenant_id);
+                    linkOrderToPayment($pdo, $payment, $input, $user_id, $user_id); // use user_id as shop_owner_id
                     break;
                 case 'unlink_order':
                     unlinkOrderFromPayment($pdo, $payment, $user_id);
                     break;
                 case 'link_repair':
-                    linkRepairToPayment($pdo, $payment, $input, $user_id, $tenant_id);
+                    linkRepairToPayment($pdo, $payment, $input, $user_id, $tenant_id); // repairs use tenant_id
                     break;
                 case 'unlink_repair':
                     unlinkRepairFromPayment($pdo, $payment, $user_id);
+                    break;
+                case 'link_pawn':
+                    linkPawnToPayment($pdo, $payment, $input, $user_id);
+                    break;
+                case 'unlink_pawn':
+                    unlinkPawnFromPayment($pdo, $payment, $user_id);
                     break;
                 default:
                     http_response_code(400);
                     echo json_encode([
                         'success' => false,
                         'message' => 'ไม่รองรับการดำเนินการนี้',
-                        'hint' => 'รองรับเฉพาะ: approve, reject, classify, link_order, unlink_order, link_repair, unlink_repair'
+                        'hint' => 'รองรับเฉพาะ: approve, reject, classify, link_order, unlink_order, link_repair, unlink_repair, link_pawn, unlink_pawn'
                     ]);
             }
         }
@@ -635,6 +649,7 @@ function createManualPayment($pdo, $user_id)
     $customer_profile_id = intval($_POST['customer_profile_id'] ?? 0);
     $reference_id = intval($_POST['reference_id'] ?? 0);
     $reference_type = $_POST['reference_type'] ?? 'order';
+    $pawn_id = intval($_POST['pawn_id'] ?? 0);  // For deposit_interest payments
     $amount = floatval($_POST['amount'] ?? 0);
     $payment_method = $_POST['payment_method'] ?? 'bank_transfer';
     $note = trim($_POST['note'] ?? '');
@@ -643,6 +658,13 @@ function createManualPayment($pdo, $user_id)
     if ($amount <= 0) {
         http_response_code(400);
         echo json_encode(['success' => false, 'message' => 'กรุณาระบุจำนวนเงิน']);
+        return;
+    }
+
+    // Validate pawn_id for deposit_interest or pawn_redemption
+    if (($payment_type === 'deposit_interest' || $payment_type === 'pawn_redemption') && $pawn_id <= 0) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'กรุณาเลือกรายการจำนำ']);
         return;
     }
 
@@ -703,8 +725,11 @@ function createManualPayment($pdo, $user_id)
             INSERT INTO payments (
                 payment_no,
                 order_id,
+                pawn_id,
                 customer_id,
                 tenant_id,
+                shop_owner_id,
+                user_id,
                 payment_type,
                 amount,
                 payment_method,
@@ -717,14 +742,17 @@ function createManualPayment($pdo, $user_id)
                 source,
                 created_at,
                 updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 'verified', ?, NOW(), ?, NOW(), NOW())
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 'verified', ?, NOW(), ?, NOW(), NOW())
         ");
 
         $stmt->execute([
             $payment_no,
             $order_id,
+            $pawn_id ?: null,  // pawn_id for deposit_interest payments
             $customer_profile_id ?: null,  // customer_id references customer_profiles.id
             $tenant_id,
+            $user_id,  // shop_owner_id = logged-in user
+            $user_id,  // user_id for backwards compatibility
             $payment_type,
             $amount,
             $payment_method,
@@ -735,6 +763,19 @@ function createManualPayment($pdo, $user_id)
         ]);
 
         $payment_id = $pdo->lastInsertId();
+
+        // ✅ If linked to pawn (deposit_interest), create pawn_payment record
+        if ($pawn_id > 0) {
+            try {
+                require_once __DIR__ . '/../../includes/services/PawnService.php';
+                $pawnService = new \App\Services\PawnService();
+                // linkPaymentToPawn(paymentId, pawnId, paymentType, amount)
+                $pawnService->linkPaymentToPawn((int) $payment_id, (int) $pawn_id, 'interest', (float) $amount);
+            } catch (Exception $e) {
+                error_log("Failed to link payment to pawn: " . $e->getMessage());
+                // Don't fail the whole transaction, just log
+            }
+        }
 
         // ✅ Update order status if linked to an order (manual payment is auto-verified)
         if ($order_id) {
@@ -843,6 +884,49 @@ function approvePayment($pdo, $payment, $admin_id)
                     WHERE id = ?
                 ");
                 $stmt->execute([$newPaidAmount, $newPaidAmount, $newPaidAmount, $payment['order_id']]);
+
+                // ✅ AUTO-CLOSE CASE: If fully paid, resolve linked case
+                if ($isPaidInFull) {
+                    // Find cases linked by order_id or payment_id
+                    $stmt = $pdo->prepare("
+                        SELECT id, status FROM cases 
+                        WHERE (order_id = ? OR payment_id = ?) 
+                          AND status NOT IN ('resolved', 'cancelled')
+                    ");
+                    $stmt->execute([$payment['order_id'], $payment['id']]);
+                    $linkedCases = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                    foreach ($linkedCases as $case) {
+                        $oldStatus = $case['status'];
+
+                        // Update case status
+                        $stmt = $pdo->prepare("
+                            UPDATE cases 
+                            SET status = 'resolved', 
+                                resolution_type = 'completed',
+                                resolution_notes = 'ชำระเงินครบถ้วน - อนุมัติอัตโนมัติ',
+                                resolved_at = NOW(),
+                                resolved_by = ?,
+                                updated_at = NOW()
+                            WHERE id = ?
+                        ");
+                        $stmt->execute([$admin_id, $case['id']]);
+
+                        // Log activity to case_activities (following CaseEngine pattern)
+                        $stmt = $pdo->prepare("
+                            INSERT INTO case_activities (case_id, activity_type, old_value, new_value, actor_type, actor_id, created_at)
+                            VALUES (?, 'case_resolved', ?, ?, 'admin', ?, NOW())
+                        ");
+                        $stmt->execute([
+                            $case['id'],
+                            json_encode(['status' => $oldStatus]),
+                            json_encode(['status' => 'resolved', 'resolution_type' => 'completed', 'trigger' => 'payment_approved']),
+                            $admin_id
+                        ]);
+
+                        error_log("[Payment] Auto-closed case #{$case['id']} for order #{$payment['order_id']} - fully paid");
+                    }
+                }
             }
         }
 
@@ -907,7 +991,7 @@ function rejectPayment($pdo, $payment, $input, $admin_id)
 /**
  * Link order to payment (manual matching)
  */
-function linkOrderToPayment($pdo, $payment, $input, $admin_id, $tenant_id)
+function linkOrderToPayment($pdo, $payment, $input, $admin_id, $user_id)
 {
     $order_id = $input['order_id'] ?? null;
 
@@ -918,9 +1002,9 @@ function linkOrderToPayment($pdo, $payment, $input, $admin_id, $tenant_id)
     }
 
     try {
-        // Verify order exists and belongs to same tenant
-        $stmt = $pdo->prepare("SELECT id, order_number, total_amount, paid_amount, remaining_amount, status FROM orders WHERE id = ? AND tenant_id = ?");
-        $stmt->execute([$order_id, $tenant_id]);
+        // Verify order exists and belongs to same shop owner
+        $stmt = $pdo->prepare("SELECT id, order_number, total_amount, paid_amount, remaining_amount, status FROM orders WHERE id = ? AND shop_owner_id = ?");
+        $stmt->execute([$order_id, $user_id]);
         $order = $stmt->fetch(PDO::FETCH_ASSOC);
 
         if (!$order) {
@@ -1124,6 +1208,328 @@ function classifyPayment($pdo, $payment, $input, $admin_id)
         $stmt = $pdo->prepare($sql);
         $stmt->execute($values);
 
+        // =========================================================================
+        // ✅ INSTALLMENT LOGIC: Update contracts & auto-close periods
+        // =========================================================================
+        $isInstallmentComplete = false;
+        $nextPeriodInfo = '';
+        $periodsClosed = 0;
+        $paidPeriods = 0;
+        $totalPeriods = $installment_period ?? 3;
+
+        if ($payment_type === 'installment' && !empty($payment['order_id'])) {
+            // Include Database class if not already
+            require_once __DIR__ . '/../../includes/Database.php';
+            $db = Database::getInstance();
+
+            // Find installment contract for this order
+            $installmentData = $db->queryOne("
+                SELECT c.*, 
+                       (SELECT COUNT(*) FROM installment_payments ip WHERE ip.contract_id = c.id AND ip.status = 'paid') as paid_count
+                FROM installment_contracts c 
+                WHERE c.order_id = ?
+            ", [$payment['order_id']]);
+
+            if ($installmentData) {
+                $contractId = $installmentData['id'];
+                $totalPeriods = (int) ($installmentData['total_periods'] ?? 3);
+                $paymentAmount = floatval($payment['amount'] ?? 0);
+
+                // 1. Update installment_contracts.paid_amount (accumulate)
+                $stmt = $pdo->prepare("
+                    UPDATE installment_contracts
+                    SET paid_amount = paid_amount + ?,
+                        last_payment_date = CURDATE(),
+                        updated_at = NOW()
+                    WHERE id = ?
+                ");
+                $stmt->execute([$paymentAmount, $contractId]);
+
+                // 2. Get new paid_amount after update
+                $updatedContract = $db->queryOne("
+                    SELECT paid_amount FROM installment_contracts WHERE id = ?
+                ", [$contractId]);
+                $newPaidAmount = floatval($updatedContract['paid_amount'] ?? 0);
+
+                error_log("[ClassifyPayment] Accumulated to contract #{$contractId}: +{$paymentAmount}, total={$newPaidAmount}");
+
+                // 4. AUTO-ALLOCATE: Distribute payment to pending/partial periods
+                $remainingToAllocate = $paymentAmount; // Use payment amount, not total paid
+                
+                // Get pending and partial periods (partial first, then pending)
+                $pendingPeriods = $db->query("
+                    SELECT id, period_number, amount, COALESCE(paid_amount, 0) as paid_amount, status 
+                    FROM installment_payments 
+                    WHERE contract_id = ? AND status IN ('pending', 'partial')
+                    ORDER BY period_number ASC
+                ", [$contractId]);
+                
+                foreach ($pendingPeriods as $period) {
+                    if ($remainingToAllocate <= 0) break;
+                    
+                    $periodAmount = floatval($period['amount']);
+                    $periodPaid = floatval($period['paid_amount']);
+                    $periodRemaining = $periodAmount - $periodPaid;
+                    
+                    if ($periodRemaining <= 0) continue; // Already fully paid
+                    
+                    if ($remainingToAllocate >= $periodRemaining) {
+                        // Can fully pay this period
+                        $stmt = $pdo->prepare("
+                            UPDATE installment_payments 
+                            SET status = 'paid',
+                                paid_amount = amount,
+                                paid_date = CURDATE(),
+                                payment_id = ?,
+                                updated_at = NOW()
+                            WHERE id = ?
+                        ");
+                        $stmt->execute([$payment['id'], $period['id']]);
+                        
+                        $remainingToAllocate -= $periodRemaining;
+                        $periodsClosed++;
+                        
+                        error_log("[ClassifyPayment] Closed period #{$period['period_number']}, allocated={$periodRemaining}");
+                    } else {
+                        // Partial payment for this period
+                        $newPaidAmount = $periodPaid + $remainingToAllocate;
+                        $stmt = $pdo->prepare("
+                            UPDATE installment_payments 
+                            SET status = 'partial',
+                                paid_amount = ?,
+                                payment_id = ?,
+                                updated_at = NOW()
+                            WHERE id = ?
+                        ");
+                        $stmt->execute([$newPaidAmount, $payment['id'], $period['id']]);
+                        
+                        error_log("[ClassifyPayment] Partial period #{$period['period_number']}, paid={$newPaidAmount}/{$periodAmount}");
+                        $remainingToAllocate = 0;
+                    }
+                }
+                
+                // 5. Update contract stats
+                // ✅ FIX: Check completion by TOTAL PAID AMOUNT, not just period count
+                // Because overpayments in early periods should count toward completion
+                
+                $newPaidCount = $db->queryOne("
+                    SELECT COUNT(*) as cnt FROM installment_payments 
+                    WHERE contract_id = ? AND status = 'paid'
+                ", [$contractId])['cnt'];
+                
+                // Get total paid across all periods
+                $totalPaidAcrossPeriods = $db->queryOne("
+                    SELECT COALESCE(SUM(paid_amount), 0) as total FROM installment_payments 
+                    WHERE contract_id = ?
+                ", [$contractId])['total'];
+                
+                // Get total required amount
+                $totalRequiredAmount = $db->queryOne("
+                    SELECT COALESCE(SUM(amount), 0) as total FROM installment_payments 
+                    WHERE contract_id = ?
+                ", [$contractId])['total'];
+                
+                // ✅ FIX: Also check if financed_amount is fully paid
+                // Note: For installment orders, we should compare with financed_amount (includes fee)
+                // NOT order.total_amount (product price only)
+                $contractAmounts = $db->queryOne("
+                    SELECT financed_amount, COALESCE(paid_amount, 0) as contract_paid_amount 
+                    FROM installment_contracts WHERE id = ?
+                ", [$contractId]);
+                $financedAmount = floatval($contractAmounts['financed_amount'] ?? 0);
+                $contractPaid = floatval($contractAmounts['contract_paid_amount'] ?? 0);
+                
+                $nextPendingOrPartial = $db->queryOne("
+                    SELECT period_number, due_date, amount, COALESCE(paid_amount, 0) as paid_amount, status
+                    FROM installment_payments 
+                    WHERE contract_id = ? AND status IN ('pending', 'partial')
+                    ORDER BY period_number ASC LIMIT 1
+                ", [$contractId]);
+                
+                // ✅ FIX: Mark as complete if:
+                // 1. All periods have status = 'paid', OR
+                // 2. Total paid amount >= total required amount (handles overpayments in periods)
+                // Note: Removed condition #3 (orderPaid >= orderTotal) as it used product price instead of financed_amount
+                $isFullyPaidByPeriodAmount = floatval($totalPaidAcrossPeriods) >= floatval($totalRequiredAmount);
+                $isFullyPaidByPeriods = $newPaidCount >= $totalPeriods;
+                $isFullyPaidByContractAmount = ($financedAmount > 0) && ($contractPaid >= $financedAmount);
+                
+                error_log("[ClassifyPayment] Completion check: periods={$newPaidCount}/{$totalPeriods}, periodAmount={$totalPaidAcrossPeriods}/{$totalRequiredAmount}, contractAmount={$contractPaid}/{$financedAmount}");
+                
+                if ($isFullyPaidByPeriodAmount || $isFullyPaidByPeriods || $isFullyPaidByContractAmount) {
+                    // ✅ Mark all remaining partial/pending periods as paid
+                    if (!$isFullyPaidByPeriods) {
+                        $stmt = $pdo->prepare("
+                            UPDATE installment_payments 
+                            SET status = 'paid',
+                                paid_amount = amount,
+                                paid_date = CURDATE(),
+                                updated_at = NOW()
+                            WHERE contract_id = ? AND status IN ('pending', 'partial')
+                        ");
+                        $stmt->execute([$contractId]);
+                        $newPaidCount = $totalPeriods;
+                        error_log("[ClassifyPayment] Force-closed remaining periods due to overpayment");
+                    }
+                    
+                    // All periods complete!
+                    $stmt = $pdo->prepare("
+                        UPDATE installment_contracts 
+                        SET paid_periods = ?,
+                            status = 'completed',
+                            next_due_date = NULL,
+                            completed_at = NOW(),
+                            updated_at = NOW()
+                        WHERE id = ?
+                    ");
+                    $stmt->execute([$newPaidCount, $contractId]);
+                    
+                    // Update order status
+                    $stmt = $pdo->prepare("
+                        UPDATE orders 
+                        SET payment_status = 'paid',
+                            status = 'processing',
+                            updated_at = NOW()
+                        WHERE id = ?
+                    ");
+                    $stmt->execute([$payment['order_id']]);
+                    
+                    $isInstallmentComplete = true;
+                    error_log("[ClassifyPayment] Contract #{$contractId} COMPLETED!");
+                } else {
+                    // Update paid_periods and next_due_date
+                    $stmt = $pdo->prepare("
+                        UPDATE installment_contracts 
+                        SET paid_periods = ?,
+                            next_due_date = ?,
+                            updated_at = NOW()
+                        WHERE id = ?
+                    ");
+                    $stmt->execute([
+                        $newPaidCount, 
+                        $nextPendingOrPartial ? $nextPendingOrPartial['due_date'] : null, 
+                        $contractId
+                    ]);
+                    
+                    if ($nextPendingOrPartial) {
+                        $nextDueDate = date('d/m/Y', strtotime($nextPendingOrPartial['due_date']));
+                        $periodRemaining = floatval($nextPendingOrPartial['amount']) - floatval($nextPendingOrPartial['paid_amount']);
+                        $periodNum = $nextPendingOrPartial['period_number'];
+                        
+                        if ($nextPendingOrPartial['status'] === 'partial') {
+                            $nextPeriodInfo = "งวดที่ {$periodNum}: ยอดค้าง ฿" . number_format($periodRemaining, 0) . " (ครบกำหนด {$nextDueDate})";
+                        } else {
+                            $nextPeriodInfo = "งวดถัดไป: ฿" . number_format($periodRemaining, 0) . " (ครบกำหนด {$nextDueDate})";
+                        }
+                    }
+                }
+                
+                $paidPeriods = $newPaidCount;
+
+                // 6. Update orders.paid_amount
+                $stmt = $pdo->prepare("
+                    UPDATE orders 
+                    SET paid_amount = COALESCE(paid_amount, 0) + ?,
+                        payment_status = CASE WHEN payment_status = 'unpaid' THEN 'partial' ELSE payment_status END,
+                        updated_at = NOW()
+                    WHERE id = ?
+                ");
+                $stmt->execute([$paymentAmount, $payment['order_id']]);
+            }
+        } elseif (!empty($payment['order_id'])) {
+            // Full/deposit payment - just update order paid_amount
+            $paymentAmount = floatval($payment['amount'] ?? 0);
+            $stmt = $pdo->prepare("
+                UPDATE orders 
+                SET paid_amount = COALESCE(paid_amount, 0) + ?,
+                    payment_status = CASE 
+                        WHEN (COALESCE(paid_amount, 0) + ?) >= total_amount THEN 'paid'
+                        ELSE 'partial'
+                    END,
+                    updated_at = NOW()
+                WHERE id = ?
+            ");
+            $stmt->execute([$paymentAmount, $paymentAmount, $payment['order_id']]);
+        }
+
+        // =========================================================================
+        // ✅ SEND PUSH NOTIFICATION
+        // =========================================================================
+        try {
+            $paymentDetails = is_string($payment['payment_details'] ?? null)
+                ? json_decode($payment['payment_details'], true)
+                : ($payment['payment_details'] ?? []);
+
+            $platform = $paymentDetails['platform'] ?? null;
+            $platformUserId = $paymentDetails['external_user_id'] ?? null;
+            $channelId = !empty($paymentDetails['channel_id']) ? (int) $paymentDetails['channel_id'] : null;
+
+            if ($platform && $platformUserId && $platform !== 'web') {
+                require_once __DIR__ . '/../../includes/services/PushNotificationService.php';
+                if (!isset($db)) {
+                    require_once __DIR__ . '/../../includes/Database.php';
+                    $db = Database::getInstance();
+                }
+                $pushService = new PushNotificationService($db);
+
+                if ($payment_type === 'installment') {
+                    // Get contract data for push notification
+                    $contractForPush = isset($installmentData) ? $installmentData : [];
+                    $totalAmount = floatval($contractForPush['product_price'] ?? $contractForPush['financed_amount'] ?? 0);
+                    $paidAmountForPush = floatval($contractForPush['paid_amount'] ?? 0) + floatval($payment['amount'] ?? 0);
+                    $remainingAmount = max(0, $totalAmount - $paidAmountForPush);
+                    
+                    if ($isInstallmentComplete) {
+                        $pushService->sendInstallmentCompleted(
+                            $platform,
+                            $platformUserId,
+                            [
+                                'product_name' => $payment['product_name'] ?? ($contractForPush['product_name'] ?? 'สินค้า'),
+                                'total_paid' => number_format($newPaidAmount ?? $paidAmountForPush, 0),
+                                'total_amount' => number_format($totalAmount, 0),
+                                'total_periods' => $totalPeriods,
+                                'completion_date' => date('d/m/Y')
+                            ],
+                            $channelId
+                        );
+                    } else {
+                        $pushService->sendInstallmentPaymentVerified(
+                            $platform,
+                            $platformUserId,
+                            [
+                                'product_name' => $payment['product_name'] ?? ($contractForPush['product_name'] ?? 'สินค้า'),
+                                'amount' => number_format(floatval($payment['amount']), 0),
+                                'payment_date' => date('d/m/Y H:i'),
+                                'current_period' => $paidPeriods ?: ($current_period ?? 1),
+                                'total_periods' => $totalPeriods,
+                                'paid_periods' => $paidPeriods ?: ($current_period ?? 1),
+                                'paid_amount' => number_format($paidAmountForPush, 0),
+                                'total_amount' => number_format($totalAmount, 0),
+                                'remaining_amount' => number_format($remainingAmount, 0),
+                                'next_period_info' => $nextPeriodInfo ?: 'รอชำระงวดถัดไป'
+                            ],
+                            $channelId
+                        );
+                    }
+                } else {
+                    $pushService->sendPaymentVerified(
+                        $platform,
+                        $platformUserId,
+                        [
+                            'amount' => $payment['amount'],
+                            'payment_no' => $payment['payment_no'],
+                            'payment_date' => date('d/m/Y H:i'),
+                            'order_number' => $payment['order_no'] ?? ''
+                        ],
+                        $channelId
+                    );
+                }
+                error_log("[ClassifyPayment] Sent push notification to {$platform}:{$platformUserId}");
+            }
+        } catch (Throwable $e) {
+            error_log("[ClassifyPayment] Push notification error: " . $e->getMessage());
+        }
+
         // Build success message
         $type_labels = [
             'full' => 'จ่ายเต็ม',
@@ -1135,7 +1541,10 @@ function classifyPayment($pdo, $payment, $input, $admin_id)
 
         $success_msg = "อนุมัติและจัดประเภทเป็น \"$type_label\" เรียบร้อย";
         if ($payment_type === 'installment') {
-            $success_msg .= " (งวดที่ $current_period/$installment_period)";
+            $success_msg .= " (ปิดงวดได้ {$periodsClosed} งวด, รวมจ่ายแล้ว {$paidPeriods}/{$totalPeriods})";
+            if ($isInstallmentComplete) {
+                $success_msg .= " ✅ ผ่อนครบแล้ว!";
+            }
         }
 
         echo json_encode([
@@ -1146,7 +1555,11 @@ function classifyPayment($pdo, $payment, $input, $admin_id)
                 'payment_type' => $payment_type,
                 'status' => 'verified',
                 'current_period' => $current_period,
-                'installment_period' => $installment_period
+                'installment_period' => $installment_period,
+                'periods_closed' => $periodsClosed,
+                'paid_periods' => $paidPeriods,
+                'is_complete' => $isInstallmentComplete,
+                'next_period_info' => $nextPeriodInfo
             ]
         ]);
 
@@ -1254,6 +1667,119 @@ function unlinkRepairFromPayment($pdo, $payment, $admin_id)
 
     } catch (Exception $e) {
         error_log("Unlink repair error: " . $e->getMessage());
+        http_response_code(500);
+        echo json_encode([
+            'success' => false,
+            'message' => 'ไม่สามารถยกเลิกได้: ' . $e->getMessage()
+        ]);
+    }
+}
+
+/**
+ * Link pawn to payment (for interest or redemption payments)
+ */
+function linkPawnToPayment($pdo, $payment, $input, $admin_id)
+{
+    try {
+        $pawn_id = $input['pawn_id'] ?? null;
+
+        if (!$pawn_id) {
+            http_response_code(400);
+            echo json_encode([
+                'success' => false,
+                'message' => 'กรุณาเลือกรายการจำนำที่ต้องการเชื่อมโยง',
+                'field' => 'pawn_id'
+            ]);
+            return;
+        }
+
+        // Verify pawn exists and belongs to same user
+        $stmt = $pdo->prepare("
+            SELECT id, pawn_no, item_name, customer_name, loan_amount, status
+            FROM pawns 
+            WHERE id = ? AND user_id = (SELECT user_id FROM payments WHERE id = ?)
+        ");
+        $stmt->execute([$pawn_id, $payment['id']]);
+        $pawn = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$pawn) {
+            http_response_code(404);
+            echo json_encode([
+                'success' => false,
+                'message' => 'ไม่พบรายการจำนำที่ระบุ'
+            ]);
+            return;
+        }
+
+        // Update payment with pawn reference
+        $stmt = $pdo->prepare("
+            UPDATE payments 
+            SET pawn_id = ?,
+                reference_type = 'pawn',
+                reference_id = ?,
+                updated_at = NOW()
+            WHERE id = ?
+        ");
+        $stmt->execute([$pawn_id, $pawn_id, $payment['id']]);
+        
+        // Also create pawn_payments record for interest tracking
+        try {
+            require_once __DIR__ . '/../../includes/services/PawnService.php';
+            $pawnService = new \App\Services\PawnService($pdo);
+            $pawnService->linkPaymentToPawn($pawn_id, $payment['id'], 'interest', (float)($payment['amount'] ?? 0));
+        } catch (Exception $e) {
+            // Don't fail the main operation, just log
+            error_log("PawnService link error: " . $e->getMessage());
+        }
+
+        echo json_encode([
+            'success' => true,
+            'message' => 'เชื่อมโยงจำนำ ' . $pawn['pawn_no'] . ' เรียบร้อย',
+            'data' => [
+                'payment_id' => $payment['id'],
+                'pawn_id' => $pawn_id,
+                'pawn_no' => $pawn['pawn_no'],
+                'item_name' => $pawn['item_name']
+            ]
+        ]);
+
+    } catch (Exception $e) {
+        error_log("Link pawn error: " . $e->getMessage());
+        http_response_code(500);
+        echo json_encode([
+            'success' => false,
+            'message' => 'ไม่สามารถเชื่อมโยงได้: ' . $e->getMessage()
+        ]);
+    }
+}
+
+/**
+ * Unlink pawn from payment
+ */
+function unlinkPawnFromPayment($pdo, $payment, $admin_id)
+{
+    try {
+        $stmt = $pdo->prepare("
+            UPDATE payments 
+            SET pawn_id = NULL,
+                reference_type = CASE 
+                    WHEN order_id IS NOT NULL THEN 'order'
+                    WHEN repair_id IS NOT NULL THEN 'repair'
+                    ELSE 'unknown'
+                END,
+                reference_id = COALESCE(order_id, repair_id),
+                updated_at = NOW()
+            WHERE id = ?
+        ");
+        $stmt->execute([$payment['id']]);
+
+        echo json_encode([
+            'success' => true,
+            'message' => 'ยกเลิกการเชื่อมโยงจำนำเรียบร้อย'
+        ]);
+
+    } catch (Exception $e) {
+        error_log("Unlink pawn error: " . $e->getMessage());
         http_response_code(500);
         echo json_encode([
             'success' => false,

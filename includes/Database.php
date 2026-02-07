@@ -5,6 +5,9 @@
  * Supports both localhost (dev) and Cloud SQL (production)
  */
 
+// ✅ TIMEZONE: ตั้งค่า timezone เป็นเวลาไทย (UTC+7) ทั้งระบบ
+date_default_timezone_set('Asia/Bangkok');
+
 // Skip if Database already defined (e.g., in tests with mock)
 if (!class_exists('Database')) {
 
@@ -40,11 +43,11 @@ class Database
                 PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
                 PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
                 PDO::ATTR_EMULATE_PREPARES => false,
-                PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci"
+                PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci, time_zone = '+07:00'"
             ];
             
             $this->conn = new PDO($dsn, $username, $password, $options);
-            error_log("Database: Connected successfully");
+            error_log("Database: Connected successfully (timezone: Asia/Bangkok)");
             
         } catch (PDOException $e) {
             error_log("Database Connection Error: " . $e->getMessage());

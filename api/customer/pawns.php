@@ -74,6 +74,8 @@ try {
             getEligibleItems($pdo, $user_id);
         } elseif ($action === 'calculate') {
             calculateInterestPreview($pdo);
+        } elseif ($action === 'search') {
+            searchPawns($pdo, $user_id);
         } elseif ($pawn_id) {
             getPawnDetail($pdo, $pawn_id, $user_id);
         } else {
@@ -114,8 +116,8 @@ try {
 function getEligibleItems($pdo, $shop_owner_id)
 {
     // ดึง customer_id จาก query param (ที่ส่งมาจาก pawns.php autocomplete)
-    $customer_id = isset($_GET['customer_id']) ? (int)$_GET['customer_id'] : null;
-    
+    $customer_id = isset($_GET['customer_id']) ? (int) $_GET['customer_id'] : null;
+
     if (!$customer_id) {
         echo json_encode([
             'success' => false,
@@ -123,7 +125,7 @@ function getEligibleItems($pdo, $shop_owner_id)
         ]);
         return;
     }
-    
+
     // ดึง orders ทั้งหมดของลูกค้า (ทุกสถานะ ให้เจ้าหน้าที่พิจารณาเอง)
     // Match by customer_id (FK to customer_profiles) หรือ platform_user_id
     // JOIN กับ products table เพื่อดึง image_url
@@ -156,14 +158,14 @@ function getEligibleItems($pdo, $shop_owner_id)
         ORDER BY o.created_at DESC
     ");
     $stmt->execute([
-        DEFAULT_LOAN_PERCENTAGE, 
-        DEFAULT_LOAN_PERCENTAGE, 
+        DEFAULT_LOAN_PERCENTAGE,
+        DEFAULT_LOAN_PERCENTAGE,
         DEFAULT_INTEREST_RATE,
         $customer_id,
         $customer_id
     ]);
     $eligibleItems = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
+
     echo json_encode([
         'success' => true,
         'data' => $eligibleItems,
@@ -173,7 +175,7 @@ function getEligibleItems($pdo, $shop_owner_id)
             'term_days' => DEFAULT_TERM_DAYS,
             'max_extensions' => MAX_EXTENSIONS
         ],
-        'message' => count($eligibleItems) > 0 
+        'message' => count($eligibleItems) > 0
             ? 'พบสินค้าที่สามารถนำมาจำนำได้ ' . count($eligibleItems) . ' รายการ'
             : 'ไม่พบสินค้าที่สามารถนำมาจำนำได้ (ต้องเป็นสินค้าที่ซื้อจากร้านและชำระเงินแล้ว)'
     ]);
@@ -184,22 +186,22 @@ function getEligibleItems($pdo, $shop_owner_id)
  */
 function calculateInterestPreview($pdo)
 {
-    $amount = isset($_GET['amount']) ? (float)$_GET['amount'] : 0;
-    $percentage = isset($_GET['percentage']) ? (float)$_GET['percentage'] : DEFAULT_LOAN_PERCENTAGE;
-    $rate = isset($_GET['rate']) ? (float)$_GET['rate'] : DEFAULT_INTEREST_RATE;
-    $days = isset($_GET['days']) ? (int)$_GET['days'] : DEFAULT_TERM_DAYS;
-    
+    $amount = isset($_GET['amount']) ? (float) $_GET['amount'] : 0;
+    $percentage = isset($_GET['percentage']) ? (float) $_GET['percentage'] : DEFAULT_LOAN_PERCENTAGE;
+    $rate = isset($_GET['rate']) ? (float) $_GET['rate'] : DEFAULT_INTEREST_RATE;
+    $days = isset($_GET['days']) ? (int) $_GET['days'] : DEFAULT_TERM_DAYS;
+
     if ($amount <= 0) {
         http_response_code(400);
         echo json_encode(['success' => false, 'message' => 'กรุณาระบุราคาประเมิน']);
         return;
     }
-    
+
     $loanAmount = $amount * ($percentage / 100);
     $monthlyInterest = $loanAmount * ($rate / 100);
     $totalMonths = ceil($days / 30);
     $totalInterest = $monthlyInterest * $totalMonths;
-    
+
     echo json_encode([
         'success' => true,
         'data' => [
@@ -217,49 +219,100 @@ function calculateInterestPreview($pdo)
 }
 
 /**
+ * Search pawns by pawn_no, item_name, customer_name
+ */
+function searchPawns($pdo, $user_id)
+{
+    $query = $_GET['q'] ?? '';
+    $limit = isset($_GET['limit']) ? min(50, max(1, (int) $_GET['limit'])) : 10;
+
+    if (strlen($query) < 1) {
+        echo json_encode(['success' => true, 'data' => []]);
+        return;
+    }
+
+    $searchPattern = '%' . $query . '%';
+
+    $stmt = $pdo->prepare("
+        SELECT p.id, p.pawn_no, p.item_name, p.item_type, p.loan_amount, p.interest_rate,
+               p.status, p.due_date, p.customer_name, p.customer_id
+        FROM pawns p
+        WHERE p.user_id = ?
+        AND (p.pawn_no LIKE ? OR p.item_name LIKE ? OR p.customer_name LIKE ?)
+        ORDER BY p.created_at DESC
+        LIMIT ?
+    ");
+    $stmt->execute([$user_id, $searchPattern, $searchPattern, $searchPattern, $limit]);
+    $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    echo json_encode([
+        'success' => true,
+        'data' => $results
+    ]);
+}
+
+/**
  * Create new pawn from customer's purchased order
  */
 function createPawnFromOrder($pdo, $user_id)
 {
     $input = json_decode(file_get_contents('php://input'), true);
-    
+
+    // ✅ Debug logging
+    error_log("[PAWNS CREATE] Input received: " . json_encode($input));
+    error_log("[PAWNS CREATE] User ID: " . $user_id);
+
     $order_id = $input['order_id'] ?? null;
-    $customer_id = isset($input['customer_id']) ? (int)$input['customer_id'] : null;
-    $appraised_value = isset($input['appraised_value']) ? (float)$input['appraised_value'] : null;
-    $loan_percentage = isset($input['loan_percentage']) ? (float)$input['loan_percentage'] : DEFAULT_LOAN_PERCENTAGE;
-    $interest_rate = isset($input['interest_rate']) ? (float)$input['interest_rate'] : DEFAULT_INTEREST_RATE;
+    $customer_id = isset($input['customer_id']) ? (int) $input['customer_id'] : null;
+    $appraised_value = isset($input['appraised_value']) ? (float) $input['appraised_value'] : null;
+    $loan_percentage = isset($input['loan_percentage']) ? (float) $input['loan_percentage'] : DEFAULT_LOAN_PERCENTAGE;
+    $interest_rate = isset($input['interest_rate']) ? (float) $input['interest_rate'] : DEFAULT_INTEREST_RATE;
     $item_description = $input['item_description'] ?? null;
     $item_type = $input['item_type'] ?? 'สินค้าจำนำ';
-    
+
+    // ✅ Push message fields
+    $customer_message = $input['customer_message'] ?? null;
+    $send_message = $input['send_message'] ?? false;
+    $bank_account = $input['bank_account'] ?? null;
+
     if (!$order_id) {
         http_response_code(400);
         echo json_encode(['success' => false, 'message' => 'กรุณาระบุ order_id ของสินค้าที่ต้องการจำนำ']);
         return;
     }
-    
+
     if (!$customer_id) {
         http_response_code(400);
         echo json_encode(['success' => false, 'message' => 'กรุณาระบุ customer_id']);
         return;
     }
-    
+
+    error_log("[PAWNS CREATE] Looking for order_id={$order_id}, user_id={$user_id}");
+
     // Verify order exists and belongs to this shop owner (user_id)
+    // Note: orders table has platform_user_id and platform directly
     $orderStmt = $pdo->prepare("
-        SELECT o.*, cp.display_name as customer_display_name, cp.platform as customer_platform,
-               cp.avatar_url as customer_avatar, cp.phone as customer_phone
+        SELECT o.*, 
+               -- Use order's own data first, fallback to customer_profiles
+               COALESCE(cp.display_name, o.platform_user_id) as customer_display_name, 
+               COALESCE(cp.platform, o.platform) as customer_platform,
+               cp.avatar_url as customer_avatar, 
+               cp.phone as customer_phone,
+               COALESCE(cp.platform_user_id, o.platform_user_id) as customer_platform_user_id
         FROM orders o
         LEFT JOIN customer_profiles cp ON o.customer_id = cp.id
         WHERE o.id = ? AND o.user_id = ?
     ");
     $orderStmt->execute([$order_id, $user_id]);
     $order = $orderStmt->fetch(PDO::FETCH_ASSOC);
-    
+
     if (!$order) {
         http_response_code(404);
-        echo json_encode(['success' => false, 'message' => 'ไม่พบรายการสั่งซื้อ']);
+        error_log("[PAWNS CREATE] Order not found! order_id={$order_id}, user_id={$user_id}");
+        echo json_encode(['success' => false, 'message' => "ไม่พบรายการสั่งซื้อ (Order #{$order_id} ไม่พบหรือไม่ใช่ของร้านคุณ)"]);
         return;
     }
-    
+
     // Check if already pawned (check by item_name + customer_id to avoid duplicates)
     $existingStmt = $pdo->prepare("
         SELECT id, pawn_no FROM pawns 
@@ -269,27 +322,27 @@ function createPawnFromOrder($pdo, $user_id)
     ");
     $existingStmt->execute([$customer_id, $order['product_name'] ?? $order['product_code']]);
     $existing = $existingStmt->fetch(PDO::FETCH_ASSOC);
-    
+
     if ($existing) {
         http_response_code(400);
         echo json_encode([
-            'success' => false, 
+            'success' => false,
             'message' => "สินค้านี้ถูกจำนำอยู่แล้ว (รหัส: {$existing['pawn_no']})"
         ]);
         return;
     }
-    
+
     // Use order price if appraised value not provided
     if (!$appraised_value) {
-        $appraised_value = (float)($order['unit_price'] ?? $order['total_amount']);
+        $appraised_value = (float) ($order['unit_price'] ?? $order['total_amount']);
     }
-    
+
     // Calculate loan details
     $loan_amount = $appraised_value * ($loan_percentage / 100);
     $pawn_date = date('Y-m-d');
     $due_date = date('Y-m-d', strtotime('+' . DEFAULT_TERM_DAYS . ' days'));
     $pawn_no = 'PWN-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6));
-    
+
     $pdo->beginTransaction();
     try {
         // Insert pawn record matching schema columns
@@ -299,6 +352,7 @@ function createPawnFromOrder($pdo, $user_id)
                 customer_name, customer_phone, customer_avatar, platform,
                 item_type, item_name, item_description,
                 appraised_value, loan_amount, interest_rate, interest_type,
+                accrued_interest, total_due,
                 pawn_date, due_date,
                 status, notes, created_at
             ) VALUES (
@@ -306,10 +360,15 @@ function createPawnFromOrder($pdo, $user_id)
                 ?, ?, ?, ?,
                 ?, ?, ?,
                 ?, ?, ?, 'monthly',
+                0, ?,
                 ?, ?,
                 'active', ?, NOW()
             )
         ");
+
+        // total_due = loan_amount (เริ่มต้น)
+        $total_due = $loan_amount;
+
         $insertStmt->execute([
             $pawn_no,
             $user_id,
@@ -324,35 +383,129 @@ function createPawnFromOrder($pdo, $user_id)
             $appraised_value,
             $loan_amount,
             $interest_rate,
+            $total_due,
             $pawn_date,
             $due_date,
             "สร้างจาก Order ID: {$order_id}"
         ]);
-        
+
         $pawn_id = $pdo->lastInsertId();
-        
+
         // Create case for admin to process
+        // Note: case_type is ENUM, use 'other' for pawn-related cases
+        // cases table requires: channel_id, external_user_id, platform (NOT NULL columns)
+        $case_no = 'CASE-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6));
         $caseStmt = $pdo->prepare("
             INSERT INTO cases (
+                case_no, channel_id, external_user_id, platform,
                 user_id, customer_profile_id,
                 case_type, status, subject, description, priority
             ) VALUES (
+                ?, ?, ?, ?,
                 ?, ?,
-                'pawn_new', 'open', ?, ?, 'high'
+                'other', 'open', ?, ?, 'high'
             )
         ");
         $caseStmt->execute([
+            $case_no,
+            1, // default channel_id for web/manual cases
+            'pawn-' . $pawn_no, // use pawn_no as external_user_id
+            'web', // platform
             $user_id,
             $customer_id,
-            "จำนำใหม่: {$pawn_no}",
+            "[จำนำใหม่] {$pawn_no}",
             "รายการจำนำใหม่\nรหัส: {$pawn_no}\nสินค้า: " . ($order['product_name'] ?? $order['product_code']) . "\nราคาประเมิน: " . number_format($appraised_value, 2) . " บาท\nยอดกู้: " . number_format($loan_amount, 2) . " บาท"
         ]);
-        
+
         $pdo->commit();
-        
+
+        // ✅ Get platform info for push notification
+        $platform = $order['customer_platform'] ?? null;
+        $platform_user_id = $order['customer_platform_user_id'] ?? null;
+        $channelId = null;
+
+        // If order doesn't have customer data, lookup from customer_profiles
+        if (!$platform || !$platform_user_id) {
+            $cpStmt = $pdo->prepare("SELECT platform, platform_user_id, channel_id FROM customer_profiles WHERE id = ?");
+            $cpStmt->execute([$customer_id]);
+            $cpData = $cpStmt->fetch(PDO::FETCH_ASSOC);
+            if ($cpData) {
+                $platform = $cpData['platform'];
+                $platform_user_id = $cpData['platform_user_id'];
+                $channelId = $cpData['channel_id'] ?? null;
+            }
+        }
+
+        // Get channel_id if not already set
+        if (!$channelId && $customer_id) {
+            $channelStmt = $pdo->prepare("SELECT channel_id FROM customer_profiles WHERE id = ? LIMIT 1");
+            $channelStmt->execute([$customer_id]);
+            $channelRow = $channelStmt->fetch(PDO::FETCH_ASSOC);
+            $channelId = $channelRow['channel_id'] ?? 1;
+        }
+
+        // ✅ AUTO PUSH NOTIFICATION (like orders.php)
+        $message_sent = false;
+        $hasCustomMessage = !empty(trim($customer_message ?? '')) && $send_message;
+
+        // If no custom message provided, send auto notification using template
+        if ($platform && $platform_user_id && !$hasCustomMessage) {
+            try {
+                require_once __DIR__ . '/../../includes/services/PushNotificationService.php';
+                require_once __DIR__ . '/../../includes/Database.php';
+                $pushService = new PushNotificationService(Database::getInstance());
+
+                // Calculate monthly interest for notification
+                $monthlyInterest = $loan_amount * ($interest_rate / 100);
+
+                $pawnData = [
+                    'pawn_no' => $pawn_no,
+                    'item_name' => $order['product_name'] ?? $order['product_code'] ?? 'สินค้า',
+                    'loan_amount' => $loan_amount,
+                    'interest_rate' => $interest_rate,
+                    'monthly_interest' => $monthlyInterest,
+                    'due_date' => date('d/m/Y', strtotime($due_date))
+                ];
+
+                error_log("[PAWNS] Sending auto push notification to {$platform}:{$platform_user_id} channel={$channelId}");
+
+                $result = $pushService->sendPawnCreated($platform, $platform_user_id, $pawnData, (int) $channelId);
+                $message_sent = $result['success'] ?? false;
+
+                if (!$message_sent) {
+                    error_log("[PAWNS] Auto push failed for {$pawn_no}: " . ($result['error'] ?? 'Unknown'));
+                } else {
+                    error_log("[PAWNS] Auto push sent successfully for {$pawn_no}");
+                }
+            } catch (Exception $e) {
+                error_log("[PAWNS] Auto push exception for {$pawn_no}: " . $e->getMessage());
+            }
+        }
+
+        // ✅ Send custom message if provided (legacy support)
+        if ($send_message && $customer_message && $platform && $platform_user_id) {
+            try {
+                require_once __DIR__ . '/../../includes/services/PushMessageService.php';
+                $pushMsgService = new \App\Services\PushMessageService($pdo);
+
+                // Replace placeholder with actual pawn number
+                $finalMessage = str_replace('{{PAWN_NUMBER}}', $pawn_no, $customer_message);
+
+                $result = $pushMsgService->send($platform, $platform_user_id, $finalMessage, $channelId);
+                $message_sent = $result['success'] ?? false;
+
+                if (!$message_sent) {
+                    error_log("[PAWNS] Custom push message failed for {$pawn_no}: " . ($result['error'] ?? 'Unknown'));
+                }
+            } catch (Exception $e) {
+                error_log("[PAWNS] Custom push message exception for {$pawn_no}: " . $e->getMessage());
+            }
+        }
+
         echo json_encode([
             'success' => true,
             'message' => 'สร้างรายการจำนำเรียบร้อยแล้ว',
+            'message_sent' => $message_sent,
             'data' => [
                 'pawn_id' => $pawn_id,
                 'pawn_no' => $pawn_no,
@@ -365,7 +518,7 @@ function createPawnFromOrder($pdo, $user_id)
                 'due_date' => $due_date
             ]
         ]);
-        
+
     } catch (Exception $e) {
         $pdo->rollBack();
         throw $e;
@@ -443,8 +596,13 @@ function getAllPawns($pdo, $user_id)
     $params = [$user_id];
 
     if ($status) {
-        $where[] = 'p.status = ?';
-        $params[] = $status;
+        if ($status === 'due_soon') {
+            // Pawns due within 1-3 days
+            $where[] = "p.status = 'active' AND DATEDIFF(p.due_date, CURDATE()) BETWEEN 1 AND 3";
+        } else {
+            $where[] = 'p.status = ?';
+            $params[] = $status;
+        }
     }
 
     $where_clause = implode(' AND ', $where);
@@ -462,6 +620,15 @@ function getAllPawns($pdo, $user_id)
         SELECT 
             p.id,
             p.pawn_no,
+            p.customer_id,
+            p.customer_name,
+            -- customer_id IS the customer_profiles.id directly
+            p.customer_id as customer_profile_id,
+            -- JOIN to get customer info for display
+            cp.platform_user_id,
+            cp.platform as customer_platform,
+            cp.display_name as customer_display_name,
+            cp.avatar_url as customer_avatar,
             p.{$s['category']} as category,
             p.{$s['name']} as item_name,
             p.{$s['description']} as item_description,
@@ -477,8 +644,15 @@ function getAllPawns($pdo, $user_id)
             -- Calculate current interest due
             (p.{$s['principal']} * p.{$s['interest_rate']} / 100) as monthly_interest,
             -- Days until due / overdue
-            DATEDIFF(p.{$s['due_date']}, CURDATE()) as days_until_due
+            DATEDIFF(p.{$s['due_date']}, CURDATE()) as days_until_due,
+            -- Total interest paid from pawn_payments
+            COALESCE((SELECT SUM(pp.amount) FROM pawn_payments pp WHERE pp.pawn_id = p.id AND pp.payment_type = 'interest'), 0) as total_interest_paid,
+            -- Count of interest payments
+            COALESCE((SELECT COUNT(*) FROM pawn_payments pp WHERE pp.pawn_id = p.id AND pp.payment_type = 'interest'), 0) as interest_payment_count,
+            -- Last payment date
+            (SELECT MAX(pp.payment_date) FROM pawn_payments pp WHERE pp.pawn_id = p.id) as last_payment_date
         FROM pawns p
+        LEFT JOIN customer_profiles cp ON p.customer_id = cp.id
         WHERE $where_clause
         ORDER BY p.{$s['due_date']} ASC, p.created_at DESC
         LIMIT ? OFFSET ?
@@ -509,7 +683,8 @@ function getAllPawns($pdo, $user_id)
         $p['principal_amount'] = (float) $p['principal_amount'];
         $p['appraisal_value'] = (float) $p['appraisal_value'];
         $p['monthly_interest'] = (float) $p['monthly_interest'];
-        $p['total_interest_paid'] = (float) $p['total_interest_paid'];
+        $p['total_interest_paid'] = (float) ($p['total_interest_paid'] ?? 0);
+        $p['interest_payment_count'] = (int) ($p['interest_payment_count'] ?? 0);
         $p['days_until_due'] = (int) $p['days_until_due'];
         $p['is_overdue'] = $p['days_until_due'] < 0 && in_array($p['status'], ['active', 'overdue']);
         $p['interest_rate_percent'] = (float) $p['interest_rate_percent'];
@@ -542,6 +717,7 @@ function getSummary($pdo, $user_id)
         SELECT 
             COUNT(CASE WHEN status IN ('active', 'overdue', 'extended') THEN 1 END) as active_count,
             COUNT(CASE WHEN status = 'overdue' OR (status = 'active' AND due_date < CURDATE()) THEN 1 END) as overdue_count,
+            COUNT(CASE WHEN status = 'active' AND DATEDIFF(due_date, CURDATE()) BETWEEN 1 AND 3 THEN 1 END) as due_soon_count,
             SUM(CASE WHEN status IN ('active', 'overdue', 'extended') THEN loan_amount ELSE 0 END) as total_principal,
             SUM(CASE WHEN status = 'redeemed' THEN loan_amount ELSE 0 END) as total_redeemed
         FROM pawns
@@ -553,6 +729,7 @@ function getSummary($pdo, $user_id)
     return [
         'active_count' => (int) ($summary['active_count'] ?? 0),
         'overdue_count' => (int) ($summary['overdue_count'] ?? 0),
+        'due_soon_count' => (int) ($summary['due_soon_count'] ?? 0),
         'total_principal' => (float) ($summary['total_principal'] ?? 0),
         'total_redeemed' => (float) ($summary['total_redeemed'] ?? 0)
     ];
@@ -572,8 +749,16 @@ function getPawnDetail($pdo, $pawn_id, $user_id)
             p.due_date as next_interest_due,
             p.pawn_date as contract_start_date,
             (p.loan_amount * p.interest_rate / 100) as monthly_interest,
-            DATEDIFF(p.due_date, CURDATE()) as days_until_due
+            DATEDIFF(p.due_date, CURDATE()) as days_until_due,
+            -- customer_id in pawns table IS the customer_profile_id (FK to customer_profiles.id)
+            p.customer_id as customer_profile_id,
+            -- JOIN to get customer info for display
+            cp.platform_user_id,
+            cp.platform as customer_platform,
+            cp.display_name as customer_display_name,
+            cp.avatar_url as customer_avatar
         FROM pawns p
+        LEFT JOIN customer_profiles cp ON p.customer_id = cp.id
         WHERE p.id = ? AND p.user_id = ?
     ");
     $stmt->execute([$pawn_id, $user_id]);
@@ -606,13 +791,13 @@ function getPawnDetail($pdo, $pawn_id, $user_id)
     $pawn['redemption_amount'] = $pawn['principal_amount'] + $pawn['outstanding_interest'];
 
     // Get payment history
+    // Note: pawn_payments doesn't have status column, use verified_at to determine status
     $paymentStmt = $pdo->prepare("
         SELECT 
             pp.*,
-            CASE pp.status
-                WHEN 'pending' THEN 'รอตรวจสอบ'
-                WHEN 'verified' THEN 'ยืนยันแล้ว'
-                WHEN 'rejected' THEN 'ไม่อนุมัติ'
+            CASE 
+                WHEN pp.verified_at IS NOT NULL THEN 'ยืนยันแล้ว'
+                ELSE 'รอตรวจสอบ'
             END as status_display
         FROM pawn_payments pp
         WHERE pp.pawn_id = ?
@@ -625,10 +810,15 @@ function getPawnDetail($pdo, $pawn_id, $user_id)
         $pay['amount'] = (float) $pay['amount'];
     }
 
-    // Get bank accounts
-    $bankStmt = $pdo->prepare("SELECT * FROM bank_accounts WHERE is_active = 1 ORDER BY is_default DESC");
-    $bankStmt->execute();
-    $bankAccounts = $bankStmt->fetchAll(PDO::FETCH_ASSOC);
+    // Get bank accounts (optional - table may not exist)
+    $bankAccounts = [];
+    try {
+        $bankStmt = $pdo->prepare("SELECT * FROM bank_accounts WHERE is_active = 1 ORDER BY is_default DESC");
+        $bankStmt->execute();
+        $bankAccounts = $bankStmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (PDOException $e) {
+        // Table doesn't exist, skip
+    }
 
     // Build interest schedule
     $schedule = [];
@@ -731,21 +921,24 @@ function submitInterestPayment($pdo, $user_id)
         $payment_id = $pdo->lastInsertId();
 
         // Create case for admin verification
+        // Note: case_type is ENUM, use 'other' for pawn-related cases
+        $case_no = 'CASE-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6));
         $caseStmt = $pdo->prepare("
             INSERT INTO cases (
-                channel_id, external_user_id, user_id, customer_profile_id,
+                case_no, channel_id, external_user_id, user_id, customer_profile_id,
                 case_type, status, subject, description, priority
             ) VALUES (
-                ?, ?, ?, ?,
-                'pawn_interest', 'open', ?, ?, 'high'
+                ?, ?, ?, ?, ?,
+                'other', 'open', ?, ?, 'high'
             )
         ");
         $caseStmt->execute([
+            $case_no,
             $pawn['channel_id'],
             $pawn['external_user_id'],
             $user_id,
             $pawn['customer_profile_id'],
-            "ตรวจสอบสลิปดอกเบี้ย: {$pawn['pawn_no']}",
+            "[ดอกเบี้ย] {$pawn['pawn_no']}",
             "ลูกค้าส่งสลิปชำระดอกเบี้ย\nรหัส: {$pawn['pawn_no']}\nจำนวน: {$months} เดือน\nยอด: {$totalInterest} บาท"
         ]);
 
@@ -848,21 +1041,24 @@ function submitRedemption($pdo, $user_id)
         $payment_id = $pdo->lastInsertId();
 
         // Create case for admin verification
+        // Note: case_type is ENUM, use 'other' for pawn-related cases
+        $case_no = 'CASE-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6));
         $caseStmt = $pdo->prepare("
             INSERT INTO cases (
-                channel_id, external_user_id, user_id, customer_profile_id,
+                case_no, channel_id, external_user_id, user_id, customer_profile_id,
                 case_type, status, subject, description, priority
             ) VALUES (
-                ?, ?, ?, ?,
-                'pawn_redemption', 'open', ?, ?, 'high'
+                ?, ?, ?, ?, ?,
+                'other', 'open', ?, ?, 'high'
             )
         ");
         $caseStmt->execute([
+            $case_no,
             $pawn['channel_id'] ?? 0,
             $pawn['external_user_id'] ?? '',
             $user_id,
             $pawn['customer_profile_id'] ?? null,
-            "ตรวจสอบสลิปไถ่ถอน: {$pawn['pawn_no']}",
+            "[ไถ่ถอน] {$pawn['pawn_no']}",
             "ลูกค้าส่งสลิปไถ่ถอน\nรหัส: {$pawn['pawn_no']}\nเงินต้น: {$principalAmount} บาท\nดอกเบี้ย: {$interestAmount} บาท\nรวม: {$totalAmount} บาท"
         ]);
 

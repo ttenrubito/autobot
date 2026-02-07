@@ -151,7 +151,7 @@ function processEvent($event)
     // ✅ Upsert customer profile (ถ้าเป็นข้อความจากลูกค้า ไม่ใช่ admin)
     $channelAccessToken = $config['channel_access_token'] ?? '';
     if (!$isAdmin && !empty($userId) && !empty($channelAccessToken)) {
-        upsertCustomerProfile('line', $userId, $channelAccessToken);
+        upsertCustomerProfile('line', $userId, $channelAccessToken, 'default', (int)$channel['id']);
     }
 
     if ($isAdmin) {
@@ -259,30 +259,53 @@ function processEvent($event)
     // Extract response data (gateway wraps in 'data')
     $data = is_array($response) && isset($response['data']) ? $response['data'] : $response;
 
-    // ✅ NEW: Support for multi-message replies (human-like conversation)
-    // Check for reply_texts array first, fallback to single reply_text
+    // ✅ NEW: Support for Flex Messages via reply_messages
+    $replyMessages = [];
     $replyTexts = [];
 
     if (is_array($data)) {
-        // Check for new format: reply_texts array
-        if (!empty($data['reply_texts']) && is_array($data['reply_texts'])) {
+        // Check for reply_messages (Flex Messages, Carousel, etc.)
+        if (!empty($data['reply_messages']) && is_array($data['reply_messages'])) {
+            $replyMessages = $data['reply_messages'];
+            Logger::info('[LINE_WEBHOOK] Flex/Rich message reply detected', [
+                'message_count' => count($replyMessages),
+                'types' => array_map(fn($m) => $m['type'] ?? 'unknown', $replyMessages)
+            ]);
+        }
+        
+        // ✅ FIX: Check if reply_messages already has text content
+        // If reply_messages contains text type, skip reply_texts to avoid duplicate
+        $replyMessagesHasText = false;
+        foreach ($replyMessages as $msg) {
+            if (($msg['type'] ?? '') === 'text' && !empty($msg['text'])) {
+                $replyMessagesHasText = true;
+                break;
+            }
+        }
+        
+        // Check for new format: reply_texts array (ONLY if reply_messages doesn't have text)
+        if (!$replyMessagesHasText && !empty($data['reply_texts']) && is_array($data['reply_texts'])) {
             $replyTexts = $data['reply_texts'];
             Logger::info('[LINE_WEBHOOK] Multi-message reply detected', [
                 'message_count' => count($replyTexts),
             ]);
         }
-        // Fallback to single message format
-        elseif (!empty($data['reply_text'])) {
+        // Fallback to single message format (only if no Flex messages AND no text in reply_messages)
+        elseif (!$replyMessagesHasText && !empty($data['reply_text']) && empty($replyMessages)) {
             $replyTexts = [(string) $data['reply_text']];
             Logger::info('[LINE_WEBHOOK] Single message reply (legacy format)');
+        }
+        elseif ($replyMessagesHasText) {
+            Logger::info('[LINE_WEBHOOK] Skipped reply_texts - reply_messages already has text content');
         }
     }
 
     $actions = is_array($data) && isset($data['actions']) ? $data['actions'] : [];
 
     Logger::info("[LINE_WEBHOOK] Gateway response received", [
-        'has_reply' => !empty($replyTexts),
+        'has_reply' => !empty($replyTexts) || !empty($replyMessages),
         'message_count' => count($replyTexts),
+        'flex_count' => count($replyMessages),
         'actions_count' => count($actions),
         'actions_full' => $actions
     ]);
@@ -307,10 +330,27 @@ function processEvent($event)
             );
         }
     }
+    
+    // Save Flex message summary to chat_messages
+    if (!empty($replyMessages)) {
+        foreach ($replyMessages as $idx => $msg) {
+            $altText = $msg['altText'] ?? 'Rich message';
+            $replyMessageId = $messageId . '_flex_' . ($idx + 1);
+            saveChatMessage(
+                (int) $channel['id'],
+                $userId,
+                'flex',
+                $altText,
+                $replyMessageId,
+                'outgoing',
+                'bot'
+            );
+        }
+    }
 
-    // ✅ Send response back to LINE (multiple text messages + actions/images)
-    if (!empty($replyTexts) || !empty($actions)) {
-        sendLineReply($replyToken, $replyTexts, $actions, $channel);
+    // ✅ Send response back to LINE (Flex messages, text messages + actions/images)
+    if (!empty($replyMessages) || !empty($replyTexts) || !empty($actions)) {
+        sendLineReply($replyToken, $replyTexts, $actions, $channel, $replyMessages);
     }
 }
 
@@ -440,52 +480,59 @@ function recordMessageEvent(int $channelId, string $externalEventId, ?array $res
 
 /**
  * ✅ Save chat message to database for history tracking
+ * FIXED: Use correct schema (session_id, role, text) instead of old schema
  */
 function saveChatMessage($channelId, $userId, $messageType, $text, $messageId, $direction = 'incoming', $senderType = 'customer', $attachments = null)
 {
     try {
         $db = Database::getInstance();
 
-        // Get or create conversation_id based on channel + user
-        $conversationId = 'line_' . $channelId . '_' . $userId;
-
-        // Build message_data JSON for attachments
-        $messageData = null;
-        if ($attachments) {
-            $messageData = json_encode(['attachments' => $attachments], JSON_UNESCAPED_UNICODE);
+        // Get or create session_id from chat_sessions table
+        $session = $db->queryOne(
+            "SELECT id FROM chat_sessions WHERE channel_id = ? AND external_user_id = ? LIMIT 1",
+            [$channelId, $userId]
+        );
+        
+        $sessionId = null;
+        if ($session) {
+            $sessionId = $session['id'];
+        } else {
+            // Create new session
+            $db->execute(
+                "INSERT INTO chat_sessions (channel_id, external_user_id, created_at, updated_at) VALUES (?, ?, NOW(), NOW())",
+                [$channelId, $userId]
+            );
+            $sessionId = $db->lastInsertId();
         }
-
-        // Convert message type to match enum
-        $dbMessageType = $messageType;
-        if ($messageType === 'sticker') {
-            $dbMessageType = 'text'; // Store as text, actual content indicates it was sticker
+        
+        if (!$sessionId) {
+            Logger::warning("[LINE_WEBHOOK] Could not get/create session for chat message");
+            return null;
         }
-
-        $sql = "INSERT INTO chat_messages 
-                (conversation_id, tenant_id, message_id, platform, direction, sender_type, sender_id, 
-                 message_type, message_text, message_data, sent_at, received_at, created_at)
-                VALUES (?, 'default', ?, 'line', ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW())
-                ON DUPLICATE KEY UPDATE updated_at = NOW()";
-
-        $db->execute($sql, [
-            $conversationId,
-            $messageId,
-            $direction,
-            $senderType,
-            $userId,
-            $dbMessageType,
-            $text ?: null,
-            $messageData
-        ]);
+        
+        // Map direction/senderType to role
+        $role = 'user';
+        if ($direction === 'outgoing') {
+            $role = ($senderType === 'bot') ? 'assistant' : 'system';
+        }
+        
+        // Skip empty messages
+        if (empty($text)) {
+            return null;
+        }
+        
+        // Insert into chat_messages with correct schema
+        $sql = "INSERT INTO chat_messages (session_id, role, text, created_at) VALUES (?, ?, ?, NOW())";
+        $db->execute($sql, [$sessionId, $role, $text]);
 
         Logger::info("[LINE_WEBHOOK] Chat message saved to database", [
-            'conversation_id' => $conversationId,
-            'message_id' => $messageId,
+            'session_id' => $sessionId,
+            'role' => $role,
             'direction' => $direction,
             'type' => $messageType
         ]);
 
-        return $conversationId;
+        return $sessionId;
 
     } catch (Exception $e) {
         Logger::error("Failed to save chat message: " . $e->getMessage());
@@ -524,13 +571,14 @@ function callGateway($message)
 }
 
 /**
- * ✅ Send reply to LINE user (multiple text messages + images from actions)
+ * ✅ Send reply to LINE user (Flex messages, text messages + images from actions)
  * @param string $replyToken LINE reply token
  * @param array $texts Array of text messages to send
  * @param array $actions Bot actions (images, etc.)
  * @param array $channel Channel configuration
+ * @param array $flexMessages Array of Flex/rich messages to send
  */
-function sendLineReply($replyToken, $texts, $actions, $channel)
+function sendLineReply($replyToken, $texts, $actions, $channel, $flexMessages = [])
 {
     $config = json_decode($channel['config'] ?? '{}', true);
     $channelAccessToken = $config['channel_access_token'] ?? '';
@@ -544,64 +592,142 @@ function sendLineReply($replyToken, $texts, $actions, $channel)
 
     // Build messages array
     $messages = [];
+    
+    // 0️⃣ Add Flex/Rich messages FIRST (if any)
+    if (!empty($flexMessages) && is_array($flexMessages)) {
+        Logger::info("[LINE_WEBHOOK] 🎨 Adding " . count($flexMessages) . " Flex message(s)");
+        foreach ($flexMessages as $flexMsg) {
+            if (!is_array($flexMsg)) continue;
+            
+            // Validate it's a valid LINE message format
+            if (!empty($flexMsg['type'])) {
+                $messages[] = $flexMsg;
+                Logger::info("[LINE_WEBHOOK] 🎨 Added Flex message", [
+                    'type' => $flexMsg['type'],
+                    'altText' => $flexMsg['altText'] ?? 'Rich content'
+                ]);
+            }
+            
+            // LINE API limit: max 5 messages per reply
+            if (count($messages) >= 5) {
+                Logger::warning("[LINE_WEBHOOK] Reached LINE API limit of 5 messages (at flex)");
+                break;
+            }
+        }
+    }
 
-    // ✅ Add multiple text messages if present
+    // ✅ Extract Quick Reply items and Images from actions (if any)
+    $quickReplyItems = [];
+    $imageActions = [];
+    
+    if (!empty($actions) && is_array($actions)) {
+        Logger::info("[LINE_WEBHOOK] 🔍 Extracting Quick Reply and Images from actions", [
+            'actions_count' => count($actions),
+        ]);
+        
+        foreach ($actions as $action) {
+            if (!is_array($action)) continue;
+            
+            // Collect quick_replies
+            if (($action['type'] ?? '') === 'quick_reply' && !empty($action['items'])) {
+                foreach ($action['items'] as $item) {
+                    $quickReplyItems[] = [
+                        'type' => 'action',
+                        'action' => [
+                            'type' => 'message',
+                            'label' => mb_substr($item['label'] ?? $item['text'], 0, 20), // LINE limit 20 chars
+                            'text' => $item['text']
+                        ]
+                    ];
+                }
+            }
+            
+            // Collect images
+            if (($action['type'] ?? '') === 'image' && !empty($action['url'])) {
+                $imageActions[] = $action;
+            }
+        }
+        
+        if (!empty($quickReplyItems)) {
+            Logger::info("[LINE_WEBHOOK] ✅ Found quick_replies", ['count' => count($quickReplyItems)]);
+        }
+        if (!empty($imageActions)) {
+            Logger::info("[LINE_WEBHOOK] ✅ Found images", ['count' => count($imageActions)]);
+        }
+    }
+
+    // =========================================================
+    // ✅ BUILD ORDER: Images FIRST, then text + Quick Reply LAST
+    // This ensures Quick Reply buttons appear at the bottom
+    // =========================================================
+    
+    // 1️⃣ Add image messages FIRST
+    if (!empty($imageActions)) {
+        Logger::info("[LINE_WEBHOOK] 📸 Adding " . count($imageActions) . " image(s) FIRST");
+        foreach ($imageActions as $idx => $imgAction) {
+            $imageUrl = $imgAction['url'];
+            
+            // Convert relative URL to absolute
+            if (strpos($imageUrl, 'http') !== 0) {
+                $domain = getenv('APP_URL') ?: 'https://autobot.boxdesign.in.th';
+                $imageUrl = rtrim($domain, '/') . '/' . ltrim($imageUrl, '/');
+            }
+            
+            // LINE requires both originalContentUrl and previewImageUrl
+            $messages[] = [
+                'type' => 'image',
+                'originalContentUrl' => $imageUrl,
+                'previewImageUrl' => $imageUrl
+            ];
+            
+            Logger::info("[LINE_WEBHOOK] 📸 Added image #" . ($idx + 1), [
+                'image_url' => $imageUrl
+            ]);
+            
+            // LINE API limit: max 5 messages per reply
+            if (count($messages) >= 5) {
+                Logger::warning("[LINE_WEBHOOK] Reached LINE API limit of 5 messages (at images)");
+                break;
+            }
+        }
+    }
+
+    // 2️⃣ Add text messages AFTER images (with Quick Reply on last message)
     if (!empty($texts) && is_array($texts)) {
-        foreach ($texts as $text) {
+        foreach ($texts as $idx => $text) {
             $text = trim((string) $text);
             if ($text !== '') {
-                $messages[] = [
+                // LINE API limit check
+                if (count($messages) >= 5) {
+                    Logger::warning("[LINE_WEBHOOK] Reached LINE API limit of 5 messages (at text)");
+                    break;
+                }
+                
+                $msg = [
                     'type' => 'text',
                     'text' => $text
                 ];
-
-                // LINE API limit: max 5 messages per reply
-                if (count($messages) >= 5) {
-                    Logger::warning("[LINE_WEBHOOK] Reached LINE API limit of 5 messages (stopping at text messages)");
-                    break;
+                
+                // ✅ Attach Quick Reply to the LAST text message only
+                if (!empty($quickReplyItems) && $idx === count($texts) - 1) {
+                    $msg['quickReply'] = ['items' => array_slice($quickReplyItems, 0, 13)]; // LINE limit 13 items
+                    Logger::info("[LINE_WEBHOOK] ✅ Attached Quick Reply to last message", [
+                        'quick_reply_count' => count($quickReplyItems),
+                        'message_index' => $idx
+                    ]);
                 }
+                
+                $messages[] = $msg;
             }
         }
     }
-
-    // ✅ Add image messages from actions
-    if (!empty($actions) && is_array($actions)) {
-        Logger::info("[LINE_WEBHOOK] Processing " . count($actions) . " actions");
-
-        $imageCount = 0;
-        foreach ($actions as $idx => $action) {
-            if (is_array($action) && isset($action['type']) && $action['type'] === 'image' && !empty($action['url'])) {
-                $imageUrl = $action['url'];
-
-                // Convert relative URL to absolute
-                if (strpos($imageUrl, 'http') !== 0) {
-                    $domain = getenv('APP_URL') ?: 'https://autobot.boxdesign.in.th';
-                    $imageUrl = rtrim($domain, '/') . '/' . ltrim($imageUrl, '/');
-                }
-
-                // LINE requires both originalContentUrl and previewImageUrl
-                $messages[] = [
-                    'type' => 'image',
-                    'originalContentUrl' => $imageUrl,
-                    'previewImageUrl' => $imageUrl
-                ];
-
-                $imageCount++;
-                Logger::info("[LINE_WEBHOOK] 📸 Added image #{$imageCount} to messages", [
-                    'action_index' => $idx,
-                    'image_url' => $imageUrl
-                ]);
-
-                // LINE API limit: max 5 messages per reply
-                if (count($messages) >= 5) {
-                    Logger::warning("[LINE_WEBHOOK] Reached LINE API limit of 5 messages");
-                    break;
-                }
-            }
-        }
-
-        Logger::info("[LINE_WEBHOOK] ✅ Built LINE messages array: text + {$imageCount} images");
-    }
+    
+    Logger::info("[LINE_WEBHOOK] ✅ Built messages array", [
+        'total_count' => count($messages),
+        'image_count' => count($imageActions),
+        'text_count' => count($texts ?? []),
+        'has_quick_reply' => !empty($quickReplyItems)
+    ]);
 
     // If no messages to send, skip
     if (empty($messages)) {
@@ -653,7 +779,7 @@ function sendLineReply($replyToken, $texts, $actions, $channel)
  * บันทึกหรืออัพเดท profile ลูกค้าจาก LINE (ซ้ำไม่ได้)
  * @return int|null Customer profile ID or null on failure
  */
-function upsertCustomerProfile(string $platform, string $platformUserId, string $channelAccessToken, string $tenantId = 'default'): ?int
+function upsertCustomerProfile(string $platform, string $platformUserId, string $channelAccessToken, string $tenantId = 'default', ?int $channelId = null): ?int
 {
     if (empty($platformUserId) || empty($channelAccessToken)) {
         return null;
@@ -710,17 +836,18 @@ function upsertCustomerProfile(string $platform, string $platformUserId, string 
 
         // Insert new customer profile (always create even if no display name)
         $sql = "
-            INSERT INTO customer_profiles (tenant_id, platform, platform_user_id, display_name, avatar_url, total_inquiries, first_seen_at, last_active_at, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, 1, NOW(), NOW(), NOW(), NOW())
+            INSERT INTO customer_profiles (tenant_id, channel_id, platform, platform_user_id, display_name, avatar_url, total_inquiries, first_seen_at, last_active_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 1, NOW(), NOW(), NOW(), NOW())
             ON DUPLICATE KEY UPDATE 
                 display_name = COALESCE(VALUES(display_name), display_name),
                 avatar_url = COALESCE(VALUES(avatar_url), avatar_url),
+                channel_id = COALESCE(VALUES(channel_id), channel_id),
                 total_inquiries = COALESCE(total_inquiries, 0) + 1,
                 last_active_at = NOW(),
                 updated_at = NOW()
         ";
 
-        $db->execute($sql, [$tenantId, $platform, $platformUserId, $displayName, $avatarUrl]);
+        $db->execute($sql, [$tenantId, $channelId, $platform, $platformUserId, $displayName, $avatarUrl]);
         
         // Get the ID (either new or existing due to race condition)
         $result = $db->queryOne(

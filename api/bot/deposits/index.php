@@ -36,7 +36,7 @@ $path = preg_replace('#/index\.php$#', '', $path);
 $uri_parts = explode('/', trim($path, '/'));
 
 // Expected: /api/bot/deposits/{id?}/{action?}
-$deposit_id = $_GET['deposit_id'] ?? (isset($uri_parts[3]) && is_numeric($uri_parts[3]) ? (int)$uri_parts[3] : null);
+$deposit_id = $_GET['deposit_id'] ?? (isset($uri_parts[3]) && is_numeric($uri_parts[3]) ? (int) $uri_parts[3] : null);
 $action = $_GET['action'] ?? ($uri_parts[3] ?? $uri_parts[4] ?? null);
 
 // Handle by-user as action
@@ -46,7 +46,7 @@ if ($action === 'by-user') {
 
 try {
     $db = Database::getInstance();
-    
+
     // Route to appropriate handler
     if ($method === 'POST' && !$deposit_id && $action !== 'by-user') {
         createDeposit($db);
@@ -66,7 +66,7 @@ try {
         http_response_code(404);
         echo json_encode(['success' => false, 'message' => 'Endpoint not found']);
     }
-    
+
 } catch (Exception $e) {
     Logger::error('Bot Deposits API Error: ' . $e->getMessage(), [
         'trace' => $e->getTraceAsString()
@@ -82,7 +82,8 @@ try {
 /**
  * Generate unique deposit number
  */
-function generateDepositNo(): string {
+function generateDepositNo(): string
+{
     $date = date('Ymd');
     $random = strtoupper(substr(bin2hex(random_bytes(3)), 0, 5));
     return "DEP-{$date}-{$random}";
@@ -94,9 +95,10 @@ function generateDepositNo(): string {
  * Required: channel_id, external_user_id, platform, product_ref_id, product_name, product_price
  * Optional: deposit_percent (default 10), valid_days (default 14), customer_name, customer_phone
  */
-function createDeposit($db) {
+function createDeposit($db)
+{
     $input = json_decode(file_get_contents('php://input'), true);
-    
+
     // Validate required fields
     $required = ['channel_id', 'external_user_id', 'platform', 'product_ref_id', 'product_name', 'product_price'];
     foreach ($required as $field) {
@@ -106,7 +108,7 @@ function createDeposit($db) {
             return;
         }
     }
-    
+
     // Validate platform
     $validPlatforms = ['line', 'facebook', 'web', 'instagram'];
     if (!in_array($input['platform'], $validPlatforms)) {
@@ -114,7 +116,7 @@ function createDeposit($db) {
         echo json_encode(['success' => false, 'message' => 'Invalid platform']);
         return;
     }
-    
+
     // Check for existing pending/deposited deposit for same product
     $existing = $db->queryOne(
         "SELECT id, deposit_no, status, deposit_amount, expires_at 
@@ -122,9 +124,9 @@ function createDeposit($db) {
          WHERE channel_id = ? AND external_user_id = ? AND product_ref_id = ? 
          AND status IN ('pending_payment', 'deposited')
          ORDER BY created_at DESC LIMIT 1",
-        [(int)$input['channel_id'], (string)$input['external_user_id'], $input['product_ref_id']]
+        [(int) $input['channel_id'], (string) $input['external_user_id'], $input['product_ref_id']]
     );
-    
+
     if ($existing) {
         echo json_encode([
             'success' => true,
@@ -133,27 +135,37 @@ function createDeposit($db) {
                 'id' => $existing['id'],
                 'deposit_no' => $existing['deposit_no'],
                 'status' => $existing['status'],
-                'deposit_amount' => (float)$existing['deposit_amount'],
+                'deposit_amount' => (float) $existing['deposit_amount'],
                 'expires_at' => $existing['expires_at']
             ],
             'is_existing' => true
         ]);
         return;
     }
-    
+
     // Calculate deposit details
-    $productPrice = (float)$input['product_price'];
-    $depositPercent = (float)($input['deposit_percent'] ?? 10.00);
-    $depositAmount = (float)($input['deposit_amount'] ?? round($productPrice * ($depositPercent / 100), 2));
-    $validDays = (int)($input['valid_days'] ?? 14);
-    
+    $productPrice = (float) $input['product_price'];
+    $depositPercent = (float) ($input['deposit_percent'] ?? 10.00);
+    $depositAmount = (float) ($input['deposit_amount'] ?? round($productPrice * ($depositPercent / 100), 2));
+    $validDays = (int) ($input['valid_days'] ?? 14);
+
     // Calculate expiry date
     $expiresAt = date('Y-m-d H:i:s', strtotime("+{$validDays} days"));
-    
+
     $depositNo = generateDepositNo();
-    
+
+    // ✅ Get shop_owner_id from channel_id for data isolation
+    $shopOwnerId = null;
+    if (!empty($input['channel_id'])) {
+        $channel = $db->queryOne(
+            "SELECT user_id FROM customer_channels WHERE id = ? LIMIT 1",
+            [(int) $input['channel_id']]
+        );
+        $shopOwnerId = $channel ? $channel['user_id'] : null;
+    }
+
     $sql = "INSERT INTO deposits (
-        deposit_no, tenant_id, customer_id, customer_profile_id,
+        deposit_no, tenant_id, customer_id, customer_profile_id, shop_owner_id,
         channel_id, external_user_id, platform,
         customer_name, customer_phone, customer_line_name,
         product_ref_id, product_name, product_code, product_price,
@@ -161,7 +173,7 @@ function createDeposit($db) {
         status, case_id, admin_notes,
         created_at, updated_at
     ) VALUES (
-        ?, ?, ?, ?,
+        ?, ?, ?, ?, ?,
         ?, ?, ?,
         ?, ?, ?,
         ?, ?, ?, ?,
@@ -169,14 +181,15 @@ function createDeposit($db) {
         'pending_payment', ?, ?,
         NOW(), NOW()
     )";
-    
+
     $params = [
         $depositNo,
         $input['tenant_id'] ?? 'default',
         $input['customer_id'] ?? null,
         $input['customer_profile_id'] ?? null,
-        (int)$input['channel_id'],
-        (string)$input['external_user_id'],
+        $shopOwnerId,                         // ✅ shop_owner_id for data isolation
+        (int) $input['channel_id'],
+        (string) $input['external_user_id'],
         $input['platform'],
         $input['customer_name'] ?? null,
         $input['customer_phone'] ?? null,
@@ -192,10 +205,10 @@ function createDeposit($db) {
         $input['case_id'] ?? null,
         $input['admin_notes'] ?? null
     ];
-    
+
     $db->execute($sql, $params);
     $newId = $db->lastInsertId();
-    
+
     Logger::info('Deposit created', [
         'deposit_id' => $newId,
         'deposit_no' => $depositNo,
@@ -203,7 +216,7 @@ function createDeposit($db) {
         'deposit_amount' => $depositAmount,
         'expires_at' => $expiresAt
     ]);
-    
+
     // Get bank accounts for payment info
     $banks = $db->queryAll(
         "SELECT bank_name, account_number, account_name 
@@ -211,7 +224,7 @@ function createDeposit($db) {
          WHERE is_active = 1 
          ORDER BY is_primary DESC, display_order ASC"
     );
-    
+
     echo json_encode([
         'success' => true,
         'message' => 'สร้างรายการมัดจำเรียบร้อยค่ะ',
@@ -236,21 +249,22 @@ function createDeposit($db) {
 /**
  * Get deposit by ID
  */
-function getDeposit($db, int $depositId) {
+function getDeposit($db, int $depositId)
+{
     $deposit = $db->queryOne("SELECT * FROM deposits WHERE id = ?", [$depositId]);
-    
+
     if (!$deposit) {
         http_response_code(404);
         echo json_encode(['success' => false, 'message' => 'ไม่พบรายการมัดจำ']);
         return;
     }
-    
+
     // Calculate remaining time
     $now = time();
     $expiresAt = strtotime($deposit['expires_at']);
     $remainingDays = max(0, ceil(($expiresAt - $now) / 86400));
     $isExpired = $now > $expiresAt;
-    
+
     // Auto-update status if expired
     if ($isExpired && $deposit['status'] === 'pending_payment') {
         $db->execute(
@@ -259,13 +273,13 @@ function getDeposit($db, int $depositId) {
         );
         $deposit['status'] = 'expired';
     }
-    
+
     echo json_encode([
         'success' => true,
         'data' => array_merge($deposit, [
-            'product_price' => (float)$deposit['product_price'],
-            'deposit_amount' => (float)$deposit['deposit_amount'],
-            'remaining_amount' => (float)$deposit['remaining_amount'],
+            'product_price' => (float) $deposit['product_price'],
+            'deposit_amount' => (float) $deposit['deposit_amount'],
+            'remaining_amount' => (float) $deposit['remaining_amount'],
             'remaining_days' => $remainingDays,
             'is_expired' => $isExpired
         ])
@@ -275,40 +289,41 @@ function getDeposit($db, int $depositId) {
 /**
  * Get deposits by user
  */
-function getDepositsByUser($db) {
+function getDepositsByUser($db)
+{
     $channelId = $_GET['channel_id'] ?? null;
     $externalUserId = $_GET['external_user_id'] ?? null;
     $status = $_GET['status'] ?? null;
-    
+
     if (!$channelId || !$externalUserId) {
         http_response_code(400);
         echo json_encode(['success' => false, 'message' => 'Missing channel_id or external_user_id']);
         return;
     }
-    
+
     $sql = "SELECT * FROM deposits WHERE channel_id = ? AND external_user_id = ?";
-    $params = [(int)$channelId, (string)$externalUserId];
-    
+    $params = [(int) $channelId, (string) $externalUserId];
+
     if ($status) {
         $sql .= " AND status = ?";
         $params[] = $status;
     }
-    
+
     $sql .= " ORDER BY created_at DESC";
-    
+
     $deposits = $db->queryAll($sql, $params);
-    
+
     // Add computed fields
     $now = time();
     foreach ($deposits as &$dep) {
         $expiresAt = strtotime($dep['expires_at']);
         $dep['remaining_days'] = max(0, ceil(($expiresAt - $now) / 86400));
         $dep['is_expired'] = $now > $expiresAt;
-        $dep['product_price'] = (float)$dep['product_price'];
-        $dep['deposit_amount'] = (float)$dep['deposit_amount'];
-        $dep['remaining_amount'] = (float)$dep['remaining_amount'];
+        $dep['product_price'] = (float) $dep['product_price'];
+        $dep['deposit_amount'] = (float) $dep['deposit_amount'];
+        $dep['remaining_amount'] = (float) $dep['remaining_amount'];
     }
-    
+
     echo json_encode([
         'success' => true,
         'data' => $deposits,
@@ -319,28 +334,29 @@ function getDepositsByUser($db) {
 /**
  * Submit deposit payment (ส่งสลิปมัดจำ)
  */
-function submitDepositPayment($db, int $depositId) {
+function submitDepositPayment($db, int $depositId)
+{
     $input = json_decode(file_get_contents('php://input'), true);
-    
+
     // Get deposit
     $deposit = $db->queryOne("SELECT * FROM deposits WHERE id = ?", [$depositId]);
-    
+
     if (!$deposit) {
         http_response_code(404);
         echo json_encode(['success' => false, 'message' => 'ไม่พบรายการมัดจำ']);
         return;
     }
-    
+
     // Check status
     if ($deposit['status'] !== 'pending_payment') {
         http_response_code(400);
         echo json_encode([
-            'success' => false, 
+            'success' => false,
             'message' => 'ไม่สามารถชำระได้ สถานะปัจจุบัน: ' . $deposit['status']
         ]);
         return;
     }
-    
+
     // Check if expired
     if (time() > strtotime($deposit['expires_at'])) {
         $db->execute(
@@ -351,14 +367,14 @@ function submitDepositPayment($db, int $depositId) {
         echo json_encode(['success' => false, 'message' => 'รายการมัดจำหมดอายุแล้วค่ะ']);
         return;
     }
-    
+
     // Validate slip image
     if (empty($input['slip_image_url'])) {
         http_response_code(400);
         echo json_encode(['success' => false, 'message' => 'กรุณาส่งรูปสลิปการโอน']);
         return;
     }
-    
+
     // Update deposit with payment info (status stays pending until admin verifies)
     $db->execute(
         "UPDATE deposits SET 
@@ -373,20 +389,20 @@ function submitDepositPayment($db, int $depositId) {
             $depositId
         ]
     );
-    
+
     Logger::info('Deposit payment submitted', [
         'deposit_id' => $depositId,
         'deposit_no' => $deposit['deposit_no'],
         'slip_url' => $input['slip_image_url']
     ]);
-    
+
     echo json_encode([
         'success' => true,
         'message' => 'ได้รับสลิปมัดจำแล้วค่ะ ✅ รอเจ้าหน้าที่ตรวจสอบนะคะ',
         'data' => [
             'id' => $depositId,
             'deposit_no' => $deposit['deposit_no'],
-            'deposit_amount' => (float)$deposit['deposit_amount'],
+            'deposit_amount' => (float) $deposit['deposit_amount'],
             'product_name' => $deposit['product_name'],
             'status' => 'pending_payment'
         ]
@@ -396,35 +412,36 @@ function submitDepositPayment($db, int $depositId) {
 /**
  * Convert deposit to order (Admin action after payment verified)
  */
-function convertDepositToOrder($db, int $depositId) {
+function convertDepositToOrder($db, int $depositId)
+{
     $input = json_decode(file_get_contents('php://input'), true);
-    
+
     $deposit = $db->queryOne("SELECT * FROM deposits WHERE id = ?", [$depositId]);
-    
+
     if (!$deposit) {
         http_response_code(404);
         echo json_encode(['success' => false, 'message' => 'ไม่พบรายการมัดจำ']);
         return;
     }
-    
+
     if ($deposit['status'] !== 'deposited') {
         http_response_code(400);
         echo json_encode([
-            'success' => false, 
+            'success' => false,
             'message' => 'ต้องยืนยันรับมัดจำก่อนถึงจะแปลงเป็นออเดอร์ได้'
         ]);
         return;
     }
-    
+
     // Determine order type
     $orderType = $input['order_type'] ?? 'full_payment'; // full_payment, installment
-    
+
     try {
         $db->beginTransaction();
-        
+
         // Generate order number
         $orderNo = 'ORD-' . date('Ymd') . '-' . strtoupper(substr(bin2hex(random_bytes(3)), 0, 5));
-        
+
         // Create order
         $sql = "INSERT INTO orders (
             order_number, user_id, platform_user_id, customer_profile_id,
@@ -443,9 +460,9 @@ function convertDepositToOrder($db, int $depositId) {
             ?, ?,
             NOW(), NOW()
         )";
-        
-        $remainingAmount = (float)$deposit['product_price'] - (float)$deposit['deposit_amount'];
-        
+
+        $remainingAmount = (float) $deposit['product_price'] - (float) $deposit['deposit_amount'];
+
         $db->execute($sql, [
             $orderNo,
             $deposit['user_id'] ?? null, // Shop owner's user_id
@@ -463,9 +480,9 @@ function convertDepositToOrder($db, int $depositId) {
             "แปลงมาจากมัดจำ {$deposit['deposit_no']}",
             $input['admin_note'] ?? null
         ]);
-        
+
         $orderId = $db->lastInsertId();
-        
+
         // Add order item
         $db->execute(
             "INSERT INTO order_items (order_id, product_ref_id, product_name, quantity, price, total)
@@ -478,7 +495,7 @@ function convertDepositToOrder($db, int $depositId) {
                 $deposit['product_price']
             ]
         );
-        
+
         // Update deposit status
         $db->execute(
             "UPDATE deposits SET 
@@ -489,16 +506,16 @@ function convertDepositToOrder($db, int $depositId) {
              WHERE id = ?",
             [$orderId, $depositId]
         );
-        
+
         $db->commit();
-        
+
         Logger::info('Deposit converted to order', [
             'deposit_id' => $depositId,
             'deposit_no' => $deposit['deposit_no'],
             'order_id' => $orderId,
             'order_no' => $orderNo
         ]);
-        
+
         echo json_encode([
             'success' => true,
             'message' => 'แปลงมัดจำเป็นออเดอร์เรียบร้อยค่ะ',
@@ -510,7 +527,7 @@ function convertDepositToOrder($db, int $depositId) {
                 'remaining_amount' => $remainingAmount
             ]
         ]);
-        
+
     } catch (Exception $e) {
         $db->rollBack();
         throw $e;
@@ -520,23 +537,24 @@ function convertDepositToOrder($db, int $depositId) {
 /**
  * Cancel deposit
  */
-function cancelDeposit($db, int $depositId) {
+function cancelDeposit($db, int $depositId)
+{
     $input = json_decode(file_get_contents('php://input'), true);
-    
+
     $deposit = $db->queryOne("SELECT * FROM deposits WHERE id = ?", [$depositId]);
-    
+
     if (!$deposit) {
         http_response_code(404);
         echo json_encode(['success' => false, 'message' => 'ไม่พบรายการมัดจำ']);
         return;
     }
-    
+
     if (!in_array($deposit['status'], ['pending_payment', 'deposited'])) {
         http_response_code(400);
         echo json_encode(['success' => false, 'message' => 'ไม่สามารถยกเลิกได้']);
         return;
     }
-    
+
     $db->execute(
         "UPDATE deposits SET 
             status = 'cancelled',
@@ -545,13 +563,13 @@ function cancelDeposit($db, int $depositId) {
          WHERE id = ?",
         [$input['reason'] ?? 'ไม่ระบุเหตุผล', $depositId]
     );
-    
+
     Logger::info('Deposit cancelled', [
         'deposit_id' => $depositId,
         'deposit_no' => $deposit['deposit_no'],
         'reason' => $input['reason'] ?? null
     ]);
-    
+
     echo json_encode([
         'success' => true,
         'message' => 'ยกเลิกรายการมัดจำเรียบร้อยค่ะ',
@@ -562,20 +580,21 @@ function cancelDeposit($db, int $depositId) {
 /**
  * Get deposit status with details
  */
-function getDepositStatus($db, int $depositId) {
+function getDepositStatus($db, int $depositId)
+{
     $deposit = $db->queryOne("SELECT * FROM deposits WHERE id = ?", [$depositId]);
-    
+
     if (!$deposit) {
         http_response_code(404);
         echo json_encode(['success' => false, 'message' => 'ไม่พบรายการมัดจำ']);
         return;
     }
-    
+
     $now = time();
     $expiresAt = strtotime($deposit['expires_at']);
     $remainingDays = max(0, ceil(($expiresAt - $now) / 86400));
     $isExpired = $now > $expiresAt;
-    
+
     // Get related order if converted
     $order = null;
     if ($deposit['converted_order_id']) {
@@ -585,7 +604,7 @@ function getDepositStatus($db, int $depositId) {
             [$deposit['converted_order_id']]
         );
     }
-    
+
     $statusMessages = [
         'pending_payment' => 'รอชำระเงินมัดจำ',
         'deposited' => 'มัดจำเรียบร้อยแล้ว',
@@ -594,16 +613,16 @@ function getDepositStatus($db, int $depositId) {
         'cancelled' => 'ยกเลิกแล้ว',
         'refunded' => 'คืนเงินแล้ว'
     ];
-    
+
     echo json_encode([
         'success' => true,
         'data' => [
             'id' => $deposit['id'],
             'deposit_no' => $deposit['deposit_no'],
             'product_name' => $deposit['product_name'],
-            'product_price' => (float)$deposit['product_price'],
-            'deposit_amount' => (float)$deposit['deposit_amount'],
-            'remaining_amount' => (float)$deposit['remaining_amount'],
+            'product_price' => (float) $deposit['product_price'],
+            'deposit_amount' => (float) $deposit['deposit_amount'],
+            'remaining_amount' => (float) $deposit['remaining_amount'],
             'status' => $deposit['status'],
             'status_text' => $statusMessages[$deposit['status']] ?? $deposit['status'],
             'expires_at' => $deposit['expires_at'],

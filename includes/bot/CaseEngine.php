@@ -26,6 +26,8 @@ class CaseEngine
     const CASE_PAYMENT_FULL = 'payment_full';
     const CASE_PAYMENT_INSTALLMENT = 'payment_installment';
     const CASE_PAYMENT_SAVINGS = 'payment_savings';
+    const CASE_PAWN = 'pawn';           // ✅ รับฝาก/ฝากขาย (บริการเดียวกัน)
+    const CASE_REPAIR = 'repair';       // ✅ Added for repair/ซ่อม flow
 
     // Case status constants
     const STATUS_OPEN = 'open';
@@ -91,7 +93,9 @@ class CaseEngine
             'product_lookup_by_image' => self::CASE_PRODUCT_INQUIRY,
             'product_availability' => self::CASE_PRODUCT_INQUIRY,
             'price_inquiry' => self::CASE_PRODUCT_INQUIRY,
+            'price_negotiation' => self::CASE_PRODUCT_INQUIRY, // ✅ NEW: ลดราคาได้ไหม
             'payment_slip_verify' => self::CASE_PAYMENT_FULL,
+            'change_payment_method' => self::CASE_PAYMENT_FULL, // ✅ NEW: เปลี่ยนวิธีชำระ
             'installment_flow' => self::CASE_PAYMENT_INSTALLMENT,
             'installment_new' => self::CASE_PAYMENT_INSTALLMENT,
             'installment_pay' => self::CASE_PAYMENT_INSTALLMENT,
@@ -100,6 +104,12 @@ class CaseEngine
             'savings_new' => self::CASE_PAYMENT_SAVINGS,
             'savings_deposit' => self::CASE_PAYMENT_SAVINGS,
             'savings_inquiry' => self::CASE_PAYMENT_SAVINGS,
+            'pawn_new' => self::CASE_PAWN, // ✅ จำนำ/รับฝาก/ฝากขาย
+            'pawn_inquiry' => self::CASE_PAWN, // ✅ ถามเรื่องรับฝาก/ฝากขาย
+            'pawn_pay_interest' => self::CASE_PAWN, // ✅ ต่อดอก
+            'pawn_redeem' => self::CASE_PAWN, // ✅ ไถ่ถอน
+            'repair_new' => self::CASE_REPAIR, // ✅ ซ่อม
+            'repair_inquiry' => self::CASE_REPAIR, // ✅ NEW: เช็คสถานะซ่อม
         ];
 
         return $intentToCaseType[$intent] ?? null;
@@ -122,14 +132,27 @@ class CaseEngine
             return null;
         }
 
-        // Check for existing open case of same type for this user
+        // ✅ HYBRID DAILY CASE LOGIC:
+        // Only find existing case if created TODAY (same date)
+        // If no case today → create new case (even if old cases are still open)
+        // This allows daily monitoring while keeping case history
         $existingCase = $this->db->queryOne(
             "SELECT * FROM cases 
              WHERE channel_id = ? AND external_user_id = ? AND case_type = ? 
              AND status NOT IN ('resolved', 'cancelled')
+             AND DATE(created_at) = CURDATE()
              ORDER BY created_at DESC LIMIT 1",
             [$channelId, $externalUserId, $caseType]
         );
+
+        // Log for debugging
+        Logger::debug('[CaseEngine] Daily case lookup', [
+            'channel_id' => $channelId,
+            'external_user_id' => $externalUserId,
+            'case_type' => $caseType,
+            'found_today' => $existingCase ? true : false,
+            'case_id' => $existingCase['id'] ?? null
+        ]);
 
         if ($existingCase) {
             Logger::info('[CaseEngine] Found existing case', [
@@ -175,6 +198,8 @@ class CaseEngine
             self::CASE_PAYMENT_FULL => 'ชำระเงินเต็ม',
             self::CASE_PAYMENT_INSTALLMENT => 'ชำระเงินผ่อน',
             self::CASE_PAYMENT_SAVINGS => 'ออมสินค้า',
+            self::CASE_PAWN => 'ขอประเมินรับฝาก',    // ✅ รับฝาก/ฝากขาย (บริการเดียวกัน)
+            self::CASE_REPAIR => 'ขอประเมินซ่อม',   // ✅ Added
         ];
         $subject = $subjectMap[$caseType] ?? 'ติดต่อทั่วไป';
 
@@ -196,20 +221,30 @@ class CaseEngine
                 ], JSON_UNESCAPED_UNICODE);
             }
 
-            // ✅ Get user_id from customer_profiles based on external_user_id + platform
-            $userId = null;
+            // ✅ Get customer_id from customer_profiles based on external_user_id + platform
+            $customerId = null;
             if ($externalUserId && $platform) {
                 $customerProfile = $this->db->queryOne(
-                    "SELECT id, user_id FROM customer_profiles WHERE platform_user_id = ? AND platform = ? LIMIT 1",
+                    "SELECT id FROM customer_profiles WHERE platform_user_id = ? AND platform = ? LIMIT 1",
                     [$externalUserId, $platform]
                 );
-                $userId = $customerProfile['user_id'] ?? $customerProfile['id'] ?? null;
+                $customerId = $customerProfile['id'] ?? null;
+            }
+
+            // ✅ Get user_id (shop owner) from channel
+            $userId = null;
+            if ($channelId) {
+                $channel = $this->db->queryOne(
+                    "SELECT user_id FROM customer_channels WHERE id = ? LIMIT 1",
+                    [$channelId]
+                );
+                $userId = $channel['user_id'] ?? null;
             }
 
             $this->db->execute(
                 "INSERT INTO cases (case_no, tenant_id, case_type, channel_id, external_user_id, 
-                 platform, session_id, subject, slots, products_interested, product_ref_id, user_id, status, priority, created_at, updated_at)
-                 VALUES (?, 'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', 'normal', NOW(), NOW())",
+                 platform, session_id, subject, slots, products_interested, product_ref_id, customer_id, user_id, status, priority, created_at, updated_at)
+                 VALUES (?, 'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', 'normal', NOW(), NOW())",
                 [
                     $caseNo,
                     $caseType,
@@ -221,6 +256,7 @@ class CaseEngine
                     json_encode($slots),
                     $productsInterested,
                     $slots['product_ref_id'] ?? ($slots['product_code'] ?? null),
+                    $customerId,
                     $userId
                 ]
             );
@@ -263,39 +299,76 @@ class CaseEngine
     }
 
     /**
-     * Update case slots
+     * Update case slots - Appends products to history instead of overwriting
      */
     public function updateCaseSlots(int $caseId, array $newSlots): bool
     {
         try {
-            $case = $this->db->queryOne("SELECT slots FROM cases WHERE id = ?", [$caseId]);
+            $case = $this->db->queryOne("SELECT slots, products_interested FROM cases WHERE id = ?", [$caseId]);
             if (!$case) {
                 return false;
             }
 
             $existingSlots = json_decode($case['slots'] ?? '{}', true) ?: [];
+            
+            // ✅ Handle products_history - append new product instead of overwrite
+            $productsHistory = $existingSlots['products_history'] ?? [];
+            
+            if (!empty($newSlots['product_ref_id']) || !empty($newSlots['product_name']) || !empty($newSlots['product_code'])) {
+                // Check if this product already exists in history (avoid duplicates)
+                $productRefId = $newSlots['product_ref_id'] ?? null;
+                $productCode = $newSlots['product_code'] ?? null;
+                $isDuplicate = false;
+                
+                foreach ($productsHistory as $existing) {
+                    if (($productRefId && $existing['product_ref_id'] === $productRefId) ||
+                        ($productCode && $existing['product_code'] === $productCode)) {
+                        $isDuplicate = true;
+                        break;
+                    }
+                }
+                
+                if (!$isDuplicate) {
+                    $productsHistory[] = [
+                        'idx' => count($productsHistory) + 1,
+                        'product_code' => $productCode,
+                        'product_ref_id' => $productRefId,
+                        'product_name' => $newSlots['product_name'] ?? null,
+                        'product_price' => $newSlots['product_price'] ?? null,
+                        'product_image_url' => $newSlots['product_image_url'] ?? ($newSlots['thumbnail_url'] ?? null),
+                        'product_brand' => $newSlots['product_brand'] ?? null,
+                        'searched_at' => date('Y-m-d H:i:s'),
+                    ];
+                }
+            }
+            
+            // Store products_history in slots
+            $newSlots['products_history'] = $productsHistory;
+            
+            // Remove individual product fields from top-level slots (use history instead)
+            // Keep them for backward compatibility but products_history is the source of truth
             $mergedSlots = array_merge($existingSlots, $newSlots);
 
-            // ✅ Update products_interested if product info is provided - include all product data
+            // ✅ Update products_interested (for admin view) - include ALL products from history
             $productsInterested = null;
-            if (!empty($mergedSlots['product_ref_id']) || !empty($mergedSlots['product_name']) || !empty($mergedSlots['product_code'])) {
-                $productsInterested = json_encode([
-                    [
-                        'product_code' => $mergedSlots['product_code'] ?? null,           // Customer-facing code
-                        'product_ref_id' => $mergedSlots['product_ref_id'] ?? null,       // Internal ref ID
-                        'product_name' => $mergedSlots['product_name'] ?? null,           // Product title
-                        'product_price' => $mergedSlots['product_price'] ?? null,         // Price
-                        'product_image_url' => $mergedSlots['product_image_url'] ?? ($mergedSlots['thumbnail_url'] ?? null), // Image
-                        'product_brand' => $mergedSlots['product_brand'] ?? null,         // Brand
+            if (!empty($productsHistory)) {
+                $productsInterested = json_encode(array_map(function($p) {
+                    return [
+                        'product_code' => $p['product_code'] ?? null,
+                        'product_ref_id' => $p['product_ref_id'] ?? null,
+                        'product_name' => $p['product_name'] ?? null,
+                        'product_price' => $p['product_price'] ?? null,
+                        'product_image_url' => $p['product_image_url'] ?? null,
+                        'product_brand' => $p['product_brand'] ?? null,
                         'interest_type' => 'inquired',
-                        'timestamp' => date('Y-m-d H:i:s'),
-                    ]
-                ], JSON_UNESCAPED_UNICODE);
+                        'timestamp' => $p['searched_at'] ?? date('Y-m-d H:i:s'),
+                    ];
+                }, $productsHistory), JSON_UNESCAPED_UNICODE);
             }
 
             $this->db->execute(
                 "UPDATE cases SET slots = ?, products_interested = COALESCE(?, products_interested), product_ref_id = COALESCE(?, product_ref_id), updated_at = NOW() WHERE id = ?",
-                [json_encode($mergedSlots), $productsInterested, $mergedSlots['product_ref_id'] ?? ($mergedSlots['product_code'] ?? null), $caseId]
+                [json_encode($mergedSlots, JSON_UNESCAPED_UNICODE), $productsInterested, $mergedSlots['product_ref_id'] ?? ($mergedSlots['product_code'] ?? null), $caseId]
             );
 
             // Log activity
@@ -303,7 +376,8 @@ class CaseEngine
 
             Logger::info('[CaseEngine] Case slots updated', [
                 'case_id' => $caseId,
-                'new_slots' => $newSlots
+                'products_count' => count($productsHistory),
+                'new_slots' => array_keys($newSlots)
             ]);
 
             return true;
@@ -311,6 +385,101 @@ class CaseEngine
         } catch (Exception $e) {
             Logger::error('[CaseEngine] Failed to update slots: ' . $e->getMessage());
             return false;
+        }
+    }
+
+    /**
+     * Select a product from history for checkout
+     */
+    public function selectProductFromHistory(int $caseId, $productIdentifier): ?array
+    {
+        try {
+            $case = $this->db->queryOne("SELECT slots FROM cases WHERE id = ?", [$caseId]);
+            if (!$case) {
+                return null;
+            }
+
+            $slots = json_decode($case['slots'] ?? '{}', true) ?: [];
+            $productsHistory = $slots['products_history'] ?? [];
+            
+            if (empty($productsHistory)) {
+                return null;
+            }
+
+            $selectedProduct = null;
+
+            // Try to match by index (e.g., "ตัวที่ 2", "รายการที่ 1")
+            if (is_numeric($productIdentifier)) {
+                $idx = (int)$productIdentifier;
+                foreach ($productsHistory as $p) {
+                    if (($p['idx'] ?? 0) === $idx) {
+                        $selectedProduct = $p;
+                        break;
+                    }
+                }
+            }
+            
+            // Try to match by product_ref_id
+            if (!$selectedProduct && is_string($productIdentifier)) {
+                foreach ($productsHistory as $p) {
+                    if ($p['product_ref_id'] === $productIdentifier || $p['product_code'] === $productIdentifier) {
+                        $selectedProduct = $p;
+                        break;
+                    }
+                }
+            }
+            
+            // Try to match by name (partial match)
+            if (!$selectedProduct && is_string($productIdentifier)) {
+                foreach ($productsHistory as $p) {
+                    if (stripos($p['product_name'] ?? '', $productIdentifier) !== false) {
+                        $selectedProduct = $p;
+                        break;
+                    }
+                }
+            }
+
+            if ($selectedProduct) {
+                // Update slots with selected product
+                $slots['selected_product'] = $selectedProduct;
+                $slots['product_ref_id'] = $selectedProduct['product_ref_id'];
+                $slots['product_code'] = $selectedProduct['product_code'];
+                $slots['product_name'] = $selectedProduct['product_name'];
+                $slots['product_price'] = $selectedProduct['product_price'];
+                $slots['product_image_url'] = $selectedProduct['product_image_url'];
+                
+                $this->db->execute(
+                    "UPDATE cases SET slots = ?, updated_at = NOW() WHERE id = ?",
+                    [json_encode($slots, JSON_UNESCAPED_UNICODE), $caseId]
+                );
+                
+                Logger::info('[CaseEngine] Product selected from history', [
+                    'case_id' => $caseId,
+                    'product_ref_id' => $selectedProduct['product_ref_id']
+                ]);
+            }
+
+            return $selectedProduct;
+        } catch (Exception $e) {
+            Logger::error('[CaseEngine] Failed to select product: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Get products history for a case
+     */
+    public function getProductsHistory(int $caseId): array
+    {
+        try {
+            $case = $this->db->queryOne("SELECT slots FROM cases WHERE id = ?", [$caseId]);
+            if (!$case) {
+                return [];
+            }
+            $slots = json_decode($case['slots'] ?? '{}', true) ?: [];
+            return $slots['products_history'] ?? [];
+        } catch (Exception $e) {
+            return [];
         }
     }
 
@@ -347,6 +516,145 @@ class CaseEngine
             Logger::error('[CaseEngine] Failed to update status: ' . $e->getMessage());
             return false;
         }
+    }
+
+    /**
+     * Resolve/Close a case when order is completed
+     */
+    public function resolveCase(int $caseId, string $resolutionType = 'completed', ?string $notes = null): bool
+    {
+        try {
+            $case = $this->db->queryOne("SELECT status FROM cases WHERE id = ?", [$caseId]);
+            if (!$case) {
+                return false;
+            }
+
+            $oldStatus = $case['status'];
+
+            $this->db->execute(
+                "UPDATE cases SET 
+                    status = 'resolved', 
+                    resolution_type = ?, 
+                    resolution_notes = ?,
+                    resolved_at = NOW(),
+                    updated_at = NOW() 
+                 WHERE id = ?",
+                [$resolutionType, $notes, $caseId]
+            );
+
+            $this->logCaseActivity(
+                $caseId,
+                'case_resolved',
+                ['status' => $oldStatus],
+                ['status' => 'resolved', 'resolution_type' => $resolutionType],
+                'bot'
+            );
+
+            Logger::info('[CaseEngine] Case resolved', [
+                'case_id' => $caseId,
+                'resolution_type' => $resolutionType
+            ]);
+
+            return true;
+
+        } catch (Exception $e) {
+            Logger::error('[CaseEngine] Failed to resolve case: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Link an order to a case
+     */
+    public function linkOrderToCase(int $caseId, int $orderId): bool
+    {
+        try {
+            $this->db->execute(
+                "UPDATE cases SET order_id = ?, updated_at = NOW() WHERE id = ?",
+                [$orderId, $caseId]
+            );
+
+            $this->logCaseActivity(
+                $caseId,
+                'order_linked',
+                null,
+                ['order_id' => $orderId],
+                'bot'
+            );
+
+            Logger::info('[CaseEngine] Order linked to case', [
+                'case_id' => $caseId,
+                'order_id' => $orderId
+            ]);
+
+            return true;
+
+        } catch (Exception $e) {
+            Logger::error('[CaseEngine] Failed to link order: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Link a payment to a case
+     */
+    public function linkPaymentToCase(int $caseId, int $paymentId): bool
+    {
+        try {
+            $this->db->execute(
+                "UPDATE cases SET payment_id = ?, updated_at = NOW() WHERE id = ?",
+                [$paymentId, $caseId]
+            );
+
+            $this->logCaseActivity(
+                $caseId,
+                'payment_linked',
+                null,
+                ['payment_id' => $paymentId],
+                'bot'
+            );
+
+            return true;
+
+        } catch (Exception $e) {
+            Logger::error('[CaseEngine] Failed to link payment: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Get active case for user (any type)
+     */
+    public function getActiveCase(int $channelId, string $externalUserId): ?array
+    {
+        try {
+            return $this->db->queryOne(
+                "SELECT * FROM cases 
+                 WHERE channel_id = ? AND external_user_id = ? 
+                 AND status NOT IN ('resolved', 'cancelled')
+                 ORDER BY updated_at DESC LIMIT 1",
+                [$channelId, $externalUserId]
+            );
+        } catch (Exception $e) {
+            return null;
+        }
+    }
+
+    /**
+     * Get active case ID from context
+     */
+    public function getActiveCaseId(): ?int
+    {
+        $channelId = $this->context['channel']['id'] ?? null;
+        $externalUserId = $this->context['external_user_id'] ?? 
+            ($this->context['user']['external_user_id'] ?? null);
+        
+        if (!$channelId || !$externalUserId) {
+            return null;
+        }
+
+        $case = $this->getActiveCase($channelId, $externalUserId);
+        return $case['id'] ?? null;
     }
 
     /**

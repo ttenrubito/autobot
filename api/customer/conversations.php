@@ -28,26 +28,64 @@ $uri_parts = explode('/', trim(parse_url($uri, PHP_URL_PATH), '/'));
 
 try {
     $pdo = getDB();
-    
+
+    // ✅ FIX: Get channel_ids owned by this user for data isolation
+    $channelStmt = $pdo->prepare("SELECT id FROM customer_channels WHERE user_id = ? AND status = 'active'");
+    $channelStmt->execute([$user_id]);
+    $userChannels = $channelStmt->fetchAll(PDO::FETCH_COLUMN);
+
+    // If user has no channels, return empty results
+    if (empty($userChannels)) {
+        if (isset($uri_parts[3]) && $uri_parts[3] !== 'stats') {
+            http_response_code(404);
+            echo json_encode(['success' => false, 'message' => 'Conversation not found']);
+            exit;
+        } elseif (end($uri_parts) === 'stats') {
+            echo json_encode([
+                'success' => true,
+                'data' => [
+                    'total_conversations' => 0,
+                    'total_messages' => 0,
+                    'line_count' => 0,
+                    'facebook_count' => 0,
+                    'last_activity' => null
+                ]
+            ]);
+            exit;
+        } else {
+            echo json_encode([
+                'success' => true,
+                'data' => [
+                    'conversations' => [],
+                    'pagination' => ['page' => 1, 'limit' => 20, 'total' => 0, 'total_pages' => 0]
+                ]
+            ]);
+            exit;
+        }
+    }
+
+    // Build channel_id IN clause
+    $channelPlaceholders = implode(',', array_fill(0, count($userChannels), '?'));
+
     if ($method === 'GET') {
         // Check if requesting messages for specific conversation
         if (isset($uri_parts[3]) && $uri_parts[3] !== 'stats') {
             // GET /api/customer/conversations/{id}/messages
             $conversation_id = $uri_parts[3];
-            
-            // Verify conversation belongs to user
+
+            // Verify conversation belongs to user's channels
             $stmt = $pdo->prepare("
                 SELECT id FROM conversations 
-                WHERE conversation_id = ? AND customer_id = ?
+                WHERE conversation_id = ? AND channel_id IN ({$channelPlaceholders})
             ");
-            $stmt->execute([$conversation_id, $user_id]);
-            
+            $stmt->execute(array_merge([$conversation_id], $userChannels));
+
             if (!$stmt->fetch()) {
                 http_response_code(404);
                 echo json_encode(['success' => false, 'message' => 'Conversation not found']);
                 exit;
             }
-            
+
             // Get messages
             $stmt = $pdo->prepare("
                 SELECT 
@@ -70,13 +108,13 @@ try {
             ");
             $stmt->execute([$conversation_id]);
             $messages = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            
+
             // Decode JSON fields
             foreach ($messages as &$msg) {
                 $msg['message_data'] = $msg['message_data'] ? json_decode($msg['message_data'], true) : null;
                 $msg['entities'] = $msg['entities'] ? json_decode($msg['entities'], true) : null;
             }
-            
+
             echo json_encode([
                 'success' => true,
                 'data' => [
@@ -85,7 +123,7 @@ try {
                     'count' => count($messages)
                 ]
             ]);
-            
+
         } elseif (end($uri_parts) === 'stats') {
             // GET /api/customer/conversations/stats
             $stmt = $pdo->prepare("
@@ -96,36 +134,36 @@ try {
                     SUM(CASE WHEN platform = 'facebook' THEN 1 ELSE 0 END) as facebook_count,
                     MAX(last_message_at) as last_activity
                 FROM conversations
-                WHERE customer_id = ?
+                WHERE channel_id IN ({$channelPlaceholders})
             ");
-            $stmt->execute([$user_id]);
+            $stmt->execute($userChannels);
             $stats = $stmt->fetch(PDO::FETCH_ASSOC);
-            
+
             echo json_encode([
                 'success' => true,
                 'data' => $stats
             ]);
-            
+
         } else {
             // GET /api/customer/conversations - List all conversations
-            $page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
-            $limit = isset($_GET['limit']) ? min(100, max(1, (int)$_GET['limit'])) : 20;
+            $page = isset($_GET['page']) ? max(1, (int) $_GET['page']) : 1;
+            $limit = isset($_GET['limit']) ? min(100, max(1, (int) $_GET['limit'])) : 20;
             $offset = ($page - 1) * $limit;
-            
+
             $platform = isset($_GET['platform']) ? $_GET['platform'] : null;
             $search = isset($_GET['search']) ? $_GET['search'] : null;
-            
-            // Build query
-            $where = ['customer_id = ?'];
-            $params = [$user_id];
-            
+
+            // Build query - filter by user's channel_ids
+            $where = ["channel_id IN ({$channelPlaceholders})"];
+            $params = $userChannels;
+
             if ($platform) {
                 $where[] = 'platform = ?';
                 $params[] = $platform;
             }
-            
+
             $where_clause = implode(' AND ', $where);
-            
+
             // Get total count
             $stmt = $pdo->prepare("
                 SELECT COUNT(*) as total
@@ -134,7 +172,7 @@ try {
             ");
             $stmt->execute($params);
             $total = $stmt->fetch(PDO::FETCH_ASSOC)['total'];
-            
+
             // Get conversations
             $stmt = $pdo->prepare("
                 SELECT 
@@ -156,13 +194,13 @@ try {
             $params[] = $offset;
             $stmt->execute($params);
             $conversations = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            
+
             // Decode JSON fields
             foreach ($conversations as &$conv) {
-                $conv['conversation_summary'] = $conv['conversation_summary'] ? 
+                $conv['conversation_summary'] = $conv['conversation_summary'] ?
                     json_decode($conv['conversation_summary'], true) : null;
             }
-            
+
             echo json_encode([
                 'success' => true,
                 'data' => [
@@ -180,7 +218,7 @@ try {
         http_response_code(405);
         echo json_encode(['success' => false, 'message' => 'Method not allowed']);
     }
-    
+
 } catch (Exception $e) {
     error_log("Conversations API Error: " . $e->getMessage());
     http_response_code(500);

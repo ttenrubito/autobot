@@ -50,6 +50,12 @@
 /* Responsive styles for tablets and below */
 @media (max-width: 768px) {
 
+    /* Prevent horizontal overflow from sidebar */
+    html,
+    body {
+        overflow-x: hidden !important;
+    }
+
     /* Show mobile menu button */
     .mobile-menu-toggle {
         display: flex !important;
@@ -136,6 +142,33 @@
 
     .stat-value {
         font-size: 1.5rem;
+    }
+
+    /* ✅ Mobile Page Header - Stack title and button vertically */
+    .page-header-content {
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: stretch !important;
+        gap: 0.75rem !important;
+    }
+
+    .page-header-content>div:first-child {
+        text-align: left;
+    }
+
+    /* Override style.css "width: auto !important" for primary action button */
+    .page-header-content .btn.btn-primary,
+    .page-header-content>.btn {
+        width: 100% !important;
+        max-width: 100% !important;
+        justify-content: center !important;
+        display: flex !important;
+        padding: 0.75rem 1rem !important;
+    }
+
+    /* Show button text on mobile for primary action */
+    .page-header-content .btn .btn-text {
+        display: inline !important;
     }
 }
 

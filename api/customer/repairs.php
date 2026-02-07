@@ -77,9 +77,11 @@ try {
             approveQuote($pdo, $user_id);
         } elseif ($action === 'pay') {
             submitPayment($pdo, $user_id);
+        } elseif ($action === 'create') {
+            createRepair($pdo, $user_id);
         } else {
             http_response_code(400);
-            echo json_encode(['success' => false, 'message' => 'Invalid action']);
+            echo json_encode(['success' => false, 'message' => 'Invalid action. Use action=create, action=approve, or action=pay']);
         }
     } else {
         http_response_code(405);
@@ -106,40 +108,46 @@ function getRepairsSchema($pdo)
         return $schema;
 
     try {
-        $stmt = $pdo->query("SHOW COLUMNS FROM repairs LIKE 'item_type'");
-        $hasItemType = $stmt->rowCount() > 0;
+        // Get all columns
+        $stmt = $pdo->query("SHOW COLUMNS FROM repairs");
+        $columns = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        
+        $hasItemType = in_array('item_type', $columns);
+        $hasCategory = in_array('category', $columns);
+        $hasEstimatedCost = in_array('estimated_cost', $columns);
+        $hasQuotedAmount = in_array('quoted_amount', $columns);
 
-        if ($hasItemType) {
-            // Production schema
-            $schema = [
-                'type' => 'production',
-                'name' => 'item_name',
-                'brand' => 'item_brand',
-                'model' => 'item_model',
-                'serial' => 'item_serial',
-                'issue' => 'problem_description',
-                'quoted' => 'estimated_cost',
-                'final' => 'final_cost',
-                'completed' => 'actual_completion_date',
-                'picked' => 'picked_up_date'
-            ];
-        } else {
-            // Localhost schema
-            $schema = [
-                'type' => 'localhost',
-                'name' => 'product_name',
-                'brand' => 'product_brand',
-                'model' => 'product_model',
-                'serial' => 'product_serial',
-                'issue' => 'issue_description',
-                'quoted' => 'estimated_cost',
-                'final' => 'final_cost',
-                'completed' => 'completed_at',
-                'picked' => 'delivered_at'
-            ];
-        }
+        $schema = [
+            'type' => $hasItemType ? 'production' : 'localhost',
+            'category_col' => $hasItemType ? 'item_type' : ($hasCategory ? 'category' : 'item_type'),
+            'cost_col' => $hasEstimatedCost ? 'estimated_cost' : ($hasQuotedAmount ? 'quoted_amount' : 'estimated_cost'),
+            'has_item_name' => in_array('item_name', $columns),
+            'has_brand' => in_array('brand', $columns) || in_array('item_brand', $columns),
+            'has_model' => in_array('model', $columns) || in_array('item_model', $columns),
+            'has_serial' => in_array('serial_number', $columns) || in_array('item_serial', $columns),
+            'has_condition' => in_array('received_condition', $columns) || in_array('item_condition', $columns),
+            // Field mappings
+            'name' => $hasItemType ? 'item_name' : 'product_name',
+            'brand' => in_array('brand', $columns) ? 'brand' : 'item_brand',
+            'model' => in_array('model', $columns) ? 'model' : 'item_model',
+            'serial' => in_array('serial_number', $columns) ? 'serial_number' : 'item_serial',
+            'issue' => in_array('issue_description', $columns) ? 'issue_description' : 'problem_description',
+            'quoted' => $hasEstimatedCost ? 'estimated_cost' : 'quoted_amount',
+            'final' => 'final_cost',
+            'completed' => $hasItemType ? 'actual_completion_date' : 'completed_at',
+            'picked' => $hasItemType ? 'picked_up_date' : 'delivered_at'
+        ];
     } catch (Exception $e) {
-        $schema = ['type' => 'production'];
+        $schema = [
+            'type' => 'production',
+            'category_col' => 'item_type',
+            'cost_col' => 'estimated_cost',
+            'has_item_name' => false,
+            'has_brand' => false,
+            'has_model' => false,
+            'has_serial' => false,
+            'has_condition' => false
+        ];
     }
 
     return $schema;
@@ -595,4 +603,124 @@ function submitPayment($pdo, $user_id)
         $pdo->rollBack();
         throw $e;
     }
+}
+
+/**
+ * Create new repair (เจ้าของร้านสร้างรายการซ่อมใหม่)
+ */
+function createRepair($pdo, $user_id)
+{
+    $input = json_decode(file_get_contents('php://input'), true);
+    
+    // Required fields
+    $required = ['customer_id', 'item_type', 'item_name', 'issue'];
+    foreach ($required as $field) {
+        if (empty($input[$field])) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => "กรุณากรอก: {$field}"]);
+            return;
+        }
+    }
+    
+    // Detect schema
+    $schema = getRepairsSchema($pdo);
+    
+    // Generate repair number
+    $stmt = $pdo->query("SELECT repair_no FROM repairs ORDER BY id DESC LIMIT 1");
+    $lastRepair = $stmt->fetch(PDO::FETCH_ASSOC);
+    $nextNum = 1;
+    if ($lastRepair && preg_match('/REP(\d+)/', $lastRepair['repair_no'], $matches)) {
+        $nextNum = (int) $matches[1] + 1;
+    }
+    $repairNo = 'REP' . str_pad($nextNum, 6, '0', STR_PAD_LEFT);
+    
+    // Get customer profile info
+    $customerStmt = $pdo->prepare("
+        SELECT id, platform, platform_user_id, display_name, full_name
+        FROM customer_profiles 
+        WHERE id = ?
+    ");
+    $customerStmt->execute([$input['customer_id']]);
+    $customer = $customerStmt->fetch(PDO::FETCH_ASSOC);
+    
+    // Get channel_id from customer_channels
+    $channelId = null;
+    if ($customer && $customer['platform']) {
+        $channelStmt = $pdo->prepare("
+            SELECT id FROM customer_channels 
+            WHERE user_id = ? AND platform = ? AND status = 'active'
+            LIMIT 1
+        ");
+        $channelStmt->execute([$user_id, $customer['platform']]);
+        $channel = $channelStmt->fetch(PDO::FETCH_ASSOC);
+        $channelId = $channel ? $channel['id'] : null;
+    }
+    
+    // Build insert based on schema
+    $categoryCol = $schema['category_col'];
+    $costCol = $schema['cost_col'];
+    
+    $insertCols = [
+        'repair_no', 'user_id', 'customer_profile_id', 'channel_id', 
+        'external_user_id', $categoryCol, 'item_description', 'issue_description', 
+        $costCol, 'status', 'estimated_completion_date', 'note', 'created_at'
+    ];
+    $insertValues = [
+        $repairNo,
+        $user_id,
+        $input['customer_id'],
+        $channelId,
+        $customer ? $customer['platform_user_id'] : null,
+        $input['item_type'],
+        $input['item_name'] . (!empty($input['item_description']) ? ' - ' . $input['item_description'] : ''),
+        $input['issue'],
+        $input['estimated_cost'] ?? 0,
+        'pending',
+        !empty($input['estimated_completion_date']) ? $input['estimated_completion_date'] : null,
+        $input['notes'] ?? null,
+    ];
+    
+    // Add optional columns if schema supports
+    if ($schema['has_item_name']) {
+        $insertCols[] = 'item_name';
+        $insertValues[] = $input['item_name'];
+    }
+    if ($schema['has_brand'] && !empty($input['item_brand'])) {
+        $insertCols[] = 'brand';
+        $insertValues[] = $input['item_brand'];
+    }
+    if ($schema['has_model'] && !empty($input['item_model'])) {
+        $insertCols[] = 'model';
+        $insertValues[] = $input['item_model'];
+    }
+    if ($schema['has_serial'] && !empty($input['item_serial'])) {
+        $insertCols[] = 'serial_number';
+        $insertValues[] = $input['item_serial'];
+    }
+    if ($schema['has_condition'] && !empty($input['item_condition'])) {
+        $insertCols[] = 'received_condition';
+        $insertValues[] = $input['item_condition'];
+    }
+    
+    $placeholders = array_fill(0, count($insertCols), '?');
+    // Fix NOW() for created_at
+    $placeholders[count($placeholders) - 1] = 'NOW()';
+    array_pop($insertValues); // Remove the created_at value
+    
+    $sql = "INSERT INTO repairs (" . implode(', ', $insertCols) . ") VALUES (" . implode(', ', $placeholders) . ")";
+    
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($insertValues);
+    
+    $repairId = $pdo->lastInsertId();
+    
+    http_response_code(201);
+    echo json_encode([
+        'success' => true,
+        'message' => 'บันทึกรายการซ่อมสำเร็จ',
+        'data' => [
+            'id' => $repairId,
+            'repair_no' => $repairNo
+        ]
+    ]);
 }

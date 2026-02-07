@@ -186,13 +186,17 @@ try {
         }
         $repairNo = 'REP' . str_pad($nextNum, 6, '0', STR_PAD_LEFT);
 
-        // Insert repair
-        $sql = "INSERT INTO repairs (
-                    repair_no, customer_id, {$categoryCol}, item_description,
-                    issue, {$costCol}, status, estimated_completion_date, notes, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, NOW())";
+        // Insert repair - build dynamic SQL based on available columns
+        $hasItemBrand = in_array('item_brand', $columns);
+        $hasItemModel = in_array('item_model', $columns);
+        $hasItemSerial = in_array('item_serial', $columns);
+        $hasItemCondition = in_array('item_condition', $columns);
+        $hasItemName = in_array('item_name', $columns);
 
-        $db->execute($sql, [
+        // Build column and value lists dynamically
+        $insertCols = ['repair_no', 'customer_id', $categoryCol, 'item_description', 'issue', $costCol, 'status', 'estimated_completion_date', 'notes', 'created_at'];
+        $insertPlaceholders = ['?', '?', '?', '?', '?', '?', "'pending'", '?', '?', 'NOW()'];
+        $insertValues = [
             $repairNo,
             $input['customer_id'],
             $input['item_type'],
@@ -201,7 +205,40 @@ try {
             $input['estimated_cost'] ?? 0,
             $input['estimated_completion_date'] ?? null,
             $input['notes'] ?? null
-        ]);
+        ];
+
+        // Add item_name if column exists
+        if ($hasItemName) {
+            $insertCols[] = 'item_name';
+            $insertPlaceholders[] = '?';
+            $insertValues[] = $input['item_name'];
+        }
+
+        // Add optional new fields if columns exist
+        if ($hasItemBrand && !empty($input['item_brand'])) {
+            $insertCols[] = 'item_brand';
+            $insertPlaceholders[] = '?';
+            $insertValues[] = $input['item_brand'];
+        }
+        if ($hasItemModel && !empty($input['item_model'])) {
+            $insertCols[] = 'item_model';
+            $insertPlaceholders[] = '?';
+            $insertValues[] = $input['item_model'];
+        }
+        if ($hasItemSerial && !empty($input['item_serial'])) {
+            $insertCols[] = 'item_serial';
+            $insertPlaceholders[] = '?';
+            $insertValues[] = $input['item_serial'];
+        }
+        if ($hasItemCondition && !empty($input['item_condition'])) {
+            $insertCols[] = 'item_condition';
+            $insertPlaceholders[] = '?';
+            $insertValues[] = $input['item_condition'];
+        }
+
+        $sql = "INSERT INTO repairs (" . implode(', ', $insertCols) . ") VALUES (" . implode(', ', $insertPlaceholders) . ")";
+
+        $db->execute($sql, $insertValues);
 
         $repairId = $db->lastInsertId();
 

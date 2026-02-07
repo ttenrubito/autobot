@@ -1273,6 +1273,32 @@ tbody td {
     font-size: 1.5rem;
   }
 
+  /* ✅ Mobile Page Header - Stack title and button vertically */
+  .page-header-content {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 0.75rem;
+  }
+
+  .page-header-content>div:first-child {
+    text-align: left;
+  }
+
+  .page-header-content .btn,
+  .page-header-content .btn.btn-primary,
+  .page-header-content>.btn {
+    width: 100% !important;
+    max-width: 100% !important;
+    justify-content: center;
+    display: flex;
+    padding: 0.75rem 1rem;
+  }
+
+  /* Show button text on mobile */
+  .page-header-content .btn .btn-text {
+    display: inline !important;
+  }
+
   /* Grid */
   .row {
     margin: 0;
@@ -2431,6 +2457,7 @@ tbody td {
     margin-left: 0;
   }
 }
+
 /* ========================================
    TEMPLATE SELECTION CARDS
 ======================================== */

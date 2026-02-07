@@ -32,9 +32,10 @@ try {
 
     $db = Database::getInstance();
     $method = $_SERVER['REQUEST_METHOD'];
-    
+
     // Detect schema for compatibility
-    function getDepositsColumns() {
+    function getDepositsColumns()
+    {
         global $db;
         try {
             $columns = $db->query("SHOW COLUMNS FROM deposits");
@@ -44,19 +45,19 @@ try {
             return [];
         }
     }
-    
+
     $columns = getDepositsColumns();
     $hasProductName = in_array('product_name', $columns);
     $hasItemName = in_array('item_name', $columns);
-    
+
     // GET - List or Get Single
     if ($method === 'GET') {
         $id = $_GET['id'] ?? null;
-        
+
         if ($id) {
             // Get single deposit with details
             $nameColumn = $hasProductName ? 'product_name' : ($hasItemName ? 'item_name' : 'product_name');
-            
+
             $deposit = $db->queryOne(
                 "SELECT d.*, 
                         d.{$nameColumn} as item_name,
@@ -67,13 +68,13 @@ try {
                  WHERE d.id = ?",
                 [$id]
             );
-            
+
             if (!$deposit) {
                 http_response_code(404);
                 echo json_encode(['success' => false, 'message' => 'Deposit not found']);
                 exit;
             }
-            
+
             http_response_code(200);
             echo json_encode([
                 'success' => true,
@@ -81,30 +82,30 @@ try {
             ]);
         } else {
             // List all deposits with pagination and filters
-            $page = max(1, (int)($_GET['page'] ?? 1));
-            $perPage = (int)($_GET['limit'] ?? 20);
+            $page = max(1, (int) ($_GET['page'] ?? 1));
+            $perPage = (int) ($_GET['limit'] ?? 20);
             $offset = ($page - 1) * $perPage;
             $status = $_GET['status'] ?? '';
             $search = $_GET['search'] ?? '';
-            
+
             $nameColumn = $hasProductName ? 'd.product_name' : ($hasItemName ? 'd.item_name' : 'd.product_name');
-            
+
             $where = [];
             $params = [];
-            
+
             if ($status) {
                 $where[] = "d.status = ?";
                 $params[] = $status;
             }
-            
+
             if ($search) {
                 $where[] = "(d.deposit_no LIKE ? OR c.display_name LIKE ? OR c.full_name LIKE ? OR {$nameColumn} LIKE ?)";
                 $searchParam = "%{$search}%";
                 $params = array_merge($params, [$searchParam, $searchParam, $searchParam, $searchParam]);
             }
-            
+
             $whereClause = $where ? "WHERE " . implode(" AND ", $where) : "";
-            
+
             // Get total count
             $countResult = $db->queryOne(
                 "SELECT COUNT(*) as total FROM deposits d
@@ -113,7 +114,7 @@ try {
                 $params
             );
             $total = $countResult['total'] ?? 0;
-            
+
             // Get deposits
             $deposits = $db->query(
                 "SELECT d.id, d.deposit_no, d.customer_id, d.status, d.deposit_amount,
@@ -128,7 +129,7 @@ try {
                  LIMIT ? OFFSET ?",
                 array_merge($params, [$perPage, $offset])
             );
-            
+
             // Get summary
             $summary = $db->queryOne(
                 "SELECT 
@@ -137,7 +138,7 @@ try {
                     SUM(CASE WHEN status = 'deposited' THEN deposit_amount ELSE 0 END) as deposited_amount
                  FROM deposits"
             );
-            
+
             http_response_code(200);
             echo json_encode([
                 'success' => true,
@@ -152,11 +153,11 @@ try {
             ]);
         }
     }
-    
+
     // POST - Create Deposit
     elseif ($method === 'POST') {
         $input = json_decode(file_get_contents('php://input'), true);
-        
+
         // Validate required fields
         $required = ['customer_id', 'item_type', 'item_name', 'deposit_amount'];
         foreach ($required as $field) {
@@ -166,30 +167,34 @@ try {
                 exit;
             }
         }
-        
+
         // Generate deposit number
         $lastDeposit = $db->queryOne(
             "SELECT deposit_no FROM deposits ORDER BY id DESC LIMIT 1"
         );
         $nextNum = 1;
         if ($lastDeposit && preg_match('/DEP(\d+)/', $lastDeposit['deposit_no'], $matches)) {
-            $nextNum = (int)$matches[1] + 1;
+            $nextNum = (int) $matches[1] + 1;
         }
         $depositNo = 'DEP' . str_pad($nextNum, 6, '0', STR_PAD_LEFT);
-        
+
         // Determine column names based on schema
         $nameColumn = $hasProductName ? 'product_name' : 'item_name';
         $descColumn = in_array('product_description', $columns) ? 'product_description' : 'item_description';
-        
-        // Insert deposit
+
+        // ✅ Get shop_owner_id from AdminAuth (logged-in admin user)
+        $shopOwnerId = AdminAuth::id();
+
+        // Insert deposit with shop_owner_id for data isolation
         $sql = "INSERT INTO deposits (
-                    deposit_no, customer_id, {$nameColumn}, {$descColumn},
+                    deposit_no, customer_id, shop_owner_id, {$nameColumn}, {$descColumn},
                     item_type, deposit_amount, status, expected_pickup_date, notes, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'deposited', ?, ?, NOW())";
-        
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'deposited', ?, ?, NOW())";
+
         $db->execute($sql, [
             $depositNo,
             $input['customer_id'],
+            $shopOwnerId,  // ✅ shop_owner_id for data isolation
             $input['item_name'],
             $input['item_description'] ?? null,
             $input['item_type'],
@@ -197,9 +202,9 @@ try {
             $input['expected_pickup_date'] ?? null,
             $input['notes'] ?? null
         ]);
-        
+
         $depositId = $db->lastInsertId();
-        
+
         http_response_code(201);
         echo json_encode([
             'success' => true,
@@ -210,7 +215,7 @@ try {
             ]
         ]);
     }
-    
+
     // PUT - Update Deposit
     elseif ($method === 'PUT') {
         $id = $_GET['id'] ?? null;
@@ -219,12 +224,12 @@ try {
             echo json_encode(['success' => false, 'message' => 'Deposit ID required']);
             exit;
         }
-        
+
         $input = json_decode(file_get_contents('php://input'), true);
-        
+
         $updates = [];
         $params = [];
-        
+
         $allowedFields = ['status', 'deposit_amount', 'notes', 'expected_pickup_date'];
         foreach ($allowedFields as $field) {
             if (isset($input[$field])) {
@@ -232,23 +237,23 @@ try {
                 $params[] = $input[$field];
             }
         }
-        
+
         if (empty($updates)) {
             http_response_code(400);
             echo json_encode(['success' => false, 'message' => 'No fields to update']);
             exit;
         }
-        
+
         $params[] = $id;
         $db->execute(
             "UPDATE deposits SET " . implode(", ", $updates) . ", updated_at = NOW() WHERE id = ?",
             $params
         );
-        
+
         http_response_code(200);
         echo json_encode(['success' => true, 'message' => 'อัพเดทสำเร็จ']);
     }
-    
+
     // DELETE - Delete Deposit
     elseif ($method === 'DELETE') {
         $id = $_GET['id'] ?? null;
@@ -257,14 +262,12 @@ try {
             echo json_encode(['success' => false, 'message' => 'Deposit ID required']);
             exit;
         }
-        
+
         $db->execute("DELETE FROM deposits WHERE id = ?", [$id]);
-        
+
         http_response_code(200);
         echo json_encode(['success' => true, 'message' => 'ลบสำเร็จ']);
-    }
-    
-    else {
+    } else {
         http_response_code(405);
         echo json_encode(['success' => false, 'message' => 'Method not allowed']);
     }

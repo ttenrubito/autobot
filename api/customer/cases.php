@@ -19,11 +19,24 @@ header('Cache-Control: no-cache, must-revalidate');
 require_once __DIR__ . '/../../config.php';
 require_once __DIR__ . '/../../includes/auth.php';
 
+// Debug: Log incoming auth attempt
+$debugHeaders = getallheaders();
+$authHeader = $debugHeaders['Authorization'] ?? $debugHeaders['authorization'] ?? $_SERVER['HTTP_AUTHORIZATION'] ?? 'NOT_FOUND';
+error_log("[Customer Cases API] Auth header: " . substr($authHeader, 0, 50) . "...");
+
 // Verify authentication
 $auth = verifyToken();
 if (!$auth['valid']) {
+    error_log("[Customer Cases API] Auth failed: " . json_encode($auth));
     http_response_code(401);
-    echo json_encode(['success' => false, 'message' => 'Unauthorized']);
+    echo json_encode([
+        'success' => false, 
+        'message' => 'Unauthorized',
+        'debug' => [
+            'auth_header_present' => $authHeader !== 'NOT_FOUND',
+            'error' => $auth['error'] ?? 'Token invalid or expired'
+        ]
+    ]);
     ob_end_flush();
     exit;
 }
@@ -74,33 +87,66 @@ try {
 
 /**
  * Get all cases for user's channels (เจ้าของร้านดู cases ของ channel ตัวเอง)
+ * OR cases created by this user directly (customer portal)
  */
 function getAllCases($pdo, $user_id, $userChannels) {
     $status = $_GET['status'] ?? null;
     $priority = $_GET['priority'] ?? null;
+    
+    // ✅ NEW: Date filter - default to today for daily monitoring
+    $dateFrom = $_GET['date_from'] ?? null;
+    $dateTo = $_GET['date_to'] ?? null;
+    $datePreset = $_GET['date_preset'] ?? 'today'; // today, week, month, all
+    
+    // Apply date preset if no explicit dates
+    if (!$dateFrom && !$dateTo) {
+        switch ($datePreset) {
+            case 'today':
+                $dateFrom = date('Y-m-d');
+                $dateTo = date('Y-m-d');
+                break;
+            case 'week':
+                $dateFrom = date('Y-m-d', strtotime('-7 days'));
+                $dateTo = date('Y-m-d');
+                break;
+            case 'month':
+                $dateFrom = date('Y-m-d', strtotime('-30 days'));
+                $dateTo = date('Y-m-d');
+                break;
+            case 'all':
+                // No date filter
+                break;
+        }
+    }
     
     // Pagination
     $page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
     $limit = isset($_GET['limit']) ? min(100, max(1, (int)$_GET['limit'])) : 20;
     $offset = ($page - 1) * $limit;
     
-    // ✅ FIX: Filter by user's channel_ids instead of tenant_id
-    if (empty($userChannels)) {
-        // User has no channels, return empty
-        echo json_encode([
-            'success' => true,
-            'data' => [
-                'cases' => [],
-                'summary' => ['total' => 0, 'open' => 0, 'in_progress' => 0, 'pending_admin' => 0, 'pending_customer' => 0, 'resolved' => 0, 'cancelled' => 0],
-                'pagination' => ['page' => 1, 'limit' => $limit, 'total' => 0, 'total_pages' => 0]
-            ]
-        ]);
-        return;
+    // ✅ FIX: Filter by user's channel_ids OR user_id (for customer portal cases)
+    $where = [];
+    $params = [];
+    
+    if (!empty($userChannels)) {
+        $channelPlaceholders = implode(',', array_fill(0, count($userChannels), '?'));
+        $where[] = "(c.channel_id IN ({$channelPlaceholders}) OR c.user_id = ?)";
+        $params = array_merge($userChannels, [$user_id]);
+    } else {
+        // User has no channels - only show their own cases (customer portal)
+        $where[] = "c.user_id = ?";
+        $params[] = $user_id;
     }
     
-    $channelPlaceholders = implode(',', array_fill(0, count($userChannels), '?'));
-    $where = ["c.channel_id IN ({$channelPlaceholders})"];
-    $params = $userChannels;
+    // ✅ NEW: Apply date filters
+    if ($dateFrom) {
+        $where[] = 'DATE(c.created_at) >= ?';
+        $params[] = $dateFrom;
+    }
+    if ($dateTo) {
+        $where[] = 'DATE(c.created_at) <= ?';
+        $params[] = $dateTo;
+    }
     
     if ($status) {
         $where[] = 'c.status = ?';
@@ -160,24 +206,57 @@ function getAllCases($pdo, $user_id, $userChannels) {
     $stmt->execute($params);
     $cases = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // ✅ FIX: Calculate summary from user's channels (not tenant_id)
+    // ✅ FIX: Calculate summary using same filter logic (channels OR user_id + date filter)
+    // Rebuild params without pagination for summary query
+    $summaryParams = [];
+    $summaryWhereParts = [];
+    
+    if (!empty($userChannels)) {
+        $channelPlaceholders = implode(',', array_fill(0, count($userChannels), '?'));
+        $summaryWhereParts[] = "(channel_id IN ({$channelPlaceholders}) OR user_id = ?)";
+        $summaryParams = array_merge($userChannels, [$user_id]);
+    } else {
+        $summaryWhereParts[] = "user_id = ?";
+        $summaryParams = [$user_id];
+    }
+    
+    // ✅ Apply same date filter to summary
+    if ($dateFrom) {
+        $summaryWhereParts[] = 'DATE(created_at) >= ?';
+        $summaryParams[] = $dateFrom;
+    }
+    if ($dateTo) {
+        $summaryWhereParts[] = 'DATE(created_at) <= ?';
+        $summaryParams[] = $dateTo;
+    }
+    
+    $summaryWhere = implode(' AND ', $summaryWhereParts);
+    
     $summaryStmt = $pdo->prepare("
         SELECT status, COUNT(*) as count 
         FROM cases 
-        WHERE channel_id IN ({$channelPlaceholders})
+        WHERE {$summaryWhere}
         GROUP BY status
     ");
-    $summaryStmt->execute($userChannels);
+    $summaryStmt->execute($summaryParams);
     $statusCounts = $summaryStmt->fetchAll(PDO::FETCH_KEY_PAIR);
     
+    // ✅ Calculate filtered total for summary
+    $filteredTotal = array_sum($statusCounts);
+    
     $summary = [
-        'total' => $total,
+        'total' => $filteredTotal,  // ✅ Use filtered total instead of pagination total
         'open' => (int)($statusCounts['open'] ?? 0),
         'in_progress' => (int)($statusCounts['in_progress'] ?? 0),
         'pending_admin' => (int)($statusCounts['pending_admin'] ?? 0),
         'pending_customer' => (int)($statusCounts['pending_customer'] ?? 0),
         'resolved' => (int)($statusCounts['resolved'] ?? 0),
-        'cancelled' => (int)($statusCounts['cancelled'] ?? 0)
+        'cancelled' => (int)($statusCounts['cancelled'] ?? 0),
+        'date_range' => [
+            'from' => $dateFrom,
+            'to' => $dateTo,
+            'preset' => $datePreset
+        ]
     ];
     
     echo json_encode([
@@ -197,18 +276,18 @@ function getAllCases($pdo, $user_id, $userChannels) {
 
 /**
  * Get specific case detail
- * ✅ FIX: Use channel_id to filter cases (user can only see their own channels' cases)
+ * ✅ FIX: Use channel_id OR user_id to filter cases
  */
 function getCaseDetail($pdo, $case_id, $user_id, $userChannels) {
-    // ✅ Security check: Only allow if case belongs to user's channels
-    if (empty($userChannels)) {
-        http_response_code(403);
-        echo json_encode(['success' => false, 'message' => 'No channels found for user']);
-        return;
+    // Build security filter: case must belong to user's channels OR be created by user
+    if (!empty($userChannels)) {
+        $channelPlaceholders = implode(',', array_fill(0, count($userChannels), '?'));
+        $securityWhere = "(c.channel_id IN ({$channelPlaceholders}) OR c.user_id = ?)";
+        $params = array_merge([$case_id], $userChannels, [$user_id]);
+    } else {
+        $securityWhere = "c.user_id = ?";
+        $params = [$case_id, $user_id];
     }
-    
-    $channelPlaceholders = implode(',', array_fill(0, count($userChannels), '?'));
-    $params = array_merge([$case_id], $userChannels);
     
     $stmt = $pdo->prepare("
         SELECT 
@@ -230,7 +309,7 @@ function getCaseDetail($pdo, $case_id, $user_id, $userChannels) {
         LEFT JOIN payments p ON c.payment_id = p.id
         LEFT JOIN savings_accounts sa ON c.savings_account_id = sa.id
         LEFT JOIN users u ON c.assigned_to = u.id
-        WHERE c.id = ? AND c.channel_id IN ({$channelPlaceholders})
+        WHERE c.id = ? AND {$securityWhere}
     ");
     $stmt->execute($params);
     $case = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -307,10 +386,10 @@ function createCase($pdo, $tenant_id, $user_id) {
     // Generate case number
     $case_no = 'CASE-' . date('Ymd') . '-' . str_pad(mt_rand(1, 9999), 4, '0', STR_PAD_LEFT);
     
-    // Get channel_id for this customer
+    // Get channel_id for this customer from customer_channels (not customer_services)
     $channel_id = null;
     try {
-        $stmt = $pdo->prepare("SELECT id FROM customer_services WHERE user_id = ? LIMIT 1");
+        $stmt = $pdo->prepare("SELECT id FROM customer_channels WHERE user_id = ? AND is_deleted = 0 LIMIT 1");
         $stmt->execute([$user_id]);
         $channel = $stmt->fetch(PDO::FETCH_ASSOC);
         if ($channel) {
@@ -327,11 +406,11 @@ function createCase($pdo, $tenant_id, $user_id) {
     
     $stmt = $pdo->prepare("
         INSERT INTO cases (
-            case_no, tenant_id, channel_id, external_user_id, platform,
+            case_no, tenant_id, channel_id, user_id, external_user_id, platform,
             case_type, subject, description, priority, status,
             order_id, payment_id, created_at
         ) VALUES (
-            ?, ?, ?, ?, 'web',
+            ?, ?, ?, ?, ?, 'web',
             ?, ?, ?, ?, 'open',
             ?, ?, NOW()
         )
@@ -341,6 +420,7 @@ function createCase($pdo, $tenant_id, $user_id) {
         $case_no,
         $tenant_id,
         $channel_id,
+        $user_id,  // ✅ NEW: Store user_id for filtering
         'web_user_' . $user_id,
         $case_type,
         $subject,

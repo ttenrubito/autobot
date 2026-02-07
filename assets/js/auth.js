@@ -108,9 +108,9 @@ async function login(email, password, remember) {
     }
 }
 
-// Logout Handler
-function logout() {
-    // Clear both customer and admin tokens
+// Clear all tokens from storage (used by logout and session expiry)
+function clearAllTokens() {
+    // Clear both customer and admin tokens from all storage
     localStorage.removeItem('auth_token');
     localStorage.removeItem('user_data');
     localStorage.removeItem('admin_token');
@@ -119,18 +119,47 @@ function logout() {
     sessionStorage.removeItem('user_data');
     sessionStorage.removeItem('admin_token');
     sessionStorage.removeItem('admin_data');
+    
+    console.log('[Auth] All tokens cleared');
+}
 
-    // Redirect based on current location using PAGES constants
+// Get login page URL based on current location
+function getLoginPageUrl() {
     try {
         if (window.location.pathname.includes('/admin/')) {
-            window.location.href = (typeof PAGES !== 'undefined' && PAGES.ADMIN_LOGIN) ? PAGES.ADMIN_LOGIN : 'admin/login.html';
+            return (typeof PAGES !== 'undefined' && PAGES.ADMIN_LOGIN) ? PAGES.ADMIN_LOGIN : '/admin/login.html';
         } else {
-            window.location.href = (typeof PAGES !== 'undefined' && PAGES.USER_LOGIN) ? PAGES.USER_LOGIN : 'login.html';
+            return (typeof PAGES !== 'undefined' && PAGES.USER_LOGIN) ? PAGES.USER_LOGIN : '/login.html';
         }
     } catch (e) {
-        // Fallback
-        window.location.href = window.location.pathname.includes('/admin/') ? 'admin/login.html' : 'login.html';
+        return window.location.pathname.includes('/admin/') ? '/admin/login.html' : '/login.html';
     }
+}
+
+// Handle session expired - clear tokens, show message, redirect
+function handleSessionExpired(message = 'Session หมดอายุ กรุณาเข้าสู่ระบบใหม่') {
+    console.warn('[Auth] Session expired, cleaning up...');
+    
+    // Clear all tokens first
+    clearAllTokens();
+    
+    // Show message
+    if (typeof showToast === 'function') {
+        showToast(message, 'warning');
+    } else {
+        alert(message);
+    }
+    
+    // Redirect after short delay to allow toast to show
+    setTimeout(() => {
+        window.location.href = getLoginPageUrl();
+    }, 500);
+}
+
+// Logout Handler
+function logout() {
+    clearAllTokens();
+    window.location.href = getLoginPageUrl();
 }
 
 // Get stored token
@@ -209,8 +238,12 @@ async function apiCall(endpoint, options = {}) {
 
         // Handle unauthorized (token expired or invalid)
         if (response.status === 401) {
-            logout();
-            return null;
+            console.warn('API returned 401 Unauthorized:', url);
+            
+            // Use centralized session expired handler (clears all tokens + redirects)
+            handleSessionExpired();
+            
+            return { success: false, message: 'Session หมดอายุ', status: 401, redirecting: true };
         }
 
         // Read as text first to avoid "Unexpected end of JSON" masking server errors
@@ -404,9 +437,9 @@ async function adminApiCall(endpoint, options = {}) {
         
         if (response.status === 401) {
             console.error('Admin session expired');
-            localStorage.removeItem('admin_token');
-            window.location.href = 'login.html';
-            return { success: false, message: 'Session expired' };
+            // Use centralized session expired handler
+            handleSessionExpired('Admin session หมดอายุ กรุณาเข้าสู่ระบบใหม่');
+            return { success: false, message: 'Session expired', redirecting: true };
         }
         
         return data;

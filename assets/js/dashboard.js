@@ -1,6 +1,6 @@
 /**
  * Dashboard JavaScript
- * Loads and displays dashboard statistics
+ * Business-focused dashboard for e-commerce chatbot
  */
 
 // Require authentication
@@ -9,15 +9,25 @@ requireAuth();
 // Load user info and stats on page load
 document.addEventListener('DOMContentLoaded', async () => {
     await loadUserInfo();
+    setTodayDate();
     await loadDashboardStats();
 });
+
+// Set today's date in header
+function setTodayDate() {
+    const dateEl = document.getElementById('todayDate');
+    if (dateEl) {
+        const today = new Date();
+        const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+        dateEl.textContent = today.toLocaleDateString('th-TH', options);
+    }
+}
 
 // Load user information
 async function loadUserInfo() {
     const userData = getUserData();
     if (!userData) return;
 
-    // Update sidebar user info with null checks
     const userNameEl = document.getElementById('userName');
     const userEmailEl = document.getElementById('userEmail');
     const userAvatarEl = document.getElementById('userAvatar');
@@ -34,127 +44,174 @@ async function loadUserInfo() {
 // Load dashboard statistics
 async function loadDashboardStats() {
     console.log('🔧 [dashboard] Loading dashboard stats...');
-    console.log('🔧 [dashboard] API endpoint:', API_ENDPOINTS?.DASHBOARD_STATS);
 
-    // Safe fallback for showLoading
-    if (typeof showLoading === 'function') {
-        showLoading();
-    } else {
-        console.log('⏳ [dashboard] Loading...');
-    }
+    if (typeof showLoading === 'function') showLoading();
 
     try {
-        // Check if API_ENDPOINTS exists
         if (typeof API_ENDPOINTS === 'undefined' || !API_ENDPOINTS.DASHBOARD_STATS) {
             throw new Error('API_ENDPOINTS.DASHBOARD_STATS is not defined');
         }
 
-        // Use centralized endpoint so it correctly resolves to /api/dashboard/stats.php
         const response = await apiCall(API_ENDPOINTS.DASHBOARD_STATS);
-
         console.log('📊 [dashboard] API response:', response);
 
         if (response && response.success) {
             const data = response.data;
-            console.log('✅ [dashboard] Data received:', {
-                overview: data.overview,
-                usage_trend_count: data.usage_trend?.length || 0,
-                service_breakdown_count: data.service_breakdown?.length || 0,
-                recent_activities_count: data.recent_activities?.length || 0
-            });
-
-            // Update overview cards
-            updateOverviewCards(data.overview || {});
-
-            // Update usage trend chart
-            updateUsageTrendChart(data.usage_trend || []);
-
-            // Update service breakdown table
-            updateServiceBreakdown(data.service_breakdown || []);
-
-            // Update recent activities
-            updateRecentActivities(data.recent_activities || []);
+            
+            // Update Today's Highlight
+            updateTodayHighlight(data.today || {});
+            
+            // Update Weekly Stats
+            updateWeeklyStats(data.weekly || {});
+            
+            // Update Action Items
+            updateActionItems(data.action_items || {});
+            
+            // Update Revenue Chart
+            updateRevenueChart(data.usage_trend || []);
+            
+            // Update Pending Slips Table
+            updatePendingSlips(data.pending_slips_list || []);
+            
+            // Update Recent Orders
+            updateRecentOrders(data.recent_orders || []);
+        } else if (response && response.status === 401) {
+            // Token expired - will be handled by apiCall redirect
+            console.warn('⚠️ [dashboard] Token expired, redirecting to login...');
         } else {
             console.warn('⚠️ [dashboard] API returned no success:', response);
-            // Show empty states
-            updateOverviewCards({});
-            updateServiceBreakdown([]);
-            updateRecentActivities([]);
         }
     } catch (error) {
         console.error('❌ [dashboard] Failed to load dashboard stats:', error);
-
-        // Safe fallback for showToast
         if (typeof showToast === 'function') {
             showToast('ไม่สามารถโหลดข้อมูลได้', 'error');
-        } else {
-            console.error('❌ [dashboard] Cannot show toast - showToast not defined');
         }
-
-        // Show empty states on error
-        updateOverviewCards({});
-        updateServiceBreakdown([]);
-        updateRecentActivities([]);
     } finally {
-        // Safe fallback for hideLoading
-        if (typeof hideLoading === 'function') {
-            hideLoading();
+        if (typeof hideLoading === 'function') hideLoading();
+    }
+}
+
+// Update Today's Highlight cards
+function updateTodayHighlight(today) {
+    const setEl = (id, value) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = value;
+    };
+
+    // Today's Revenue
+    setEl('todayRevenue', formatCurrency(today.revenue || 0));
+    setEl('todayOrders', formatNumber(today.orders || 0));
+    setEl('pendingSlips', formatNumber(today.pending_slips || 0));
+
+    // Revenue comparison
+    const revenueCompareEl = document.getElementById('revenueCompare');
+    if (revenueCompareEl) {
+        const diff = (today.revenue || 0) - (today.revenue_yesterday || 0);
+        if (diff > 0) {
+            revenueCompareEl.textContent = `+${formatCurrency(diff)} จากเมื่อวาน`;
+            revenueCompareEl.className = 'highlight-compare up';
+        } else if (diff < 0) {
+            revenueCompareEl.textContent = `${formatCurrency(diff)} จากเมื่อวาน`;
+            revenueCompareEl.className = 'highlight-compare down';
         } else {
-            console.log('✅ [dashboard] Loading complete');
+            revenueCompareEl.textContent = 'เท่ากับเมื่อวาน';
+            revenueCompareEl.className = 'highlight-compare same';
+        }
+    }
+
+    // Orders comparison
+    const ordersCompareEl = document.getElementById('ordersCompare');
+    if (ordersCompareEl) {
+        const diff = (today.orders || 0) - (today.orders_yesterday || 0);
+        if (diff > 0) {
+            ordersCompareEl.textContent = `+${diff} จากเมื่อวาน`;
+            ordersCompareEl.className = 'highlight-compare up';
+        } else if (diff < 0) {
+            ordersCompareEl.textContent = `${diff} จากเมื่อวาน`;
+            ordersCompareEl.className = 'highlight-compare down';
+        } else {
+            ordersCompareEl.textContent = 'เท่ากับเมื่อวาน';
+            ordersCompareEl.className = 'highlight-compare same';
         }
     }
 }
 
-// Update overview stat cards
-function updateOverviewCards(overview) {
-    const totalServicesEl = document.getElementById('totalServices');
-    const botMessagesEl = document.getElementById('botMessagesToday');
-    const apiCallsEl = document.getElementById('apiCallsToday');
-    const currentMonthCostEl = document.getElementById('currentMonthCost');
-
-    if (totalServicesEl) {
-        totalServicesEl.textContent = formatNumber(overview.total_services);
+// Update Weekly Stats
+function updateWeeklyStats(weekly) {
+    const weeklyRevenueEl = document.getElementById('weeklyRevenue');
+    const weeklyCompareEl = document.getElementById('weeklyCompare');
+    
+    if (weeklyRevenueEl) {
+        weeklyRevenueEl.textContent = formatCurrency(weekly.this_week_revenue || 0);
     }
-    if (botMessagesEl) {
-        botMessagesEl.textContent = formatNumber(overview.bot_messages_today);
-    }
-    if (apiCallsEl) {
-        apiCallsEl.textContent = formatNumber(overview.api_calls_today);
-    }
-    // current_month_cost is optional and some layouts may not have this card
-    if (currentMonthCostEl && overview.current_month_cost !== undefined) {
-        currentMonthCostEl.textContent = formatCurrency(overview.current_month_cost);
+    
+    if (weeklyCompareEl) {
+        const thisWeek = weekly.this_week_revenue || 0;
+        const lastWeek = weekly.last_week_revenue || 0;
+        const diff = thisWeek - lastWeek;
+        
+        if (diff > 0) {
+            weeklyCompareEl.textContent = `+${formatCurrency(diff)} vs สัปดาห์ที่แล้ว`;
+            weeklyCompareEl.className = 'highlight-compare up';
+        } else if (diff < 0) {
+            weeklyCompareEl.textContent = `${formatCurrency(diff)} vs สัปดาห์ที่แล้ว`;
+            weeklyCompareEl.className = 'highlight-compare down';
+        } else {
+            weeklyCompareEl.textContent = 'เท่ากับสัปดาห์ที่แล้ว';
+            weeklyCompareEl.className = 'highlight-compare same';
+        }
     }
 }
 
-// Update usage trend chart (using Chart.js)
-function updateUsageTrendChart(trendData) {
-    const ctx = document.getElementById('usageTrendChart');
+// Update Action Items counts
+function updateActionItems(actions) {
+    const setEl = (id, value) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = formatNumber(value || 0);
+    };
 
+    setEl('actionPendingSlips', actions.pending_slips || 0);
+    setEl('actionVerifyingSlips', actions.verifying_slips || 0);
+    setEl('actionOrdersToShip', actions.orders_to_ship || 0);
+    setEl('actionOrdersAwaiting', actions.orders_awaiting_payment || 0);
+    
+    // Also update the highlight card
+    const pendingSlipsEl = document.getElementById('pendingSlips');
+    if (pendingSlipsEl) {
+        pendingSlipsEl.textContent = formatNumber(actions.pending_slips || 0);
+    }
+}
+
+// Update Revenue Chart
+function updateRevenueChart(trendData) {
+    const ctx = document.getElementById('revenueChart');
     if (!ctx) return;
 
-    const dates = trendData.map(d => d.date).reverse();
-    const apiCalls = trendData.map(d => parseInt(d.api_calls) || 0).reverse();
-    const botMessages = trendData.map(d => parseInt(d.bot_messages) || 0).reverse();
+    const dates = trendData.map(d => formatShortDate(d.date)).reverse();
+    const revenues = trendData.map(d => parseFloat(d.revenue) || 0).reverse();
+    const orders = trendData.map(d => parseInt(d.orders) || 0).reverse();
 
     new Chart(ctx, {
-        type: 'line',
+        type: 'bar',
         data: {
             labels: dates,
             datasets: [
                 {
-                    label: 'API Calls',
-                    data: apiCalls,
-                    borderColor: '#2563eb',
-                    backgroundColor: 'rgba(37, 99, 235, 0.1)',
-                    tension: 0.4
+                    label: 'ยอดขาย (บาท)',
+                    data: revenues,
+                    backgroundColor: 'rgba(56, 161, 105, 0.8)',
+                    borderColor: '#38a169',
+                    borderWidth: 1,
+                    yAxisID: 'y'
                 },
                 {
-                    label: 'Bot Messages',
-                    data: botMessages,
-                    borderColor: '#10b981',
-                    backgroundColor: 'rgba(16, 185, 129, 0.1)',
-                    tension: 0.4
+                    label: 'Orders',
+                    data: orders,
+                    type: 'line',
+                    borderColor: '#3182ce',
+                    backgroundColor: 'rgba(49, 130, 206, 0.1)',
+                    tension: 0.4,
+                    yAxisID: 'y1'
                 }
             ]
         },
@@ -168,100 +225,120 @@ function updateUsageTrendChart(trendData) {
             },
             scales: {
                 y: {
-                    beginAtZero: true
+                    type: 'linear',
+                    position: 'left',
+                    beginAtZero: true,
+                    ticks: {
+                        callback: function(value) {
+                            return '฿' + value.toLocaleString();
+                        }
+                    }
+                },
+                y1: {
+                    type: 'linear',
+                    position: 'right',
+                    beginAtZero: true,
+                    grid: {
+                        drawOnChartArea: false
+                    }
                 }
             }
         }
     });
 }
 
-// Update service breakdown table
-function updateServiceBreakdown(services) {
-    const tbody = document.getElementById('serviceBreakdownBody');
-
+// Update Pending Slips Table
+function updatePendingSlips(slips) {
+    const tbody = document.getElementById('pendingSlipsBody');
     if (!tbody) return;
 
     tbody.innerHTML = '';
 
-    // Handle empty state
-    if (!services || services.length === 0) {
+    if (!slips || slips.length === 0) {
         tbody.innerHTML = `
             <tr>
-                <td colspan="7" style="text-align: center; padding: 2rem; color: var(--color-gray);">
-                    <div style="font-size: 2rem; margin-bottom: 0.5rem;">🤖</div>
-                    <div>ยังไม่มีบริการในระบบ</div>
-                    <a href="services.php" class="btn btn-primary btn-sm" style="margin-top: 1rem;">เพิ่มบริการ</a>
+                <td colspan="4" style="text-align: center; padding: 2rem; color: var(--color-gray);">
+                    <div style="font-size: 2rem; margin-bottom: 0.5rem;">✅</div>
+                    <div>ไม่มี slip รอตรวจ</div>
                 </td>
             </tr>
         `;
         return;
     }
 
-    console.log('🎨 [dashboard] Rendering', services.length, 'services');
-
-    services.forEach(service => {
+    slips.forEach(slip => {
         const row = document.createElement('tr');
-
-        const statusBadge = service.status === 'active'
-            ? '<span class="badge badge-success">Active</span>'
-            : '<span class="badge badge-warning">Paused</span>';
-
         row.innerHTML = `
-            <td><strong>${service.service_name}</strong></td>
-            <td>${service.service_type}</td>
-            <td>${service.platform || '-'}</td>
-            <td>${statusBadge}</td>
-            <td>${formatNumber(service.today_messages || 0)}</td>
-            <td>${formatNumber(service.today_api_calls || 0)}</td>
+            <td title="${slip.order_number || ''}">${slip.payment_no || '-'}</td>
+            <td>${formatCurrency(slip.amount || 0)}</td>
+            <td>${getSlipStatusBadge(slip.status)}</td>
             <td>
-                <a href="services.html?id=${service.id}" class="btn btn-sm btn-outline">
-                    ดูรายละเอียด
-                </a>
+                <a href="payment-history.php?id=${slip.id}" class="btn btn-sm btn-primary">ตรวจ</a>
             </td>
         `;
-
         tbody.appendChild(row);
     });
 }
 
-// Update recent activities
-function updateRecentActivities(activities) {
-    const container = document.getElementById('recentActivities');
+// Helper: Format short date (for chart labels)
+function formatShortDate(dateStr) {
+    if (!dateStr) return '';
+    const d = new Date(dateStr);
+    return d.toLocaleDateString('th-TH', { day: 'numeric', month: 'short' });
+}
 
-    if (!container) return;
+// Helper: Get slip status badge
+function getSlipStatusBadge(status) {
+    const badges = {
+        'pending': '<span class="badge badge-warning">รอตรวจ</span>',
+        'verifying': '<span class="badge badge-info">กำลังตรวจ</span>',
+        'verified': '<span class="badge badge-success">ผ่านแล้ว</span>',
+        'rejected': '<span class="badge badge-danger">ไม่ผ่าน</span>'
+    };
+    return badges[status] || `<span class="badge">${status}</span>`;
+}
 
-    container.innerHTML = '';
+// Update recent orders table
+function updateRecentOrders(orders) {
+    const tbody = document.getElementById('recentOrdersBody');
+    if (!tbody) return;
 
-    // Handle empty state
-    if (!activities || activities.length === 0) {
-        container.innerHTML = `
-            <div style="text-align: center; padding: 2rem; color: var(--color-gray);">
-                <div style="font-size: 2rem; margin-bottom: 0.5rem;">📋</div>
-                <div>ไม่มีกิจกรรมล่าสุด</div>
-            </div>
+    tbody.innerHTML = '';
+
+    if (!orders || orders.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="3" style="text-align: center; padding: 2rem; color: var(--color-gray);">
+                    <div style="font-size: 2rem; margin-bottom: 0.5rem;">📦</div>
+                    <div>ยังไม่มีคำสั่งซื้อ</div>
+                </td>
+            </tr>
         `;
         return;
     }
 
-    console.log('📝 [dashboard] Rendering', activities.length, 'activities');
-
-    activities.slice(0, 10).forEach(activity => {
-        const item = document.createElement('div');
-        item.className = 'activity-item';
-        item.style.cssText = 'padding: 0.75rem; border-bottom: 1px solid var(--color-light-3);';
-
-        item.innerHTML = `
-            <div style="display: flex; justify-content: space-between; align-items: start;">
-                <div>
-                    <strong>${activity.action}</strong>
-                    ${activity.resource_type ? `<span style="color: var(--color-gray); font-size: 0.875rem;"> - ${activity.resource_type}</span>` : ''}
-                </div>
-                <span style="color: var(--color-gray); font-size: 0.875rem;">
-                    ${formatRelativeTime(activity.created_at)}
-                </span>
-            </div>
+    orders.forEach(order => {
+        const row = document.createElement('tr');
+        row.innerHTML = `
+            <td><a href="orders.php?id=${order.id}" title="${order.customer_name || ''}">${order.order_number}</a></td>
+            <td>${formatCurrency(order.total_amount || 0)}</td>
+            <td>${getStatusBadge(order.status)}</td>
         `;
-
-        container.appendChild(item);
+        tbody.appendChild(row);
     });
+}
+
+// Helper: Get status badge HTML
+function getStatusBadge(status) {
+    const badges = {
+        'pending': '<span class="badge badge-warning">รอดำเนินการ</span>',
+        'awaiting_payment': '<span class="badge badge-info">รอชำระ</span>',
+        'confirmed': '<span class="badge badge-primary">ยืนยันแล้ว</span>',
+        'processing': '<span class="badge badge-info">กำลังจัดส่ง</span>',
+        'shipped': '<span class="badge badge-secondary">จัดส่งแล้ว</span>',
+        'delivered': '<span class="badge badge-success">สำเร็จ</span>',
+        'completed': '<span class="badge badge-success">สำเร็จ</span>',
+        'cancelled': '<span class="badge badge-danger">ยกเลิก</span>'
+    };
+    return badges[status] || `<span class="badge">${status}</span>`;
 }

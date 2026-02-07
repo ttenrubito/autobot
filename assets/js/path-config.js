@@ -116,6 +116,9 @@
         // Dashboard
         DASHBOARD_STATS: PATH.api('api/dashboard/stats.php'),
 
+        // User
+        USER_PROFILE: PATH.api('api/user/profile.php'),
+
         // Profile
         PROFILE_UPDATE: PATH.api('api/profile/update.php'),
         PROFILE_PASSWORD: PATH.api('api/profile/change-password.php'),

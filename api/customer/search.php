@@ -48,6 +48,19 @@ try {
         exit;
     }
 
+    // ✅ Get user's channel IDs for tenant isolation
+    $user_id = $auth['user_id'];
+    $channelStmt = $pdo->prepare("SELECT id FROM customer_channels WHERE user_id = ? AND status = 'active'");
+    $channelStmt->execute([$user_id]);
+    $userChannels = $channelStmt->fetchAll(PDO::FETCH_COLUMN);
+    
+    if (empty($userChannels)) {
+        echo json_encode(['success' => true, 'data' => [], 'message' => 'No channels configured']);
+        exit;
+    }
+    
+    $channelPlaceholders = implode(',', array_fill(0, count($userChannels), '?'));
+
     $results = [];
     $searchPattern = '%' . $query . '%';
 
@@ -101,7 +114,8 @@ try {
     // If no results from customers table, search in customer_profiles
     if (empty($results)) {
         try {
-            $stmt = $pdo->prepare("
+            // ✅ Filter by user's channel_ids
+            $sql = "
                 SELECT 
                     cp.id,
                     cp.platform_user_id as external_user_id,
@@ -112,14 +126,19 @@ try {
                     cp.last_active_at as last_contact_at,
                     cp.created_at
                 FROM customer_profiles cp
-                WHERE COALESCE(cp.display_name, cp.full_name) LIKE ?
-                   OR cp.platform_user_id LIKE ?
-                   OR cp.phone LIKE ?
-                   OR cp.email LIKE ?
+                WHERE cp.channel_id IN ($channelPlaceholders)
+                AND (
+                    COALESCE(cp.display_name, cp.full_name) LIKE ?
+                    OR cp.platform_user_id LIKE ?
+                    OR cp.phone LIKE ?
+                    OR cp.email LIKE ?
+                )
                 ORDER BY cp.last_active_at DESC
                 LIMIT ?
-            ");
-            $stmt->execute([$searchPattern, $searchPattern, $searchPattern, $searchPattern, $limit]);
+            ";
+            $params = array_merge($userChannels, [$searchPattern, $searchPattern, $searchPattern, $searchPattern, $limit]);
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($params);
             $profiles = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
             foreach ($profiles as $profile) {
