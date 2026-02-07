@@ -111,6 +111,85 @@ class RouterV5Handler implements BotHandlerInterface
     }
 
     /**
+     * Call Gemini API with retry logic for transient errors
+     * Retries on 5xx errors and timeouts (max 2 retries with exponential backoff)
+     */
+    protected function callGeminiApi(string $url, array $payload, int $timeout = 15, int $maxRetries = 2): array
+    {
+        $lastError = null;
+        $retryDelayMs = 500; // Start with 500ms
+        
+        for ($attempt = 0; $attempt <= $maxRetries; $attempt++) {
+            if ($attempt > 0) {
+                // Exponential backoff: 500ms, 1000ms
+                usleep($retryDelayMs * 1000);
+                $retryDelayMs *= 2;
+                Logger::info('[GEMINI_RETRY] Retrying API call', [
+                    'attempt' => $attempt + 1,
+                    'delay_ms' => $retryDelayMs / 2
+                ]);
+            }
+            
+            $ch = curl_init($url);
+            curl_setopt_array($ch, [
+                CURLOPT_POST => true,
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+                CURLOPT_POSTFIELDS => json_encode($payload),
+                CURLOPT_TIMEOUT => $timeout,
+                CURLOPT_CONNECTTIMEOUT => 5,
+            ]);
+
+            $response = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $curlError = curl_error($ch);
+            curl_close($ch);
+            
+            // Success
+            if (!$curlError && $httpCode === 200) {
+                return [
+                    'ok' => true,
+                    'data' => json_decode($response, true),
+                    'http_code' => $httpCode,
+                    'attempts' => $attempt + 1
+                ];
+            }
+            
+            // Retry only on 5xx errors or network issues
+            $shouldRetry = ($httpCode >= 500 && $httpCode < 600) 
+                || !empty($curlError) 
+                || $httpCode === 429; // Rate limit
+            
+            $lastError = [
+                'http_code' => $httpCode,
+                'curl_error' => $curlError,
+                'response' => $response
+            ];
+            
+            if (!$shouldRetry) {
+                // 4xx errors - don't retry
+                break;
+            }
+        }
+        
+        // All retries failed
+        $errorBody = json_decode($lastError['response'] ?? '{}', true);
+        Logger::warning('[GEMINI_API] All retries failed', [
+            'http_code' => $lastError['http_code'] ?? 0,
+            'curl_error' => $lastError['curl_error'] ?? '',
+            'error_message' => $errorBody['error']['message'] ?? 'unknown',
+            'attempts' => $maxRetries + 1
+        ]);
+        
+        return [
+            'ok' => false,
+            'error' => $lastError,
+            'http_code' => $lastError['http_code'] ?? 0,
+            'attempts' => $maxRetries + 1
+        ];
+    }
+
+    /**
      * Main message handler
      */
     public function handleMessage(array $context): array
@@ -2812,38 +2891,17 @@ class RouterV5Handler implements BotHandlerInterface
             'function_count' => count($functionDeclarations),
         ]);
 
-        // Call Gemini API
+        // Call Gemini API with retry
         $url = $endpoint . '?key=' . $apiKey;
         $timeout = (int)($config['llm']['timeout_seconds'] ?? 15);
-
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
-            CURLOPT_POST => true,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
-            CURLOPT_POSTFIELDS => json_encode($payload),
-            CURLOPT_TIMEOUT => $timeout,
-            CURLOPT_CONNECTTIMEOUT => 5,
-        ]);
-
-        $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $curlError = curl_error($ch);
-        curl_close($ch);
-
-        if ($curlError || $httpCode !== 200) {
-            // Log error response body for debugging
-            $errorBody = json_decode($response, true);
-            Logger::warning('[ROUTER_V5] Function calling API error', [
-                'http_code' => $httpCode,
-                'curl_error' => $curlError,
-                'error_message' => $errorBody['error']['message'] ?? 'unknown',
-                'error_status' => $errorBody['error']['status'] ?? 'unknown',
-            ]);
+        
+        $apiResult = $this->callGeminiApi($url, $payload, $timeout);
+        
+        if (!$apiResult['ok']) {
             return null;
         }
 
-        $data = json_decode($response, true);
+        $data = $apiResult['data'];
         $candidates = $data['candidates'] ?? [];
         $content = $candidates[0]['content'] ?? null;
         $parts = $content['parts'] ?? [];
@@ -3060,34 +3118,17 @@ PROMPT;
             'has_last_product' => !empty($lastProduct['value']),
         ]);
 
-        // Call Gemini API
+        // Call Gemini API with retry
         $url = $endpoint . '?key=' . $apiKey;
         $timeout = (int)($config['llm']['timeout_seconds'] ?? 15);
-
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
-            CURLOPT_POST => true,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
-            CURLOPT_POSTFIELDS => json_encode($payload),
-            CURLOPT_TIMEOUT => $timeout,
-            CURLOPT_CONNECTTIMEOUT => 5,
-        ]);
-
-        $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $curlError = curl_error($ch);
-        curl_close($ch);
-
-        if ($curlError || $httpCode !== 200) {
-            Logger::warning('[ROUTER_V5] Follow-up LLM error', [
-                'http_code' => $httpCode,
-                'curl_error' => $curlError,
-            ]);
+        
+        $apiResult = $this->callGeminiApi($url, $payload, $timeout);
+        
+        if (!$apiResult['ok']) {
             return null;
         }
 
-        $data = json_decode($response, true);
+        $data = $apiResult['data'];
         $parts = $data['candidates'][0]['content']['parts'] ?? [];
 
         // Check for function call
@@ -3255,34 +3296,17 @@ PROMPT;
             'text' => mb_substr($text, 0, 50, 'UTF-8'),
         ]);
 
-        // Call Gemini API
+        // Call Gemini API with retry
         $url = $endpoint . '?key=' . $apiKey;
         $timeout = (int)($config['llm']['timeout_seconds'] ?? 20); // Longer timeout for multi
-
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
-            CURLOPT_POST => true,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
-            CURLOPT_POSTFIELDS => json_encode($payload),
-            CURLOPT_TIMEOUT => $timeout,
-            CURLOPT_CONNECTTIMEOUT => 5,
-        ]);
-
-        $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $curlError = curl_error($ch);
-        curl_close($ch);
-
-        if ($curlError || $httpCode !== 200) {
-            Logger::warning('[ROUTER_V5] Multi-intent LLM error', [
-                'http_code' => $httpCode,
-                'curl_error' => $curlError,
-            ]);
+        
+        $apiResult = $this->callGeminiApi($url, $payload, $timeout);
+        
+        if (!$apiResult['ok']) {
             return null;
         }
 
-        $data = json_decode($response, true);
+        $data = $apiResult['data'];
         $parts = $data['candidates'][0]['content']['parts'] ?? [];
 
         if (empty($parts)) {
