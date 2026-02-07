@@ -166,6 +166,31 @@ class ChatService
     // ==================== MESSAGE LOGGING ====================
 
     /**
+     * Store message to chat_messages table (for LLM history)
+     * This is used by getConversationHistory() to provide context to LLM
+     */
+    public function storeMessage(array $context, string $text, string $role = 'user'): void
+    {
+        $sessionId = $context['session_id'] ?? null;
+        $text = trim((string) $text);
+        
+        if (!$sessionId || $text === '') {
+            return;
+        }
+        
+        $text = mb_substr($text, 0, 2000, 'UTF-8');
+        
+        try {
+            $this->db->execute(
+                'INSERT INTO chat_messages (session_id, role, text, created_at) VALUES (?, ?, ?, NOW())',
+                [$sessionId, $role, $text]
+            );
+        } catch (\Exception $e) {
+            \Logger::warning("[ChatService] Failed to store message", ['error' => $e->getMessage()]);
+        }
+    }
+
+    /**
      * Log incoming message
      */
     public function logIncomingMessage(array $context, string $message, string $messageType = 'text'): ?int

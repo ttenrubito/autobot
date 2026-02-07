@@ -313,6 +313,9 @@ class RouterV5Handler implements BotHandlerInterface
             // Log incoming message
             $msgId = $this->chatService->logIncomingMessage($context, $text, 'text');
             $context['message_id'] = $msgId;
+            
+            // ✅ Store message to chat_messages for LLM history
+            $this->chatService->storeMessage($context, $text, 'user');
 
             // ==================== MENU RESET DETECTION ====================
             
@@ -421,6 +424,8 @@ class RouterV5Handler implements BotHandlerInterface
                             ? ($llmResult['reply']['text'] ?? json_encode($llmResult['reply']))
                             : $llmResult['reply'];
                         $this->chatService->logOutgoingMessage($context, $replyText, 'text');
+                        // ✅ Store bot reply to chat_messages for LLM history
+                        $this->chatService->storeMessage($context, $replyText, 'assistant');
                     }
                     
                     $durationMs = (int)((microtime(true) - $t0) * 1000);
@@ -481,6 +486,8 @@ class RouterV5Handler implements BotHandlerInterface
                     ? ($response['reply']['text'] ?? json_encode($response['reply']))
                     : $response['reply'];
                 $this->chatService->logOutgoingMessage($context, $replyText, 'text');
+                // ✅ Store bot reply to chat_messages for LLM history
+                $this->chatService->storeMessage($context, $replyText, 'assistant');
                 
                 // 🛡️ Track last bot reply time for Gatekeeper (phatic filter)
                 $this->chatService->setQuickState('last_bot_reply_time', [
