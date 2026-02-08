@@ -128,7 +128,7 @@ function getEligibleItems($pdo, $shop_owner_id)
 
     // ดึง orders ทั้งหมดของลูกค้า (ทุกสถานะ ให้เจ้าหน้าที่พิจารณาเอง)
     // Match by customer_id (FK to customer_profiles) หรือ platform_user_id
-    // ✅ ดึงรูปจาก order_items, products table, หรือ case_attachments
+    // ✅ ดึงรูปจาก order_items หรือ products table
     $stmt = $pdo->prepare("
         SELECT 
             o.id as order_id, 
@@ -143,12 +143,10 @@ function getEligibleItems($pdo, $shop_owner_id)
             o.payment_status,
             o.payment_type,
             o.created_at as purchase_date,
-            o.case_id,
             (o.unit_price * ? / 100) as suggested_loan,
             (o.unit_price * ? / 100 * ? / 100) as monthly_interest,
             cp.display_name as customer_name,
             cp.platform,
-            -- ✅ Priority: order_items.product_image > products.image_url > null
             COALESCE(
                 (SELECT oi.product_image FROM order_items oi WHERE oi.order_id = o.id LIMIT 1),
                 p.image_url
@@ -170,26 +168,6 @@ function getEligibleItems($pdo, $shop_owner_id)
         $customer_id
     ]);
     $eligibleItems = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    // ✅ Fallback: Try to get image from linked Case attachments
-    foreach ($eligibleItems as &$item) {
-        if (empty($item['product_image']) && !empty($item['case_id'])) {
-            try {
-                $caseStmt = $pdo->prepare("
-                    SELECT file_url FROM case_attachments 
-                    WHERE case_id = ? AND file_type IN ('image/jpeg', 'image/png', 'image/webp', 'image/gif')
-                    ORDER BY created_at DESC LIMIT 1
-                ");
-                $caseStmt->execute([$item['case_id']]);
-                $caseImage = $caseStmt->fetchColumn();
-                if ($caseImage) {
-                    $item['product_image'] = $caseImage;
-                }
-            } catch (Exception $e) {
-                // case_attachments table might not exist
-            }
-        }
-    }
 
     echo json_encode([
         'success' => true,
