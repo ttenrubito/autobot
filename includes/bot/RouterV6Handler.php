@@ -37,6 +37,7 @@ require_once __DIR__ . '/services/KnowledgeBaseService.php';
 require_once __DIR__ . '/services/AntiSpamService.php';
 require_once __DIR__ . '/services/FunctionRegistry.php';
 require_once __DIR__ . '/services/FunctionExecutor.php';
+require_once __DIR__ . '/services/StoreConfigService.php';  // V6: Multi-tenant config
 
 // Business Services (Service Layer)
 require_once __DIR__ . '/../services/PawnService.php';
@@ -56,6 +57,7 @@ use Autobot\Bot\Services\KnowledgeBaseService;
 use Autobot\Bot\Services\AntiSpamService;
 use Autobot\Bot\Services\FunctionRegistry;
 use Autobot\Bot\Services\FunctionExecutor;
+use Autobot\Bot\Services\StoreConfigService;  // V6: Multi-tenant config
 
 // Business Services
 use App\Services\PawnService;
@@ -84,6 +86,7 @@ class RouterV6Handler implements BotHandlerInterface
     protected $orderService;
     protected $addressService;
     protected $caseService;
+    protected $storeConfigService;  // V6: Multi-tenant config
 
     public function __construct()
     {
@@ -113,6 +116,9 @@ class RouterV6Handler implements BotHandlerInterface
         $this->orderService = new OrderService($pdo);
         $this->addressService = new AddressService($pdo);
         $this->caseService = new CaseService($pdo);
+
+        // V6: Initialize Multi-tenant Config Service
+        $this->storeConfigService = new StoreConfigService();
     }
 
     /**
@@ -203,7 +209,7 @@ class RouterV6Handler implements BotHandlerInterface
         $context['trace_id'] = $traceId;
         $t0 = microtime(true);
 
-        Logger::info('[ROUTER_V5] start', [
+        Logger::info('[ROUTER_V6] start', [
             'trace_id' => $traceId,
             'channel_id' => $context['channel']['id'] ?? null,
             'platform' => $context['platform'] ?? null,
@@ -276,13 +282,13 @@ class RouterV6Handler implements BotHandlerInterface
 
             // Check for duplicate webhook delivery
             if ($customerServiceId && !empty($text) && $this->antiSpamService->isDuplicateDelivery($customerServiceId, $text)) {
-                Logger::info('[ROUTER_V5] Duplicate delivery detected, ignoring', ['trace_id' => $traceId]);
+                Logger::info('[ROUTER_V6] Duplicate delivery detected, ignoring', ['trace_id' => $traceId]);
                 return $this->makeResponse(null, 'duplicate_delivery', $traceId);
             }
 
             // Check for repeated spam messages
             if ($customerServiceId && !empty($text) && $this->antiSpamService->isRepeatedMessage($customerServiceId, $text)) {
-                Logger::info('[ROUTER_V5] Repeated message spam detected', ['trace_id' => $traceId]);
+                Logger::info('[ROUTER_V6] Repeated message spam detected', ['trace_id' => $traceId]);
                 $spamAction = $this->antiSpamService->getSpamAction($config);
 
                 if ($spamAction['action'] === 'silent') {
@@ -375,7 +381,7 @@ class RouterV6Handler implements BotHandlerInterface
                     $imageUrl = $message['image_url'] ?? null;
                 }
 
-                Logger::info('[ROUTER_V5] Processing image', [
+                Logger::info('[ROUTER_V6] Processing image', [
                     'trace_id' => $traceId,
                     'has_attachments' => !empty($message['attachments']),
                     'attachment_count' => count($message['attachments'] ?? []),
@@ -408,7 +414,7 @@ class RouterV6Handler implements BotHandlerInterface
                 $checkoutState = $this->checkoutService->getCheckoutState($platformUserId, $channelId);
                 if (!empty($checkoutState)) {
                     $this->checkoutService->clearCheckoutState($platformUserId, $channelId);
-                    Logger::info('[ROUTER_V5] Checkout cleared on menu reset', [
+                    Logger::info('[ROUTER_V6] Checkout cleared on menu reset', [
                         'trace_id' => $traceId,
                         'trigger' => $text,
                     ]);
@@ -445,7 +451,7 @@ class RouterV6Handler implements BotHandlerInterface
 
             // If user is in checkout flow, let CheckoutService try to handle first
             if (!empty($checkoutState)) {
-                Logger::info('[ROUTER_V5] User in checkout flow, trying CheckoutService first', [
+                Logger::info('[ROUTER_V6] User in checkout flow, trying CheckoutService first', [
                     'trace_id' => $traceId,
                     'checkout_step' => $checkoutState['step'] ?? 'unknown',
                     'text_preview' => mb_substr($text, 0, 30, 'UTF-8'),
@@ -455,7 +461,7 @@ class RouterV6Handler implements BotHandlerInterface
 
                 if (!empty($checkoutResult['reply'])) {
                     // CheckoutService handled successfully
-                    Logger::info('[ROUTER_V5] CheckoutService handled the message', [
+                    Logger::info('[ROUTER_V6] CheckoutService handled the message', [
                         'trace_id' => $traceId,
                         'has_order' => !empty($checkoutResult['order_created']),
                     ]);
@@ -471,13 +477,13 @@ class RouterV6Handler implements BotHandlerInterface
                     // ✅ FIX: Don't clear if step is 'ask_address' - might be address data
                     $currentStep = $checkoutState['step'] ?? '';
                     if ($currentStep === 'ask_address') {
-                        Logger::warning('[ROUTER_V5] CheckoutService returned empty at ask_address step, keeping state', [
+                        Logger::warning('[ROUTER_V6] CheckoutService returned empty at ask_address step, keeping state', [
                             'trace_id' => $traceId,
                             'text_preview' => mb_substr($text, 0, 50, 'UTF-8'),
                         ]);
                         // Don't clear - let IntentService handle but keep state for retry
                     } else {
-                        Logger::info('[ROUTER_V5] User talking off-topic, releasing from checkout', [
+                        Logger::info('[ROUTER_V6] User talking off-topic, releasing from checkout', [
                             'trace_id' => $traceId,
                             'step' => $currentStep,
                         ]);
@@ -494,7 +500,7 @@ class RouterV6Handler implements BotHandlerInterface
             // ถ้า LLM fail หรือ timeout → fallback ไปใช้ IntentService (regex)
 
             if ($this->isLlmEnabled($config)) {
-                Logger::info('[ROUTER_V5] LLM-First: trying function calling', [
+                Logger::info('[ROUTER_V6] LLM-First: trying function calling', [
                     'trace_id' => $traceId,
                     'text' => mb_substr($text, 0, 50, 'UTF-8'),
                 ]);
@@ -513,7 +519,7 @@ class RouterV6Handler implements BotHandlerInterface
                     }
 
                     $durationMs = (int) ((microtime(true) - $t0) * 1000);
-                    Logger::info('[ROUTER_V5] LLM-First: handled by function calling', [
+                    Logger::info('[ROUTER_V6] LLM-First: handled by function calling', [
                         'trace_id' => $traceId,
                         'duration_ms' => $durationMs,
                     ]);
@@ -527,7 +533,7 @@ class RouterV6Handler implements BotHandlerInterface
                 }
 
                 // LLM failed or returned null → continue to IntentService fallback
-                Logger::info('[ROUTER_V5] LLM-First: no result, falling back to IntentService', [
+                Logger::info('[ROUTER_V6] LLM-First: no result, falling back to IntentService', [
                     'trace_id' => $traceId,
                 ]);
             }
@@ -540,7 +546,7 @@ class RouterV6Handler implements BotHandlerInterface
             $confidence = $intentResult['confidence'];
             $params = $intentResult['slots'] ?? $intentResult['params'] ?? [];
 
-            Logger::info('[ROUTER_V5] Intent detected', [
+            Logger::info('[ROUTER_V6] Intent detected', [
                 'trace_id' => $traceId,
                 'intent' => $intent,
                 'confidence' => $confidence,
@@ -583,7 +589,7 @@ class RouterV6Handler implements BotHandlerInterface
             // Calculate duration
             $durationMs = (int) ((microtime(true) - $t0) * 1000);
 
-            Logger::info('[ROUTER_V5] end', [
+            Logger::info('[ROUTER_V6] end', [
                 'trace_id' => $traceId,
                 'intent' => $intent,
                 'duration_ms' => $durationMs,
@@ -597,7 +603,7 @@ class RouterV6Handler implements BotHandlerInterface
             );
 
         } catch (Exception $e) {
-            Logger::error('[ROUTER_V5] Error', [
+            Logger::error('[ROUTER_V6] Error', [
                 'trace_id' => $traceId,
                 'error' => $e->getMessage(),
                 'file' => $e->getFile(),
@@ -691,7 +697,7 @@ class RouterV6Handler implements BotHandlerInterface
                 }
 
                 // ✅ NEW: Empty keyword (e.g., "มีไหม", "มีบ้างไหม") - use LLM to get context from chat history
-                Logger::info('[ROUTER_V5] product_availability: empty keyword, using LLM context', [
+                Logger::info('[ROUTER_V6] product_availability: empty keyword, using LLM context', [
                     'original_text' => $text
                 ]);
                 return $this->handleProductSearch(['keyword' => $text, 'skip_llm_rewrite' => false], $config, $context);
@@ -867,7 +873,7 @@ class RouterV6Handler implements BotHandlerInterface
             // search for products in that category instead of just asking for code
             $categoryKeyword = $this->extractProductCategoryFromConversation($context);
             if ($categoryKeyword) {
-                Logger::info('[ROUTER_V5] Extracted product category from conversation', [
+                Logger::info('[ROUTER_V6] Extracted product category from conversation', [
                     'keyword' => $categoryKeyword,
                 ]);
                 // Search products by category keyword and show carousel
@@ -949,7 +955,7 @@ class RouterV6Handler implements BotHandlerInterface
             'thumbnail_url' => $selectedProduct['product_image_url'],
         ];
 
-        Logger::info('[ROUTER_V5] Product selected from history', [
+        Logger::info('[ROUTER_V6] Product selected from history', [
             'case_id' => $caseId,
             'product_index' => $productIndex,
             'product_ref_id' => $product['ref_id']
@@ -999,7 +1005,7 @@ class RouterV6Handler implements BotHandlerInterface
         if (!$matchedProduct) {
             // ✅ FIX: Not found in history - do product search to show Product Card
             // Don't just list history, actually search for the product
-            Logger::info('[ROUTER_V5] Product not in history, searching for it', [
+            Logger::info('[ROUTER_V6] Product not in history, searching for it', [
                 'query' => $productNameQuery,
             ]);
             return $this->handleProductSearch(['keyword' => $productNameQuery], $config, $context);
@@ -1019,7 +1025,7 @@ class RouterV6Handler implements BotHandlerInterface
             'thumbnail_url' => $matchedProduct['product_image_url'],
         ];
 
-        Logger::info('[ROUTER_V5] Product selected by name from history - showing Product Card', [
+        Logger::info('[ROUTER_V6] Product selected by name from history - showing Product Card', [
             'case_id' => $caseId,
             'query' => $productNameQuery,
             'product_code' => $product['code'],
@@ -1060,7 +1066,7 @@ class RouterV6Handler implements BotHandlerInterface
 
             // ✅ Step 2: If chit-chat detected, fallback to LLM general response
             if ($rewriteResult['is_chit_chat'] ?? false) {
-                Logger::info('[ROUTER_V5] Chit-chat detected, falling back to LLM', [
+                Logger::info('[ROUTER_V6] Chit-chat detected, falling back to LLM', [
                     'original_query' => $query
                 ]);
 
@@ -1084,7 +1090,7 @@ class RouterV6Handler implements BotHandlerInterface
             $searchQuery = $rewriteResult['rewritten'] ?? $query;
 
             if ($searchQuery !== $query) {
-                Logger::info('[ROUTER_V5] Query rewritten for context', [
+                Logger::info('[ROUTER_V6] Query rewritten for context', [
                     'original' => $query,
                     'rewritten' => $searchQuery
                 ]);
@@ -1092,7 +1098,7 @@ class RouterV6Handler implements BotHandlerInterface
         } else {
             // Skip LLM rewrite - use original query directly
             $searchQuery = $query;
-            Logger::info('[ROUTER_V5] Skipping LLM rewrite (product_availability intent)', [
+            Logger::info('[ROUTER_V6] Skipping LLM rewrite (product_availability intent)', [
                 'query' => $query
             ]);
         }
@@ -1130,7 +1136,7 @@ class RouterV6Handler implements BotHandlerInterface
             $this->chatService->clearQuickState('pending_intent', $platformUserId, $channelId);
 
             $product = $products[0];
-            Logger::info('[ROUTER_V5] Auto-starting deposit checkout from pending intent', [
+            Logger::info('[ROUTER_V6] Auto-starting deposit checkout from pending intent', [
                 'product_code' => $product['code'] ?? $product['product_code'] ?? null,
             ]);
 
@@ -1172,7 +1178,7 @@ class RouterV6Handler implements BotHandlerInterface
 
         // TODO: Trigger notification to admin (LINE Notify, Email, etc.)
 
-        Logger::info('[ROUTER_V5] Admin handoff requested', [
+        Logger::info('[ROUTER_V6] Admin handoff requested', [
             'channel_id' => $context['channel']['id'] ?? null,
             'platform_user_id' => $context['platform_user_id'] ?? null,
         ]);
@@ -1206,7 +1212,7 @@ class RouterV6Handler implements BotHandlerInterface
                 'thumbnail_url' => $recentProduct['image'] ?? $recentProduct['thumbnail_url'] ?? null,
             ];
 
-            Logger::info('[ROUTER_V5] Deposit with recent product', [
+            Logger::info('[ROUTER_V6] Deposit with recent product', [
                 'product_code' => $product['code'],
             ]);
 
@@ -1277,7 +1283,7 @@ class RouterV6Handler implements BotHandlerInterface
         $message .= "กำลังแจ้งแอดมินให้โทรกลับหาลูกค้านะคะ\n";
         $message .= "รอสักครู่นะคะ 🙏";
 
-        Logger::info('[ROUTER_V5] Video call requested', [
+        Logger::info('[ROUTER_V6] Video call requested', [
             'channel_id' => $context['channel']['id'] ?? null,
             'platform_user_id' => $context['platform_user_id'] ?? null,
         ]);
@@ -1297,7 +1303,7 @@ class RouterV6Handler implements BotHandlerInterface
         $message .= "กำลังแจ้งแอดมินให้ตอบกลับลูกค้าเดี๋ยวนี้เลยค่ะ\n";
         $message .= "รอสักครู่นะคะ 💛";
 
-        Logger::info('[ROUTER_V5] Price negotiation - handover to admin', [
+        Logger::info('[ROUTER_V6] Price negotiation - handover to admin', [
             'channel_id' => $context['channel']['id'] ?? null,
             'platform_user_id' => $context['platform_user_id'] ?? null,
         ]);
@@ -1409,12 +1415,12 @@ class RouterV6Handler implements BotHandlerInterface
         // ✅ NEW: If text looks like a product name (not a question, not too short),
         // try product search with vector/semantic search first
         if ($this->looksLikeProductQuery($text)) {
-            Logger::info('[ROUTER_V5] Fallback: trying product search', ['text' => $text]);
+            Logger::info('[ROUTER_V6] Fallback: trying product search', ['text' => $text]);
 
             $result = $this->productService->search($text, $config, $context);
 
             if ($result['ok'] && !empty($result['products'])) {
-                Logger::info('[ROUTER_V5] Fallback: product found via search!', [
+                Logger::info('[ROUTER_V6] Fallback: product found via search!', [
                     'source' => $result['source'] ?? 'unknown',
                     'product_count' => count($result['products']),
                 ]);
@@ -1441,7 +1447,7 @@ class RouterV6Handler implements BotHandlerInterface
 
             // ✅ NEW: No products found - give helpful message instead of falling through
             if ($result['ok'] && empty($result['products']) && ($result['source'] ?? '') === 'no_match') {
-                Logger::info('[ROUTER_V5] Product search: no matching products', ['text' => $text]);
+                Logger::info('[ROUTER_V6] Product search: no matching products', ['text' => $text]);
 
                 $noMatchReply = "ขออภัยค่ะ ไม่พบสินค้าที่ตรงกับ \"{$text}\" ค่ะ 🔍\n\n";
                 $noMatchReply .= "💡 แนะนำ:\n";
@@ -1459,7 +1465,7 @@ class RouterV6Handler implements BotHandlerInterface
         $kbResults = $this->knowledgeBaseService->search($context, $text);
         if (!empty($kbResults) && isset($kbResults[0]['answer'])) {
             $bestMatch = $kbResults[0];
-            Logger::info('[ROUTER_V5] KB match found', [
+            Logger::info('[ROUTER_V6] KB match found', [
                 'score' => $bestMatch['match_score'] ?? 0,
                 'entry_id' => $bestMatch['id'] ?? null,
             ]);
@@ -2246,7 +2252,7 @@ class RouterV6Handler implements BotHandlerInterface
             return $this->makeResponse('รับรูปไม่ได้ค่ะ 😅 รบกวนลองส่งใหม่อีกครั้งนะคะ', 'image_error', $traceId);
         }
 
-        Logger::info('[ROUTER_V5] handleImage called', [
+        Logger::info('[ROUTER_V6] handleImage called', [
             'trace_id' => $traceId,
             'image_url' => substr($imageUrl, 0, 100),
             'image_search_enabled' => $this->isBackendEnabled($config, 'image_search'),
@@ -2275,7 +2281,7 @@ class RouterV6Handler implements BotHandlerInterface
             $intentName = $pendingIntent['intent'] ?? '';
 
             if ($intentName === 'pawn_assessment') {
-                Logger::info('[ROUTER_V5] Image received for Pawn Assessment (pending_intent matched)', [
+                Logger::info('[ROUTER_V6] Image received for Pawn Assessment (pending_intent matched)', [
                     'trace_id' => $traceId,
                     'platform_user_id' => $platformUserId,
                 ]);
@@ -2296,7 +2302,7 @@ class RouterV6Handler implements BotHandlerInterface
             }
         }
 
-        Logger::info('[ROUTER_V5] Image slip detection check', [
+        Logger::info('[ROUTER_V6] Image slip detection check', [
             'trace_id' => $traceId,
             'platform_user_id' => $platformUserId,
             'has_pending_checkout' => $hasPendingCheckout,
@@ -2315,7 +2321,7 @@ class RouterV6Handler implements BotHandlerInterface
             $detectedRoute = $visionResult['route'] ?? 'image_generic';
             $geminiApiError = isset($visionResult['error']) && !empty($visionResult['error']);
 
-            Logger::info('[ROUTER_V5] Gemini Vision analyzed image', [
+            Logger::info('[ROUTER_V6] Gemini Vision analyzed image', [
                 'trace_id' => $traceId,
                 'detected_route' => $detectedRoute,
                 'has_pending_order' => $hasPendingOrder,
@@ -2327,7 +2333,7 @@ class RouterV6Handler implements BotHandlerInterface
         // Instead, acknowledge image receipt and let admin handle
         // Previous bug: treated any image as slip when API failed + pending order
         if ($geminiApiError) {
-            Logger::info('[ROUTER_V5] Gemini API error → asking for clarification', [
+            Logger::info('[ROUTER_V6] Gemini API error → asking for clarification', [
                 'trace_id' => $traceId,
                 'error' => $visionResult['error'] ?? 'unknown',
                 'has_pending_checkout' => $hasPendingCheckout,
@@ -2354,7 +2360,7 @@ class RouterV6Handler implements BotHandlerInterface
             || ($rawImageType === 'payment_proof' && ($hasPendingCheckout || $hasPendingOrder) && $visionConfidence >= 0.3);
 
         if ($isLikelySlip) {
-            Logger::info('[ROUTER_V5] Image confirmed as payment slip by Gemini', [
+            Logger::info('[ROUTER_V6] Image confirmed as payment slip by Gemini', [
                 'trace_id' => $traceId,
                 'route' => $detectedRoute,
                 'raw_image_type' => $rawImageType,
@@ -2366,7 +2372,7 @@ class RouterV6Handler implements BotHandlerInterface
 
         // ✅ If Gemini detected it's a product image, do product search (even if has pending order)
         if ($detectedRoute === 'product' || $detectedRoute === 'product_image' || $detectedRoute === 'product_inquiry') {
-            Logger::info('[ROUTER_V5] Image detected as product, redirecting to product search', [
+            Logger::info('[ROUTER_V6] Image detected as product, redirecting to product search', [
                 'trace_id' => $traceId,
                 'route' => $detectedRoute,
             ]);
@@ -2379,7 +2385,7 @@ class RouterV6Handler implements BotHandlerInterface
             $result = $this->productService->searchByImage($imageUrl, $config, $context);
 
             if ($result['ok'] && !empty($result['products'])) {
-                Logger::info('[ROUTER_V5] Image search found products', [
+                Logger::info('[ROUTER_V6] Image search found products', [
                     'trace_id' => $traceId,
                     'product_count' => count($result['products']),
                 ]);
@@ -2434,7 +2440,7 @@ class RouterV6Handler implements BotHandlerInterface
      */
     protected function handlePaymentSlip(string $imageUrl, array $config, array $context, string $traceId): array
     {
-        Logger::info('[ROUTER_V5] Payment slip received - starting OCR', [
+        Logger::info('[ROUTER_V6] Payment slip received - starting OCR', [
             'trace_id' => $traceId,
             'channel_id' => $context['channel']['id'] ?? null,
             'image_url_preview' => substr($imageUrl, 0, 100),
@@ -2453,13 +2459,13 @@ class RouterV6Handler implements BotHandlerInterface
                 $geminiDetails = $geminiResult['details'] ?? [];
                 $visionMeta = $geminiResult['meta'] ?? null;
 
-                Logger::info('[ROUTER_V5] Gemini Vision analysis complete', [
+                Logger::info('[ROUTER_V6] Gemini Vision analysis complete', [
                     'trace_id' => $traceId,
                     'has_details' => !empty($geminiDetails),
                     'amount' => $geminiDetails['amount'] ?? null,
                 ]);
             } else {
-                Logger::warning('[ROUTER_V5] Gemini Vision failed', [
+                Logger::warning('[ROUTER_V6] Gemini Vision failed', [
                     'error' => $geminiResult['error'],
                 ]);
             }
@@ -2498,7 +2504,7 @@ class RouterV6Handler implements BotHandlerInterface
                 $imageUrl
             );
 
-            Logger::info('[ROUTER_V5] PaymentService result', [
+            Logger::info('[ROUTER_V6] PaymentService result', [
                 'trace_id' => $traceId,
                 'success' => $paymentResult['success'] ?? false,
                 'payment_id' => $paymentResult['payment_id'] ?? null,
@@ -2578,7 +2584,7 @@ class RouterV6Handler implements BotHandlerInterface
                         // ✅ Auto-link payment to selected order
                         $this->linkPaymentToOrder($paymentResult['payment_id'], $selectedOrder['id']);
 
-                        Logger::info('[ROUTER_V5] Auto-linked slip to order', [
+                        Logger::info('[ROUTER_V6] Auto-linked slip to order', [
                             'payment_id' => $paymentResult['payment_id'],
                             'order_id' => $selectedOrder['id'],
                             'order_no' => $selectedOrderNo,
@@ -2664,7 +2670,7 @@ class RouterV6Handler implements BotHandlerInterface
                                 $pawnNo = $matchedPawn['pawn_no'] ?? 'N/A';
                                 $itemName = mb_substr($matchedPawn['item_name'] ?? 'สินค้าจำนำ', 0, 30, 'UTF-8');
 
-                                Logger::info('[ROUTER_V5] Auto-linked slip to pawn (Hybrid A+)', [
+                                Logger::info('[ROUTER_V6] Auto-linked slip to pawn (Hybrid A+)', [
                                     'payment_id' => $paymentResult['payment_id'],
                                     'pawn_id' => $matchedPawn['id'],
                                     'pawn_no' => $pawnNo,
@@ -2713,7 +2719,7 @@ class RouterV6Handler implements BotHandlerInterface
                                         $instNo = $matchedInstallment['contract_no'] ?? 'N/A';
                                         $productName = mb_substr($matchedInstallment['product_name'] ?? 'สินค้า', 0, 30, 'UTF-8');
 
-                                        Logger::info('[ROUTER_V5] Auto-linked slip to installment (Hybrid A+)', [
+                                        Logger::info('[ROUTER_V6] Auto-linked slip to installment (Hybrid A+)', [
                                             'payment_id' => $paymentResult['payment_id'],
                                             'installment_id' => $matchedInstallment['id'],
                                             'contract_no' => $instNo,
@@ -2812,13 +2818,13 @@ class RouterV6Handler implements BotHandlerInterface
                     $traceId
                 );
             } else {
-                Logger::error('[ROUTER_V5] PaymentService failed', [
+                Logger::error('[ROUTER_V6] PaymentService failed', [
                     'error' => $paymentResult['error'] ?? 'unknown',
                 ]);
             }
 
         } catch (Exception $e) {
-            Logger::error('[ROUTER_V5] Payment slip processing error', [
+            Logger::error('[ROUTER_V6] Payment slip processing error', [
                 'trace_id' => $traceId,
                 'error' => $e->getMessage(),
             ]);
@@ -2857,7 +2863,7 @@ class RouterV6Handler implements BotHandlerInterface
         // Get LLM integration
         $llmIntegration = $this->getLlmIntegration($context);
         if (!$llmIntegration) {
-            Logger::warning('[ROUTER_V5] No LLM integration for function calling');
+            Logger::warning('[ROUTER_V6] No LLM integration for function calling');
             return null;
         }
 
@@ -2915,7 +2921,7 @@ class RouterV6Handler implements BotHandlerInterface
             ]
         ];
 
-        Logger::info('[ROUTER_V5] Function calling request', [
+        Logger::info('[ROUTER_V6] Function calling request', [
             'trace_id' => $traceId,
             'text' => mb_substr($text, 0, 50, 'UTF-8'),
             'function_count' => count($functionDeclarations),
@@ -2937,7 +2943,7 @@ class RouterV6Handler implements BotHandlerInterface
         $parts = $content['parts'] ?? [];
 
         if (empty($parts)) {
-            Logger::warning('[ROUTER_V5] Empty response from function calling');
+            Logger::warning('[ROUTER_V6] Empty response from function calling');
             return null;
         }
 
@@ -2959,7 +2965,7 @@ class RouterV6Handler implements BotHandlerInterface
             $functionName = $functionCall['name'] ?? '';
             $arguments = $functionCall['args'] ?? [];
 
-            Logger::info('[ROUTER_V5] Function call detected', [
+            Logger::info('[ROUTER_V6] Function call detected', [
                 'trace_id' => $traceId,
                 'function' => $functionName,
                 'arguments' => $arguments,
@@ -2975,7 +2981,7 @@ class RouterV6Handler implements BotHandlerInterface
 
         // If model returned text (decided not to call function)
         if ($textResponse) {
-            Logger::info('[ROUTER_V5] Text response (no function call)', [
+            Logger::info('[ROUTER_V6] Text response (no function call)', [
                 'trace_id' => $traceId,
                 'response_length' => mb_strlen($textResponse, 'UTF-8'),
             ]);
@@ -3142,7 +3148,7 @@ PROMPT;
             ]
         ];
 
-        Logger::info('[ROUTER_V5] Follow-up LLM request', [
+        Logger::info('[ROUTER_V6] Follow-up LLM request', [
             'trace_id' => $traceId,
             'text' => $text,
             'has_last_product' => !empty($lastProduct['value']),
@@ -3167,7 +3173,7 @@ PROMPT;
                 $functionName = $part['functionCall']['name'] ?? '';
                 $arguments = $part['functionCall']['args'] ?? [];
 
-                Logger::info('[ROUTER_V5] Follow-up function call', [
+                Logger::info('[ROUTER_V6] Follow-up function call', [
                     'trace_id' => $traceId,
                     'function' => $functionName,
                     'arguments' => $arguments,
@@ -3321,7 +3327,7 @@ PROMPT;
             ]
         ];
 
-        Logger::info('[ROUTER_V5] Multi-intent LLM request', [
+        Logger::info('[ROUTER_V6] Multi-intent LLM request', [
             'trace_id' => $traceId,
             'text' => mb_substr($text, 0, 50, 'UTF-8'),
         ]);
@@ -3364,7 +3370,7 @@ PROMPT;
             return null;
         }
 
-        Logger::info('[ROUTER_V5] Multi-intent: executing functions', [
+        Logger::info('[ROUTER_V6] Multi-intent: executing functions', [
             'trace_id' => $traceId,
             'function_count' => count($functionCalls),
             'functions' => array_map(fn($f) => $f['name'], $functionCalls),
@@ -3663,7 +3669,7 @@ PROMPT;
     {
         $type = $result['type'] ?? 'unknown';
 
-        Logger::info('[ROUTER_V5] Processing function result', [
+        Logger::info('[ROUTER_V6] Processing function result', [
             'function' => $functionName,
             'type' => $type,
             'ok' => $result['ok'] ?? false,
@@ -3810,7 +3816,7 @@ PROMPT;
                     // ✅ Has product context - show Product Card with installment info
                     $product = $lastProduct['value'];
 
-                    Logger::info('[ROUTER_V5] installment_calculation → redirect to Product Card', [
+                    Logger::info('[ROUTER_V6] installment_calculation → redirect to Product Card', [
                         'product_code' => $product['code'] ?? $product['product_code'] ?? 'N/A',
                         'price' => $product['price'] ?? 0,
                     ]);
@@ -3831,7 +3837,7 @@ PROMPT;
                 }
 
                 // ❌ No product context - ask customer to specify
-                Logger::info('[ROUTER_V5] installment_calculation → no product context, asking for product');
+                Logger::info('[ROUTER_V6] installment_calculation → no product context, asking for product');
 
                 $installmentConfig = $config['installment'] ?? [];
                 $periods = $installmentConfig['periods'] ?? 3;
@@ -3874,7 +3880,7 @@ PROMPT;
         // Get LLM integration (Gemini) from database
         $llmIntegration = $this->getLlmIntegration($context);
         if (!$llmIntegration) {
-            Logger::warning('[ROUTER_V5] No LLM integration available');
+            Logger::warning('[ROUTER_V6] No LLM integration available');
             return null;
         }
 
@@ -3885,7 +3891,7 @@ PROMPT;
         $endpoint = $cfg['endpoint'] ?? 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
         if (!$apiKey) {
-            Logger::warning('[ROUTER_V5] LLM integration missing API key');
+            Logger::warning('[ROUTER_V6] LLM integration missing API key');
             return null;
         }
 
@@ -3928,7 +3934,7 @@ PROMPT;
         ];
 
         // Log actual config values being used
-        Logger::info('[ROUTER_V5] LLM config values', [
+        Logger::info('[ROUTER_V6] LLM config values', [
             'max_tokens_from_config' => $config['llm']['max_tokens'] ?? 'NOT_SET',
             'max_tokens_used' => $payload['generationConfig']['maxOutputTokens'],
             'temperature' => $payload['generationConfig']['temperature'],
@@ -3946,7 +3952,7 @@ PROMPT;
         for ($attempt = 0; $attempt <= $maxRetries; $attempt++) {
             if ($attempt > 0) {
                 usleep(500000); // Wait 0.5s before retry
-                Logger::info('[ROUTER_V5] Gemini LLM retry', ['attempt' => $attempt + 1]);
+                Logger::info('[ROUTER_V6] Gemini LLM retry', ['attempt' => $attempt + 1]);
             }
 
             $ch = curl_init($url);
@@ -3971,7 +3977,7 @@ PROMPT;
         }
 
         if ($curlError || $httpCode !== 200) {
-            Logger::warning('[ROUTER_V5] Gemini LLM call failed', [
+            Logger::warning('[ROUTER_V6] Gemini LLM call failed', [
                 'http_code' => $httpCode,
                 'curl_error' => $curlError,
             ]);
@@ -3986,13 +3992,13 @@ PROMPT;
         $finishReason = $candidates[0]['finishReason'] ?? 'UNKNOWN';
 
         // Log finish reason for debugging truncated responses
-        Logger::info('[ROUTER_V5] LLM response details', [
+        Logger::info('[ROUTER_V6] LLM response details', [
             'finish_reason' => $finishReason,
             'content_length' => $content ? mb_strlen($content, 'UTF-8') : 0,
         ]);
 
         if (!$content) {
-            Logger::warning('[ROUTER_V5] Gemini returned empty content', [
+            Logger::warning('[ROUTER_V6] Gemini returned empty content', [
                 'finish_reason' => $finishReason,
             ]);
             return null;
@@ -4012,7 +4018,7 @@ PROMPT;
         if (preg_match('/^\s*\{/', $content)) {
             $jsonContent = json_decode($content, true);
             if (json_last_error() === JSON_ERROR_NONE && isset($jsonContent['reply_text'])) {
-                Logger::info('[ROUTER_V5] Parsed LLM JSON response', [
+                Logger::info('[ROUTER_V6] Parsed LLM JSON response', [
                     'intent' => $jsonContent['intent'] ?? null,
                 ]);
                 return $jsonContent['reply_text'];
@@ -4020,12 +4026,12 @@ PROMPT;
 
             // JSON parse failed - try to extract reply_text with regex
             if (preg_match('/"reply_text"\s*:\s*"([^"]+)/u', $content, $m)) {
-                Logger::info('[ROUTER_V5] Extracted reply_text from truncated JSON');
+                Logger::info('[ROUTER_V6] Extracted reply_text from truncated JSON');
                 return $m[1];
             }
 
             // Still JSON-like but can't extract - return null to use fallback
-            Logger::warning('[ROUTER_V5] LLM returned invalid/truncated JSON', [
+            Logger::warning('[ROUTER_V6] LLM returned invalid/truncated JSON', [
                 'content_preview' => mb_substr($content, 0, 100, 'UTF-8'),
             ]);
             return null;
@@ -4077,7 +4083,7 @@ PROMPT;
 
             foreach ($sortedKeywords as $keyword => $searchTerm) {
                 if (mb_strpos($message, mb_strtolower($keyword, 'UTF-8')) !== false) {
-                    Logger::info('[ROUTER_V5] Found product category in conversation', [
+                    Logger::info('[ROUTER_V6] Found product category in conversation', [
                         'matched_keyword' => $keyword,
                         'search_term' => $searchTerm,
                         'original_message' => $msg['message'] ?? '',
@@ -4188,7 +4194,7 @@ PROMPT;
         // If truncated mid-character, we might have issues
 
         // Log warning for potentially truncated text
-        Logger::warning('[ROUTER_V5] LLM response appears truncated', [
+        Logger::warning('[ROUTER_V6] LLM response appears truncated', [
             'text_length' => mb_strlen($text, 'UTF-8'),
             'last_chars' => mb_substr($text, -10, 10, 'UTF-8'),
             'last_char_hex' => bin2hex(mb_substr($text, -1, 1, 'UTF-8')),
@@ -4276,7 +4282,7 @@ PROMPT;
                 [$sessionId]
             );
         } catch (Exception $e) {
-            Logger::error('[ROUTER_V5] Failed to update admin timestamp', ['error' => $e->getMessage()]);
+            Logger::error('[ROUTER_V6] Failed to update admin timestamp', ['error' => $e->getMessage()]);
         }
 
         // Store admin message
@@ -4284,7 +4290,7 @@ PROMPT;
             $this->chatService->logOutgoingMessage($context, "[admin] {$text}", 'text');
         }
 
-        Logger::info('[ROUTER_V5] Admin message handled', [
+        Logger::info('[ROUTER_V6] Admin message handled', [
             'session_id' => $sessionId,
             'text_preview' => substr($text, 0, 50),
         ]);
@@ -4334,7 +4340,7 @@ PROMPT;
     protected function activateAdminHandoff(?int $sessionId, array $context, string $reason = 'manual'): void
     {
         if (!$sessionId) {
-            Logger::warning('[ROUTER_V5] Cannot activate handoff - no session_id', ['reason' => $reason]);
+            Logger::warning('[ROUTER_V6] Cannot activate handoff - no session_id', ['reason' => $reason]);
             return;
         }
 
@@ -4344,13 +4350,13 @@ PROMPT;
                 [$sessionId]
             );
 
-            Logger::info('[ROUTER_V5] Admin handoff activated', [
+            Logger::info('[ROUTER_V6] Admin handoff activated', [
                 'session_id' => $sessionId,
                 'reason' => $reason,
                 'platform_user_id' => $context['platform_user_id'] ?? null,
             ]);
         } catch (Exception $e) {
-            Logger::error('[ROUTER_V5] Failed to activate admin handoff', [
+            Logger::error('[ROUTER_V6] Failed to activate admin handoff', [
                 'error' => $e->getMessage(),
                 'session_id' => $sessionId,
             ]);
@@ -4511,14 +4517,14 @@ PROMPT;
 
             $count = (int) ($result['cnt'] ?? 0);
 
-            Logger::info('[ROUTER_V5] Checked pending orders for user', [
+            Logger::info('[ROUTER_V6] Checked pending orders for user', [
                 'platform_user_id' => $platformUserId,
                 'count' => $count,
             ]);
 
             return $count > 0;
         } catch (\Throwable $e) {
-            Logger::error('[ROUTER_V5] Error checking pending orders', [
+            Logger::error('[ROUTER_V6] Error checking pending orders', [
                 'error' => $e->getMessage(),
                 'platform_user_id' => $platformUserId,
             ]);
@@ -4588,7 +4594,7 @@ PROMPT;
         if (preg_match('/^สนใจ\s+([A-Z0-9\-]{3,20})$/iu', $originalText, $codeMatch)) {
             $productCode = strtoupper(trim($codeMatch[1]));
 
-            Logger::info('[ROUTER_V5] Early checkout: product code detected', [
+            Logger::info('[ROUTER_V6] Early checkout: product code detected', [
                 'product_code' => $productCode,
             ]);
 
@@ -4862,7 +4868,7 @@ PROMPT;
         }
 
         if ($curlError || $httpCode !== 200) {
-            Logger::warning('[ROUTER_V5] Query rewrite LLM call failed', [
+            Logger::warning('[ROUTER_V6] Query rewrite LLM call failed', [
                 'http_code' => $httpCode,
                 'error' => $curlError
             ]);
@@ -4885,7 +4891,7 @@ PROMPT;
                 $rewritten = $parsed['rewritten'] ?? $query;
                 $isChitChat = (bool) ($parsed['is_chit_chat'] ?? false);
 
-                Logger::info('[ROUTER_V5] Query rewritten by LLM', [
+                Logger::info('[ROUTER_V6] Query rewritten by LLM', [
                     'original' => $query,
                     'rewritten' => $rewritten,
                     'is_chit_chat' => $isChitChat
@@ -4952,7 +4958,7 @@ PROMPT;
             );
             return $row ?: null;
         } catch (\Exception $e) {
-            Logger::warning('[ROUTER_V5] Failed to get LLM integration', ['error' => $e->getMessage()]);
+            Logger::warning('[ROUTER_V6] Failed to get LLM integration', ['error' => $e->getMessage()]);
             return null;
         }
     }
@@ -4984,7 +4990,7 @@ PROMPT;
         // Download image and convert to base64
         $imageData = @file_get_contents($imageUrl);
         if ($imageData === false) {
-            Logger::warning('[ROUTER_V5] Failed to download image for Gemini analysis', ['url' => substr($imageUrl, 0, 100)]);
+            Logger::warning('[ROUTER_V6] Failed to download image for Gemini analysis', ['url' => substr($imageUrl, 0, 100)]);
             return ['error' => 'download_failed', 'route' => 'image_generic', 'meta' => null];
         }
 
@@ -5049,7 +5055,7 @@ PROMPT;
             if ($attempt > 0) {
                 // Wait before retry: 1s, 2s
                 $waitMs = $attempt * 1000;
-                Logger::info('[ROUTER_V5] Gemini Vision API retry', [
+                Logger::info('[ROUTER_V6] Gemini Vision API retry', [
                     'attempt' => $attempt + 1,
                     'wait_ms' => $waitMs,
                 ]);
@@ -5078,7 +5084,7 @@ PROMPT;
 
             // Log retry attempt
             if ($attempt < $maxRetries) {
-                Logger::warning('[ROUTER_V5] Gemini Vision API transient error, will retry', [
+                Logger::warning('[ROUTER_V6] Gemini Vision API transient error, will retry', [
                     'attempt' => $attempt + 1,
                     'status' => $status,
                     'error' => $err,
@@ -5087,7 +5093,7 @@ PROMPT;
         }
 
         if ($err || $status >= 400) {
-            Logger::error('[ROUTER_V5] Gemini Vision API error after retries', [
+            Logger::error('[ROUTER_V6] Gemini Vision API error after retries', [
                 'error' => $err,
                 'status' => $status,
                 'attempts' => $maxRetries + 1,
@@ -5123,7 +5129,7 @@ PROMPT;
             }
 
             if (!empty(array_filter($details))) {
-                Logger::info('[ROUTER_V5] Gemini Vision - extracted fields from root level (fallback)', [
+                Logger::info('[ROUTER_V6] Gemini Vision - extracted fields from root level (fallback)', [
                     'image_type' => $imageType,
                     'details_keys' => array_keys($details),
                 ]);
@@ -5204,7 +5210,7 @@ PROMPT;
 
             return array_values($orders);
         } catch (Exception $e) {
-            Logger::warning('[ROUTER_V5] Failed to find pending orders', ['error' => $e->getMessage()]);
+            Logger::warning('[ROUTER_V6] Failed to find pending orders', ['error' => $e->getMessage()]);
             return [];
         }
     }
@@ -5239,20 +5245,20 @@ PROMPT;
             $result = $this->orderService->linkPaymentToOrder($orderId, $paymentId);
 
             if ($result['success']) {
-                Logger::info('[ROUTER_V5] Linked payment to order via OrderService', [
+                Logger::info('[ROUTER_V6] Linked payment to order via OrderService', [
                     'payment_id' => $paymentId,
                     'order_id' => $orderId,
                 ]);
                 return true;
             }
 
-            Logger::warning('[ROUTER_V5] OrderService failed to link payment', [
+            Logger::warning('[ROUTER_V6] OrderService failed to link payment', [
                 'error' => $result['error'] ?? 'Unknown error',
             ]);
             return false;
 
         } catch (\Throwable $e) {
-            Logger::error('[ROUTER_V5] Failed to link payment to order', [
+            Logger::error('[ROUTER_V6] Failed to link payment to order', [
                 'error' => $e->getMessage(),
                 'payment_id' => $paymentId,
                 'order_id' => $orderId,
@@ -5298,7 +5304,7 @@ PROMPT;
                 'description' => 'ลูกค้าสอบถามเรื่องรับฝาก/ฝากขาย',
             ], $config, $context);
         } catch (\Exception $e) {
-            Logger::warning('[ROUTER_V5] Failed to create pawn case', ['error' => $e->getMessage()]);
+            Logger::warning('[ROUTER_V6] Failed to create pawn case', ['error' => $e->getMessage()]);
         }
 
         // ✅ 2025-01-31: Set pending_intent state so handleImage knows this is pawn assessment
@@ -5312,7 +5318,7 @@ PROMPT;
                 'created_at' => time(),
             ], $platformUserId, (int) $channelId, 600); // จำ 10 นาที
 
-            Logger::info('[ROUTER_V5] Set pending_intent for pawn_assessment', [
+            Logger::info('[ROUTER_V6] Set pending_intent for pawn_assessment', [
                 'platform_user_id' => $platformUserId,
                 'channel_id' => $channelId,
             ]);
@@ -5339,7 +5345,7 @@ PROMPT;
             // Delegate to InstallmentService
             return $this->installmentService->findActiveInstallments($externalUserId);
         } catch (Exception $e) {
-            Logger::warning('[ROUTER_V5] Failed to find active installments', ['error' => $e->getMessage()]);
+            Logger::warning('[ROUTER_V6] Failed to find active installments', ['error' => $e->getMessage()]);
             return [];
         }
     }
@@ -5360,7 +5366,7 @@ PROMPT;
             $result = $this->installmentService->linkPaymentToInstallment($installmentId, $paymentId);
 
             if ($result['success']) {
-                Logger::info('[ROUTER_V5] Linked payment to installment via InstallmentService', [
+                Logger::info('[ROUTER_V6] Linked payment to installment via InstallmentService', [
                     'payment_id' => $paymentId,
                     'installment_id' => $installmentId,
                     'amount' => $amount,
@@ -5368,13 +5374,13 @@ PROMPT;
                 return true;
             }
 
-            Logger::warning('[ROUTER_V5] InstallmentService failed to link payment', [
+            Logger::warning('[ROUTER_V6] InstallmentService failed to link payment', [
                 'error' => $result['error'] ?? 'Unknown error',
             ]);
             return false;
 
         } catch (Exception $e) {
-            Logger::error('[ROUTER_V5] Failed to link payment to installment', [
+            Logger::error('[ROUTER_V6] Failed to link payment to installment', [
                 'error' => $e->getMessage(),
                 'payment_id' => $paymentId,
                 'installment_id' => $installmentId,
@@ -5418,7 +5424,7 @@ PROMPT;
 
             return $this->db->query($sql, [$customer['id']]);
         } catch (Exception $e) {
-            Logger::warning('[ROUTER_V5] Failed to find active pawns', ['error' => $e->getMessage()]);
+            Logger::warning('[ROUTER_V6] Failed to find active pawns', ['error' => $e->getMessage()]);
             return [];
         }
     }
@@ -5440,7 +5446,7 @@ PROMPT;
             $result = $this->pawnService->linkPaymentToPawn($pawnId, $paymentId, $paymentType);
 
             if ($result['success']) {
-                Logger::info('[ROUTER_V5] Linked payment to pawn via PawnService', [
+                Logger::info('[ROUTER_V6] Linked payment to pawn via PawnService', [
                     'payment_id' => $paymentId,
                     'pawn_id' => $pawnId,
                     'payment_type' => $paymentType,
@@ -5449,13 +5455,13 @@ PROMPT;
                 return true;
             }
 
-            Logger::warning('[ROUTER_V5] PawnService failed to link payment', [
+            Logger::warning('[ROUTER_V6] PawnService failed to link payment', [
                 'error' => $result['error'] ?? 'Unknown error',
             ]);
             return false;
 
         } catch (\Throwable $e) {
-            Logger::error('[ROUTER_V5] Failed to link payment to pawn', [
+            Logger::error('[ROUTER_V6] Failed to link payment to pawn', [
                 'error' => $e->getMessage(),
                 'payment_id' => $paymentId,
                 'pawn_id' => $pawnId,
@@ -5522,7 +5528,7 @@ PROMPT;
                 return ['reply' => "✅ เปลี่ยนวิธีชำระเรียบร้อยค่ะ\n\n📋 ออเดอร์: #{$orderNo}\n📦 สินค้า: {$productName}\n\n• จาก: {$oldLabel}\n• เป็น: {$newLabel}\n\nแอดมินจะติดต่อยืนยันรายละเอียดนะคะ 😊"];
 
             } catch (Exception $e) {
-                Logger::error('[ROUTER_V5] Failed to update payment type', ['error' => $e->getMessage()]);
+                Logger::error('[ROUTER_V6] Failed to update payment type', ['error' => $e->getMessage()]);
             }
         }
 
@@ -5564,7 +5570,7 @@ PROMPT;
             $case = $caseEngine->getOrCreateCase($caseType, $slots);
 
             if ($case) {
-                Logger::info('[ROUTER_V5] Case created/updated', [
+                Logger::info('[ROUTER_V6] Case created/updated', [
                     'case_id' => $case['id'] ?? null,
                     'case_no' => $case['case_no'] ?? null,
                     'case_type' => $caseType,
@@ -5573,7 +5579,7 @@ PROMPT;
 
             return $case;
         } catch (\Exception $e) {
-            Logger::error('[ROUTER_V5] CaseEngine error', ['error' => $e->getMessage()]);
+            Logger::error('[ROUTER_V6] CaseEngine error', ['error' => $e->getMessage()]);
             return null;
         }
     }
@@ -5762,7 +5768,7 @@ PROMPT;
             $userId = $customer ? (int) ($customer['user_id'] ?? $customer['id']) : null;
 
             if (!$userId) {
-                Logger::warning('[ROUTER_V5] Cannot save address: no user_id', [
+                Logger::warning('[ROUTER_V6] Cannot save address: no user_id', [
                     'platform_user_id' => $platformUserId
                 ]);
                 return null;
@@ -5784,7 +5790,7 @@ PROMPT;
             $result = $this->addressService->saveAddress($userId, $addressPayload);
 
             if ($result['success']) {
-                Logger::info('[ROUTER_V5] Customer address saved via AddressService', [
+                Logger::info('[ROUTER_V6] Customer address saved via AddressService', [
                     'address_id' => $result['address_id'],
                     'user_id' => $userId,
                     'platform_user_id' => $platformUserId,
@@ -5792,11 +5798,11 @@ PROMPT;
                 return (int) $result['address_id'];
             }
 
-            Logger::warning('[ROUTER_V5] AddressService failed', ['error' => $result['error'] ?? 'Unknown']);
+            Logger::warning('[ROUTER_V6] AddressService failed', ['error' => $result['error'] ?? 'Unknown']);
             return null;
 
         } catch (\Exception $e) {
-            Logger::error('[ROUTER_V5] Failed to save address', ['error' => $e->getMessage()]);
+            Logger::error('[ROUTER_V6] Failed to save address', ['error' => $e->getMessage()]);
             return null;
         }
     }

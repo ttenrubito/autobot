@@ -1976,13 +1976,16 @@ function openAddPaymentModal() {
 
 /**
  * Open Add Payment Modal with pre-filled data (from pawns page)
- * @param {Object} prefill - Prefill data {type, pawn_id, pawn_no, amount, description}
+ * @param {Object} prefill - Prefill data {type, pawn_id, pawn_no, amount, description, customer_profile_id}
  */
 function openAddPaymentModalWithPrefill(prefill = {}) {
     // First open modal normally
     openAddPaymentModal();
 
-    setTimeout(() => {
+    // ✅ Increase delay to ensure modal DOM is fully ready
+    setTimeout(async () => {
+        console.log('📍 openAddPaymentModalWithPrefill: Prefilling with:', prefill);
+        
         // Select payment type
         if (prefill.type) {
             const typeRadio = document.querySelector(`input[name="payment_type"][value="${prefill.type}"]`);
@@ -2038,13 +2041,14 @@ function openAddPaymentModalWithPrefill(prefill = {}) {
             console.log('📝 Pre-filled pawn data:', { pawn_id: prefill.pawn_id, pawn_no: prefill.pawn_no });
         }
 
-        // Auto-fill customer if customer_profile_id provided
+        // ✅ Auto-fill customer if customer_profile_id provided (use await)
         if (prefill.customer_profile_id) {
-            loadAndSelectCustomer(prefill.customer_profile_id);
+            console.log('📍 Calling loadAndSelectCustomer with ID:', prefill.customer_profile_id);
+            await loadAndSelectCustomer(prefill.customer_profile_id);
         }
 
-        console.log('📝 Modal opened with prefill:', prefill);
-    }, 100);
+        console.log('✅ Modal prefill complete');
+    }, 200); // ✅ Increased from 100ms to 200ms
 }
 
 /**
@@ -2068,26 +2072,40 @@ function clearPawnSelection() {
  * Load customer by ID and auto-select
  */
 async function loadAndSelectCustomer(customerId) {
-    if (!customerId) return;
+    if (!customerId) {
+        console.warn('⚠️ loadAndSelectCustomer: No customerId provided');
+        return;
+    }
+    
+    console.log('📍 loadAndSelectCustomer: Loading customer ID:', customerId);
     
     try {
+        const token = localStorage.getItem('auth_token');
         const response = await fetch(`/api/customer-profiles.php?id=${customerId}`, {
-            headers: { 'Authorization': 'Bearer ' + getToken() }
+            headers: { 'Authorization': 'Bearer ' + token }
         });
         const data = await response.json();
         
+        console.log('📍 loadAndSelectCustomer: API response:', data);
+        
         if (data.success && data.data) {
             const customer = data.data;
+            // ✅ Pass all required fields to selectCustomer
             selectCustomer({
                 id: customer.id,
-                display_name: customer.display_name || customer.name || 'ลูกค้า',
+                display_name: customer.display_name || customer.full_name || 'ลูกค้า',
+                full_name: customer.full_name || '',
                 phone: customer.phone || '',
-                platform_user_id: customer.platform_user_id || ''
+                platform: customer.platform || '',
+                platform_user_id: customer.platform_user_id || '',
+                avatar_url: customer.avatar_url || customer.profile_pic_url || ''
             });
-            console.log('📝 Auto-selected customer:', customer.id, customer.display_name);
+            console.log('✅ Auto-selected customer:', customer.id, customer.display_name);
+        } else {
+            console.warn('⚠️ loadAndSelectCustomer: Customer not found or API error:', data.message);
         }
     } catch (error) {
-        console.error('Error loading customer:', error);
+        console.error('❌ loadAndSelectCustomer Error:', error);
     }
 }
 
