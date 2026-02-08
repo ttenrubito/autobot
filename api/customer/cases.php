@@ -182,6 +182,7 @@ function getAllCases($pdo, $user_id, $userChannels) {
             c.payment_id,
             c.savings_account_id,
             c.slots,
+            c.products_interested,
             c.resolution_type,
             c.resolution_notes,
             c.created_at,

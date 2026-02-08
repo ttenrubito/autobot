@@ -793,6 +793,12 @@ function renderOrderDetails(order) {
                     <div class="detail-label">จำนวน</div>
                     <div class="detail-value">${order.quantity || 1} ชิ้น</div>
                 </div>
+                ${parseFloat(order.shipping_fee) > 0 ? `
+                <div class="detail-item">
+                    <div class="detail-label">🚚 ค่าจัดส่ง</div>
+                    <div class="detail-value" style="color: #d97706; font-weight: 600;">฿${formatNumber(parseFloat(order.shipping_fee))}</div>
+                </div>
+                ` : ''}
             </div>
         </div>
         
@@ -997,6 +1003,17 @@ function buildAddressSection(order) {
            </a>`
         : '';
 
+    // ✅ FIX: Show shipping fee if available
+    const shippingFee = parseFloat(order.shipping_fee) || 0;
+    const shippingFeeHtml = shippingFee > 0 ? `
+        <div style="margin-top: 0.75rem; padding: 0.5rem 0.75rem; background: #fef3c7; border-radius: 6px; display: flex; align-items: center; gap: 0.5rem;">
+            <span style="font-size: 1rem;">🚚</span>
+            <span style="font-size: 0.85rem; color: #92400e;">
+                ค่าจัดส่ง: <strong style="color: #d97706;">฿${formatNumber(shippingFee)}</strong>
+            </span>
+        </div>
+    ` : '';
+
     return `
         <div class="detail-section">
             <div class="detail-section-title">📦 ที่อยู่จัดส่ง (${getShippingMethodLabel(shippingMethod)})</div>
@@ -1004,6 +1021,7 @@ function buildAddressSection(order) {
                 <div class="address-name">${recipientName || '-'}</div>
                 <div class="address-phone">${phone || '-'}</div>
                 <div>${addressParts.join(' ') || '-'}</div>
+                ${shippingFeeHtml}
                 ${trackingHtml}
                 ${viewAddressBtn}
             </div>
@@ -1807,19 +1825,56 @@ function toggleShippingFields() {
 document.addEventListener('DOMContentLoaded', function () {
     const totalAmountInput = document.getElementById('totalAmount');
     const downPaymentInput = document.getElementById('downPayment');
+    const shippingFeeInput = document.getElementById('shippingFee');
+    const shippingMethodSelect = document.getElementById('shippingMethod');
 
     if (totalAmountInput) {
         totalAmountInput.addEventListener('input', function () {
             const paymentType = document.querySelector('input[name="payment_type"]:checked')?.value;
             if (paymentType === 'deposit') autoCalculateDeposit();
             if (paymentType === 'installment') calculateInstallment();
+            // ✅ FIX: Update message template when total amount changes
+            updateMessageTemplate();
         });
     }
 
     if (downPaymentInput) {
         downPaymentInput.addEventListener('input', calculateInstallment);
     }
+    
+    // ✅ FIX: Update message template when shipping fee or method changes
+    if (shippingFeeInput) {
+        shippingFeeInput.addEventListener('input', updateMessageTemplate);
+    }
+    if (shippingMethodSelect) {
+        shippingMethodSelect.addEventListener('change', updateMessageTemplate);
+    }
 });
+
+/**
+ * ✅ ตัดคำนำหน้าชื่อ (นาย/นาง/นางสาว ฯลฯ) ออก เพื่อใช้กับ "คุณ..."
+ */
+function removeNamePrefix(name) {
+    if (!name) return 'ลูกค้า';
+    // คำนำหน้าภาษาไทยและอังกฤษ
+    const prefixes = [
+        'นาย', 'นาง', 'นางสาว', 'น.ส.', 'ด.ช.', 'ด.ญ.', 'เด็กชาย', 'เด็กหญิง',
+        'คุณ', 'พ.ต.', 'พ.ท.', 'พ.อ.', 'ร.ต.', 'ร.ท.', 'ร.อ.', 
+        'Mr.', 'Mrs.', 'Miss', 'Ms.', 'Dr.'
+    ];
+    let cleanName = name.trim();
+    for (const prefix of prefixes) {
+        if (cleanName.startsWith(prefix + ' ')) {
+            cleanName = cleanName.substring(prefix.length).trim();
+            break;
+        }
+        if (cleanName.startsWith(prefix)) {
+            cleanName = cleanName.substring(prefix.length).trim();
+            break;
+        }
+    }
+    return cleanName || 'ลูกค้า';
+}
 
 /**
  * Update message template when bank account is selected
@@ -1828,10 +1883,16 @@ document.addEventListener('DOMContentLoaded', function () {
 function updateMessageTemplate() {
     const select = document.getElementById('bankAccount');
     const textarea = document.getElementById('customerMessage');
-    const customerName = document.getElementById('customerName')?.value?.trim() || 'ลูกค้า';
-    const totalAmount = document.getElementById('totalAmount')?.value || '0';
+    const rawCustomerName = document.getElementById('customerName')?.value?.trim() || 'ลูกค้า';
+    const customerName = removeNamePrefix(rawCustomerName);
+    const totalAmount = parseFloat(document.getElementById('totalAmount')?.value) || 0;
     const productName = document.getElementById('productName')?.value?.trim() || 'สินค้า';
     const paymentType = document.querySelector('input[name="payment_type"]:checked')?.value || 'full';
+    
+    // ✅ FIX: Include shipping fee in total
+    const shippingFee = parseFloat(document.getElementById('shippingFee')?.value) || 0;
+    const shippingMethod = document.getElementById('shippingMethod')?.value || 'pickup';
+    const grandTotal = totalAmount + shippingFee;
 
     if (!select || !textarea) return;
 
@@ -1845,7 +1906,25 @@ function updateMessageTemplate() {
     const bankName = selectedOption.dataset.bank || '';
     const accountName = selectedOption.dataset.name || '';
     const accountNumber = selectedOption.dataset.number || '';
-    const formattedAmount = formatNumber(parseFloat(totalAmount) || 0);
+    const formattedAmount = formatNumber(totalAmount);
+    const formattedGrandTotal = formatNumber(grandTotal);
+    const formattedShipping = formatNumber(shippingFee);
+    
+    // ✅ Build shipping info text
+    const shippingMethodLabel = {
+        'pickup': 'รับที่ร้าน',
+        'ems': 'จัดส่ง EMS',
+        'grab': 'Grab Express',
+        'post': 'ไปรษณีย์'
+    }[shippingMethod] || shippingMethod;
+    
+    const hasShipping = shippingFee > 0 && shippingMethod !== 'pickup';
+    const shippingLine = hasShipping 
+        ? `🚚 ค่าจัดส่ง (${shippingMethodLabel}): ${formattedShipping} บาท\n` 
+        : '';
+    const totalLine = hasShipping
+        ? `💰 ยอดชำระรวม: ${formattedGrandTotal} บาท`
+        : `💰 ยอดชำระ: ${formattedAmount} บาท`;
 
     let template = '';
 
@@ -1869,12 +1948,12 @@ function updateMessageTemplate() {
 
             template = `🛒 สร้างคำสั่งซื้อผ่อนชำระเรียบร้อยแล้วค่ะ
 
-ขอบพระคุณค่ะ คุณ${customerName} 🙏
-ที่ไว้วางใจเลือกซื้อ ${productName} จากร้าน ฮ.เฮง เฮง 💎
+สวัสดีค่ะ คุณ${customerName} 🙏
+ขอบคุณที่เลือกซื้อ ${productName} ค่ะ 💎
 
-� เลขที่: {{ORDER_NUMBER}}
+📋 เลขที่: {{ORDER_NUMBER}}
 
-�💰 ยอดรวม: ${formattedAmount} บาท
+💎💰 ยอดรวม: ${formattedAmount} บาท
 📝 ค่าดำเนินการ 3%: ${formatNumber(fee)} บาท
 
 📅 ผ่อน 3 งวด:
@@ -1899,8 +1978,8 @@ function updateMessageTemplate() {
 
             template = `🛒 สร้างคำสั่งซื้อมัดจำเรียบร้อยแล้วค่ะ
 
-ขอบพระคุณค่ะ คุณ${customerName} 🙏
-ที่ไว้วางใจเลือกซื้อ ${productName} จากร้าน ฮ.เฮง เฮง 💎
+สวัสดีค่ะ คุณ${customerName} 🙏
+ขอบคุณที่เลือกซื้อ ${productName} ค่ะ 💎
 
 📋 เลขที่: {{ORDER_NUMBER}}
 
@@ -1921,8 +2000,8 @@ function updateMessageTemplate() {
             // ออมสินค้า
             template = `🛒 สร้างคำสั่งออมสินค้าเรียบร้อยแล้วค่ะ
 
-ขอบพระคุณค่ะ คุณ${customerName} 🙏
-ที่เลือกออมสินค้า ${productName} กับร้าน ฮ.เฮง เฮง 💎
+สวัสดีค่ะ คุณ${customerName} 🙏
+ขอบคุณที่เลือกออมสินค้า ${productName} ค่ะ 💎
 
 📋 เลขที่: {{ORDER_NUMBER}}
 
@@ -1941,19 +2020,20 @@ function updateMessageTemplate() {
             // โอนเต็ม (full)
             template = `🛒 สร้างคำสั่งซื้อเรียบร้อยแล้วค่ะ
 
-ขอบพระคุณค่ะ คุณ${customerName} 🙏
-ที่ไว้วางใจเลือกซื้อ ${productName} จากร้าน ฮ.เฮง เฮง 💎
+สวัสดีค่ะ คุณ${customerName} 🙏
+ขอบคุณที่เลือกซื้อ ${productName} ค่ะ 💎
 
 📋 เลขที่: {{ORDER_NUMBER}}
 
-💰 ยอดชำระ: ${formattedAmount} บาท
+💎 ราคาสินค้า: ${formattedAmount} บาท
+${shippingLine}${totalLine}
 
 🏦 ข้อมูลการโอนเงิน
 ธนาคาร: ${bankName}
 ชื่อบัญชี: ${accountName}
 เลขบัญชี: ${accountNumber}
 
-หากคุณ${customerName} ชำระแล้ว แจ้งสลิปให้แอดมินได้เลยนะคะ 🙏`;
+ชำระเงินแล้วส่งสลิปมาได้เลยนะคะ 🙏`;
     }
 
     textarea.value = template;

@@ -393,42 +393,59 @@ function verifyPayment($db, $pdo, int $paymentId, $adminId)
 
     // Update order if linked
     if ($payment['order_id']) {
+        // ✅ FIX: Get current order info to properly calculate paid status
+        $stmtOrder = $pdo->prepare("SELECT total_amount, paid_amount, status FROM orders WHERE id = ?");
+        $stmtOrder->execute([$payment['order_id']]);
+        $orderInfo = $stmtOrder->fetch(PDO::FETCH_ASSOC);
+        
+        $orderTotalAmount = (float) ($orderInfo['total_amount'] ?? 0);
+        $currentPaidAmount = (float) ($orderInfo['paid_amount'] ?? 0);
+        $newPaidAmount = $currentPaidAmount + (float) $payment['amount'];
+        
         // For installment, only mark as paid if all periods done
         if ($payment['payment_type'] === 'installment') {
             if ($isInstallmentComplete) {
                 $stmt = $pdo->prepare("
                     UPDATE orders 
                     SET payment_status = 'paid',
-                        status = 'processing',
+                        status = 'paid',
+                        paid_amount = ?,
                         updated_at = NOW()
                     WHERE id = ?
                 ");
+                $stmt->execute([$newPaidAmount, $payment['order_id']]);
             } else {
                 $stmt = $pdo->prepare("
                     UPDATE orders 
                     SET payment_status = 'partial',
-                        paid_amount = COALESCE(paid_amount, 0) + ?,
+                        paid_amount = ?,
                         updated_at = NOW()
                     WHERE id = ?
                 ");
-                $stmt->execute([$payment['amount'], $payment['order_id']]);
-                $stmt = null; // Skip second execute
+                $stmt->execute([$newPaidAmount, $payment['order_id']]);
             }
         } else {
+            // ✅ FIX: Properly check if fully paid and update status accordingly
+            $isPaidInFull = $newPaidAmount >= $orderTotalAmount;
+            
             $stmt = $pdo->prepare("
                 UPDATE orders 
-                SET payment_status = 'paid',
-                    status = CASE WHEN status = 'pending_payment' THEN 'processing' ELSE status END,
-                    paid_amount = COALESCE(paid_amount, 0) + ?,
+                SET payment_status = CASE 
+                        WHEN ? >= total_amount THEN 'paid'
+                        ELSE 'partial'
+                    END,
+                    status = CASE 
+                        WHEN ? >= total_amount THEN 'paid'
+                        WHEN status IN ('pending', 'draft', 'pending_payment') THEN 'processing'
+                        ELSE status
+                    END,
+                    paid_amount = ?,
                     updated_at = NOW()
                 WHERE id = ?
             ");
-            $stmt->execute([$payment['amount'], $payment['order_id']]);
-            $stmt = null;
-        }
-
-        if ($stmt) {
-            $stmt->execute([$payment['order_id']]);
+            $stmt->execute([$newPaidAmount, $newPaidAmount, $newPaidAmount, $payment['order_id']]);
+            
+            error_log("[VerifyPayment] Order #{$payment['order_id']}: total={$orderTotalAmount}, paid={$newPaidAmount}, isPaidInFull=" . ($isPaidInFull ? 'YES' : 'NO'));
         }
     }
 

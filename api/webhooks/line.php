@@ -151,7 +151,7 @@ function processEvent($event)
     // ✅ Upsert customer profile (ถ้าเป็นข้อความจากลูกค้า ไม่ใช่ admin)
     $channelAccessToken = $config['channel_access_token'] ?? '';
     if (!$isAdmin && !empty($userId) && !empty($channelAccessToken)) {
-        upsertCustomerProfile('line', $userId, $channelAccessToken, 'default', (int)$channel['id']);
+        upsertCustomerProfile('line', $userId, $channelAccessToken, 'default', (int) $channel['id']);
     }
 
     if ($isAdmin) {
@@ -253,6 +253,12 @@ function processEvent($event)
         ];
     }
 
+    // ✅ Send typing/loading indicator BEFORE calling Gateway
+    // This shows loading animation while bot processes (can take 1-5 seconds for LLM)
+    if (!$isAdmin) {
+        sendLoadingIndicator($userId, $channel);
+    }
+
     // Call internal message gateway
     $response = callGateway($gatewayMessage);
 
@@ -272,7 +278,7 @@ function processEvent($event)
                 'types' => array_map(fn($m) => $m['type'] ?? 'unknown', $replyMessages)
             ]);
         }
-        
+
         // ✅ FIX: Check if reply_messages already has text content
         // If reply_messages contains text type, skip reply_texts to avoid duplicate
         $replyMessagesHasText = false;
@@ -282,7 +288,7 @@ function processEvent($event)
                 break;
             }
         }
-        
+
         // Check for new format: reply_texts array (ONLY if reply_messages doesn't have text)
         if (!$replyMessagesHasText && !empty($data['reply_texts']) && is_array($data['reply_texts'])) {
             $replyTexts = $data['reply_texts'];
@@ -294,8 +300,7 @@ function processEvent($event)
         elseif (!$replyMessagesHasText && !empty($data['reply_text']) && empty($replyMessages)) {
             $replyTexts = [(string) $data['reply_text']];
             Logger::info('[LINE_WEBHOOK] Single message reply (legacy format)');
-        }
-        elseif ($replyMessagesHasText) {
+        } elseif ($replyMessagesHasText) {
             Logger::info('[LINE_WEBHOOK] Skipped reply_texts - reply_messages already has text content');
         }
     }
@@ -330,7 +335,7 @@ function processEvent($event)
             );
         }
     }
-    
+
     // Save Flex message summary to chat_messages
     if (!empty($replyMessages)) {
         foreach ($replyMessages as $idx => $msg) {
@@ -492,7 +497,7 @@ function saveChatMessage($channelId, $userId, $messageType, $text, $messageId, $
             "SELECT id FROM chat_sessions WHERE channel_id = ? AND external_user_id = ? LIMIT 1",
             [$channelId, $userId]
         );
-        
+
         $sessionId = null;
         if ($session) {
             $sessionId = $session['id'];
@@ -504,23 +509,23 @@ function saveChatMessage($channelId, $userId, $messageType, $text, $messageId, $
             );
             $sessionId = $db->lastInsertId();
         }
-        
+
         if (!$sessionId) {
             Logger::warning("[LINE_WEBHOOK] Could not get/create session for chat message");
             return null;
         }
-        
+
         // Map direction/senderType to role
         $role = 'user';
         if ($direction === 'outgoing') {
             $role = ($senderType === 'bot') ? 'assistant' : 'system';
         }
-        
+
         // Skip empty messages
         if (empty($text)) {
             return null;
         }
-        
+
         // Insert into chat_messages with correct schema
         $sql = "INSERT INTO chat_messages (session_id, role, text, created_at) VALUES (?, ?, ?, NOW())";
         $db->execute($sql, [$sessionId, $role, $text]);
@@ -538,6 +543,69 @@ function saveChatMessage($channelId, $userId, $messageType, $text, $messageId, $
         Logger::error("Failed to save chat message: " . $e->getMessage());
         return null;
     }
+}
+
+/**
+ * ✅ Send loading/typing indicator to LINE user via Chat Action API
+ * Shows loading animation while bot processes message
+ * 
+ * Note: LINE's loading indicator lasts 5 seconds per API call
+ * See: https://developers.line.biz/en/reference/messaging-api/#send-broadcast-message
+ * 
+ * @param string $userId LINE user ID
+ * @param array $channel Channel configuration with channel_access_token
+ * @return bool Success
+ */
+function sendLoadingIndicator(string $userId, array $channel): bool
+{
+    $config = json_decode($channel['config'] ?? '{}', true);
+    $channelAccessToken = $config['channel_access_token'] ?? '';
+
+    if (empty($channelAccessToken)) {
+        Logger::warning('[LINE_TYPING] No channel_access_token for channel_id=' . ($channel['id'] ?? ''));
+        return false;
+    }
+
+    // LINE Chat action: send loading animation
+    // This shows for 5 seconds or until next message from bot
+    $url = 'https://api.line.me/v2/bot/chat/loading/start';
+
+    $payload = [
+        'chatId' => $userId,
+        'loadingSeconds' => 20,  // Max 60 seconds, will stop when reply is sent
+    ];
+
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode($payload),
+        CURLOPT_HTTPHEADER => [
+            'Content-Type: application/json',
+            'Authorization: Bearer ' . $channelAccessToken
+        ],
+        CURLOPT_TIMEOUT => 5,  // Short timeout
+        CURLOPT_CONNECTTIMEOUT => 2,
+    ]);
+
+    $resp = curl_exec($ch);
+    $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err = curl_error($ch);
+    curl_close($ch);
+
+    if ($http !== 202 && $http !== 200) {
+        Logger::warning('[LINE_TYPING] Failed to send loading indicator', [
+            'http_code' => $http,
+            'curl_error' => $err,
+            'response' => substr((string) $resp, 0, 200),
+        ]);
+        return false;
+    }
+
+    Logger::info('[LINE_TYPING] ✅ Loading indicator sent', [
+        'user_id' => $userId,
+    ]);
+    return true;
 }
 
 /**
@@ -592,13 +660,14 @@ function sendLineReply($replyToken, $texts, $actions, $channel, $flexMessages = 
 
     // Build messages array
     $messages = [];
-    
+
     // 0️⃣ Add Flex/Rich messages FIRST (if any)
     if (!empty($flexMessages) && is_array($flexMessages)) {
         Logger::info("[LINE_WEBHOOK] 🎨 Adding " . count($flexMessages) . " Flex message(s)");
         foreach ($flexMessages as $flexMsg) {
-            if (!is_array($flexMsg)) continue;
-            
+            if (!is_array($flexMsg))
+                continue;
+
             // Validate it's a valid LINE message format
             if (!empty($flexMsg['type'])) {
                 $messages[] = $flexMsg;
@@ -607,7 +676,7 @@ function sendLineReply($replyToken, $texts, $actions, $channel, $flexMessages = 
                     'altText' => $flexMsg['altText'] ?? 'Rich content'
                 ]);
             }
-            
+
             // LINE API limit: max 5 messages per reply
             if (count($messages) >= 5) {
                 Logger::warning("[LINE_WEBHOOK] Reached LINE API limit of 5 messages (at flex)");
@@ -619,15 +688,16 @@ function sendLineReply($replyToken, $texts, $actions, $channel, $flexMessages = 
     // ✅ Extract Quick Reply items and Images from actions (if any)
     $quickReplyItems = [];
     $imageActions = [];
-    
+
     if (!empty($actions) && is_array($actions)) {
         Logger::info("[LINE_WEBHOOK] 🔍 Extracting Quick Reply and Images from actions", [
             'actions_count' => count($actions),
         ]);
-        
+
         foreach ($actions as $action) {
-            if (!is_array($action)) continue;
-            
+            if (!is_array($action))
+                continue;
+
             // Collect quick_replies
             if (($action['type'] ?? '') === 'quick_reply' && !empty($action['items'])) {
                 foreach ($action['items'] as $item) {
@@ -641,13 +711,13 @@ function sendLineReply($replyToken, $texts, $actions, $channel, $flexMessages = 
                     ];
                 }
             }
-            
+
             // Collect images
             if (($action['type'] ?? '') === 'image' && !empty($action['url'])) {
                 $imageActions[] = $action;
             }
         }
-        
+
         if (!empty($quickReplyItems)) {
             Logger::info("[LINE_WEBHOOK] ✅ Found quick_replies", ['count' => count($quickReplyItems)]);
         }
@@ -660,30 +730,30 @@ function sendLineReply($replyToken, $texts, $actions, $channel, $flexMessages = 
     // ✅ BUILD ORDER: Images FIRST, then text + Quick Reply LAST
     // This ensures Quick Reply buttons appear at the bottom
     // =========================================================
-    
+
     // 1️⃣ Add image messages FIRST
     if (!empty($imageActions)) {
         Logger::info("[LINE_WEBHOOK] 📸 Adding " . count($imageActions) . " image(s) FIRST");
         foreach ($imageActions as $idx => $imgAction) {
             $imageUrl = $imgAction['url'];
-            
+
             // Convert relative URL to absolute
             if (strpos($imageUrl, 'http') !== 0) {
                 $domain = getenv('APP_URL') ?: 'https://autobot.boxdesign.in.th';
                 $imageUrl = rtrim($domain, '/') . '/' . ltrim($imageUrl, '/');
             }
-            
+
             // LINE requires both originalContentUrl and previewImageUrl
             $messages[] = [
                 'type' => 'image',
                 'originalContentUrl' => $imageUrl,
                 'previewImageUrl' => $imageUrl
             ];
-            
+
             Logger::info("[LINE_WEBHOOK] 📸 Added image #" . ($idx + 1), [
                 'image_url' => $imageUrl
             ]);
-            
+
             // LINE API limit: max 5 messages per reply
             if (count($messages) >= 5) {
                 Logger::warning("[LINE_WEBHOOK] Reached LINE API limit of 5 messages (at images)");
@@ -702,12 +772,12 @@ function sendLineReply($replyToken, $texts, $actions, $channel, $flexMessages = 
                     Logger::warning("[LINE_WEBHOOK] Reached LINE API limit of 5 messages (at text)");
                     break;
                 }
-                
+
                 $msg = [
                     'type' => 'text',
                     'text' => $text
                 ];
-                
+
                 // ✅ Attach Quick Reply to the LAST text message only
                 if (!empty($quickReplyItems) && $idx === count($texts) - 1) {
                     $msg['quickReply'] = ['items' => array_slice($quickReplyItems, 0, 13)]; // LINE limit 13 items
@@ -716,12 +786,12 @@ function sendLineReply($replyToken, $texts, $actions, $channel, $flexMessages = 
                         'message_index' => $idx
                     ]);
                 }
-                
+
                 $messages[] = $msg;
             }
         }
     }
-    
+
     Logger::info("[LINE_WEBHOOK] ✅ Built messages array", [
         'total_count' => count($messages),
         'image_count' => count($imageActions),
@@ -787,20 +857,20 @@ function upsertCustomerProfile(string $platform, string $platformUserId, string 
 
     try {
         $db = Database::getInstance();
-        
+
         // First check if profile already exists
         $existing = $db->queryOne(
             "SELECT id FROM customer_profiles WHERE platform = ? AND platform_user_id = ? LIMIT 1",
             [$platform, $platformUserId]
         );
-        
+
         if ($existing) {
             // Update last_active_at and total_inquiries
             $db->execute(
                 "UPDATE customer_profiles SET last_active_at = NOW(), total_inquiries = COALESCE(total_inquiries, 0) + 1, updated_at = NOW() WHERE id = ?",
                 [$existing['id']]
             );
-            return (int)$existing['id'];
+            return (int) $existing['id'];
         }
 
         // Get profile from LINE API
@@ -820,7 +890,7 @@ function upsertCustomerProfile(string $platform, string $platformUserId, string 
 
         $displayName = null;
         $avatarUrl = null;
-        
+
         if ($httpCode === 200) {
             $profile = json_decode($resp, true);
             if (is_array($profile)) {
@@ -848,14 +918,14 @@ function upsertCustomerProfile(string $platform, string $platformUserId, string 
         ";
 
         $db->execute($sql, [$tenantId, $channelId, $platform, $platformUserId, $displayName, $avatarUrl]);
-        
+
         // Get the ID (either new or existing due to race condition)
         $result = $db->queryOne(
             "SELECT id FROM customer_profiles WHERE platform = ? AND platform_user_id = ? LIMIT 1",
             [$platform, $platformUserId]
         );
-        
-        $profileId = $result ? (int)$result['id'] : null;
+
+        $profileId = $result ? (int) $result['id'] : null;
 
         Logger::info('[LINE_PROFILE] Customer profile upserted', [
             'profile_id' => $profileId,
@@ -863,7 +933,7 @@ function upsertCustomerProfile(string $platform, string $platformUserId, string 
             'platform_user_id' => $platformUserId,
             'display_name' => $displayName,
         ]);
-        
+
         return $profileId;
 
     } catch (Throwable $e) {

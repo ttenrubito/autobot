@@ -247,7 +247,7 @@ include('../includes/customer/sidebar.php');
                         <div class="form-group">
                             <label for="itemName">ชื่อ/รายละเอียดสินค้า <span class="required">*</span></label>
                             <input type="text" id="itemName" name="item_name" class="form-input" required
-                                placeholder="เช่น สร้อยคอทองคำ 2 บาท">
+                                placeholder="เช่น สร้อยคอทองคำ 2 บาท" oninput="updatePawnMessageTemplate()">
                         </div>
                     </div>
                     <div class="form-group">
@@ -277,18 +277,18 @@ include('../includes/customer/sidebar.php');
                         <div class="form-group">
                             <label for="loanAmount">เงินต้น (บาท) <span class="required">*</span></label>
                             <input type="number" id="loanAmount" name="loan_amount" class="form-input" required
-                                placeholder="10000" min="0" step="1">
+                                placeholder="10000" min="0" step="1" oninput="updatePawnMessageTemplate()">
                         </div>
                         <div class="form-group">
                             <label for="interestRate">อัตราดอกเบี้ย (% ต่อเดือน) <span class="required">*</span></label>
                             <input type="number" id="interestRate" name="interest_rate" class="form-input" required
-                                placeholder="2" min="0" step="0.1" value="2">
+                                placeholder="2" min="0" step="0.1" value="2" oninput="updatePawnMessageTemplate()">
                         </div>
                     </div>
                     <div class="detail-grid">
                         <div class="form-group">
                             <label for="pawnPeriod">ระยะเวลา (เดือน)</label>
-                            <select id="pawnPeriod" name="period_months" class="form-input">
+                            <select id="pawnPeriod" name="period_months" class="form-input" onchange="updateDueDateFromPeriod()">
                                 <option value="1">1 เดือน</option>
                                 <option value="2">2 เดือน</option>
                                 <option value="3" selected>3 เดือน</option>
@@ -298,7 +298,7 @@ include('../includes/customer/sidebar.php');
                         </div>
                         <div class="form-group">
                             <label for="dueDate">วันครบกำหนด</label>
-                            <input type="date" id="dueDate" name="due_date" class="form-input">
+                            <input type="date" id="dueDate" name="due_date" class="form-input" onchange="updatePawnMessageTemplate()">
                         </div>
                     </div>
                     <div class="form-group">
@@ -1718,8 +1718,7 @@ include('../includes/customer/sidebar.php');
 
         const template = `💎 รับจำนำเรียบร้อยแล้วค่ะ
 
-ขอบพระคุณค่ะ คุณ${customerName} 🙏
-ที่ไว้วางใจใช้บริการรับจำนำจากร้าน ฮ.เฮง เฮง
+สวัสดีค่ะ คุณ${customerName} 🙏
 
 📋 รหัส: {{PAWN_NUMBER}}
 📦 สินค้า: ${itemName}
@@ -1727,17 +1726,12 @@ include('../includes/customer/sidebar.php');
 📊 ดอกเบี้ย: ${interestRate}% ต่อเดือน (${formatNumber(monthlyInterest)} บาท/เดือน)
 📅 ครบกำหนด: ${dueDateFormatted}
 
-🔔 กำหนดชำระดอกเบี้ย
-▫️ ทุกวันที่ ${new Date(dueDate).getDate() || 1} ของเดือน
-▫️ ยอดดอก: ${formatNumber(monthlyInterest)} บาท/เดือน
-
 🏦 ข้อมูลการโอนเงิน
 ธนาคาร: ${bankName}
 ชื่อบัญชี: ${accountName}
 เลขบัญชี: ${accountNumber}
 
-💳 เมื่อชำระแล้ว ส่งสลิปมาได้เลยค่ะ 📷
-❓ หากมีข้อสงสัย สอบถามได้ตลอดนะคะ 🙏`;
+ชำระดอกเบี้ยแล้วส่งสลิปมาได้เลยนะคะ 🙏`;
 
         textarea.value = template;
     }
@@ -1752,6 +1746,19 @@ include('../includes/customer/sidebar.php');
                 btn.innerHTML = '<i class="fas fa-save"></i> บันทึก';
             }
         }
+    }
+
+    // ✅ Update due date based on period selection
+    function updateDueDateFromPeriod() {
+        const periodMonths = parseInt(document.getElementById('pawnPeriod')?.value) || 3;
+        const dueDate = new Date();
+        dueDate.setMonth(dueDate.getMonth() + periodMonths);
+        const dueDateEl = document.getElementById('dueDate');
+        if (dueDateEl) {
+            dueDateEl.value = dueDate.toISOString().split('T')[0];
+        }
+        // Update message template to reflect new due date
+        updatePawnMessageTemplate();
     }
 
     // ========================================
@@ -1780,14 +1787,20 @@ include('../includes/customer/sidebar.php');
 
             if (data.success && data.data && data.data.length > 0) {
                 const html = data.data.map(item => `
-                    <div class="eligible-item-card" onclick="selectEligibleItem(${item.order_id}, this)" data-order='${JSON.stringify(item)}'>
-                        <div class="eligible-item-header">
-                            <span class="eligible-item-code">${item.product_code || item.order_no}</span>
-                            <span class="eligible-item-date">${formatDate(item.purchase_date)}</span>
-                        </div>
-                        <div class="eligible-item-details">
-                            <span class="eligible-item-price">ราคาซื้อ: ฿${formatNumber(item.unit_price)}</span>
-                            <span class="eligible-item-loan">วงเงินกู้: ฿${formatNumber(item.suggested_loan)}</span>
+                    <div class="eligible-item-card" onclick="selectEligibleItem(${item.order_id}, this)" data-order='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
+                        <div style="display:flex;gap:0.75rem;align-items:flex-start;">
+                            ${item.product_image ? `<img src="${item.product_image}" alt="" style="width:60px;height:60px;object-fit:cover;border-radius:8px;flex-shrink:0;">` : '<div style="width:60px;height:60px;background:#f3f4f6;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;"><i class="fas fa-box" style="color:#9ca3af;"></i></div>'}
+                            <div style="flex:1;min-width:0;">
+                                <div class="eligible-item-header">
+                                    <span class="eligible-item-code">${item.product_code || item.order_no}</span>
+                                    <span class="eligible-item-date">${formatDate(item.purchase_date)}</span>
+                                </div>
+                                <div style="font-weight:600;margin:0.25rem 0;color:#111827;">${item.product_name || 'ไม่ระบุชื่อสินค้า'}</div>
+                                <div class="eligible-item-details">
+                                    <span class="eligible-item-price">ราคาซื้อ: ฿${formatNumber(item.unit_price)}</span>
+                                    <span class="eligible-item-loan">วงเงินกู้: ฿${formatNumber(item.suggested_loan)}</span>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 `).join('');
@@ -1823,14 +1836,16 @@ include('../includes/customer/sidebar.php');
         document.getElementById('selectedOrderId').value = orderId;
         document.getElementById('selectedOriginalPrice').value = selectedOrderData.unit_price;
 
-        // Auto-fill item details
-        document.getElementById('itemName').value = selectedOrderData.product_code || '';
+        // ✅ Auto-fill item details - FIXED: product_name ลง itemName, product_code ลง productRefId
+        document.getElementById('itemName').value = selectedOrderData.product_name || selectedOrderData.product_code || '';
+        document.getElementById('productRefId').value = selectedOrderData.product_code || '';
         document.getElementById('loanAmount').value = Math.round(selectedOrderData.suggested_loan);
 
-        // Auto-calculate due date based on business rules (30 days)
-        const dueDate = new Date();
-        dueDate.setDate(dueDate.getDate() + 30);
-        document.getElementById('dueDate').value = dueDate.toISOString().split('T')[0];
+        // ✅ Auto-calculate due date based on pawnPeriod selection
+        updateDueDateFromPeriod();
+        
+        // ✅ Update message template
+        updatePawnMessageTemplate();
     }
 
     function clearSelectedOrder() {

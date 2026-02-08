@@ -3643,11 +3643,13 @@ PROMPT;
                     // Track view
                     $this->productService->trackView($product, $context);
                     
-                    // Create case
+                    // Create case (✅ FIX: added product_ref_id and product_image_url)
                     $this->createOrUpdateCase(\CaseEngine::CASE_PRODUCT_INQUIRY, [
                         'product_code' => $product['code'] ?? $product['product_code'] ?? null,
                         'product_name' => $product['name'] ?? $product['title'] ?? null,
                         'product_price' => $product['price'] ?? $product['sale_price'] ?? null,
+                        'product_ref_id' => $product['ref_id'] ?? $product['id'] ?? null,
+                        'product_image_url' => $product['image'] ?? $product['thumbnail_url'] ?? $product['image_url'] ?? null,
                     ], $config, $context);
                     
                     // Format and return (with total hint if more available)
@@ -3707,8 +3709,22 @@ PROMPT;
 
             case 'product_detail':
                 if (!empty($result['product'])) {
+                    $product = $result['product'];
                     $platform = $context['platform'] ?? 'line';
-                    return $this->formatProductSearchResponse([$result['product']], $platform, $config);
+                    
+                    // ✅ Track view
+                    $this->productService->trackView($product, $context);
+                    
+                    // ✅ Create/Update case for product inquiry (FIX: was missing!)
+                    $this->createOrUpdateCase(\CaseEngine::CASE_PRODUCT_INQUIRY, [
+                        'product_code' => $product['code'] ?? $product['product_code'] ?? null,
+                        'product_name' => $product['name'] ?? $product['title'] ?? null,
+                        'product_price' => $product['price'] ?? $product['sale_price'] ?? null,
+                        'product_ref_id' => $product['ref_id'] ?? $product['id'] ?? null,
+                        'product_image_url' => $product['image'] ?? $product['thumbnail_url'] ?? $product['image_url'] ?? null,
+                    ], $config, $context);
+                    
+                    return $this->formatProductSearchResponse([$product], $platform, $config);
                 }
                 return ['reply' => $result['message'] ?? 'ไม่พบสินค้าค่ะ'];
 
@@ -4529,6 +4545,16 @@ PROMPT;
                 // Track as recently viewed
                 $this->productService->trackView($product, $context);
                 
+                // ✅ FIX: Create/Update case with product interest (was missing!)
+                $this->createOrUpdateCase(\CaseEngine::CASE_PRODUCT_INQUIRY, [
+                    'product_code' => $product['code'] ?? $product['product_code'] ?? $productCode,
+                    'product_name' => $product['name'] ?? $product['title'] ?? null,
+                    'product_price' => $product['sale_price'] ?? $product['price'] ?? null,
+                    'product_ref_id' => $product['ref_id'] ?? $product['id'] ?? null,
+                    'product_image_url' => $product['image'] ?? $product['thumbnail_url'] ?? $product['image_url'] ?? null,
+                    'trigger' => 'early_checkout',
+                ], $config, $context);
+                
                 // Start checkout with this product
                 $result = $this->checkoutService->startCheckout($product, $config, $context);
                 return ['reply' => $result['reply']];
@@ -4566,6 +4592,17 @@ PROMPT;
 
         // Start checkout with recent product
         $config = $context['config'] ?? $this->decodeConfig($context['bot_profile']['config'] ?? null);
+        
+        // ✅ FIX: Create/Update case with product interest from recently viewed
+        $this->createOrUpdateCase(\CaseEngine::CASE_PRODUCT_INQUIRY, [
+            'product_code' => $recentProduct['code'] ?? $recentProduct['product_code'] ?? null,
+            'product_name' => $recentProduct['name'] ?? $recentProduct['title'] ?? null,
+            'product_price' => $recentProduct['sale_price'] ?? $recentProduct['price'] ?? null,
+            'product_ref_id' => $recentProduct['ref_id'] ?? $recentProduct['id'] ?? null,
+            'product_image_url' => $recentProduct['image'] ?? $recentProduct['thumbnail_url'] ?? $recentProduct['image_url'] ?? null,
+            'trigger' => 'early_checkout_recent',
+        ], $config, $context);
+        
         $result = $this->checkoutService->startCheckout($recentProduct, $config, $context);
 
         return ['reply' => $result['reply']];

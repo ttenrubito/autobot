@@ -41,6 +41,10 @@ if (!isset($current_page)) {
                     <div id="subscriptionProgress" class="subscription-progress-fill"></div>
                 </div>
                 <div id="subscriptionText" class="subscription-text">-</div>
+                <!-- Renew button (shown when days < 14) -->
+                <a id="renewButton" href="payment.php" class="subscription-renew-btn" style="display: none;">
+                    🔄 ต่ออายุ
+                </a>
             </div>
         </div>
     </div>
@@ -140,6 +144,30 @@ if (!isset($current_page)) {
             margin-top: 0.25rem;
             text-align: center;
             color: #fff;
+        }
+
+        /* Renew button - shows when subscription is low */
+        .subscription-renew-btn {
+            display: block;
+            margin-top: 0.5rem;
+            padding: 0.35rem 0.6rem;
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            color: white;
+            text-align: center;
+            border-radius: 6px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.2s ease;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+        }
+
+        .subscription-renew-btn:hover {
+            background: linear-gradient(135deg, #d97706, #b45309);
+            transform: translateY(-1px);
+            box-shadow: 0 3px 6px rgba(0, 0, 0, 0.2);
+            color: white;
+            text-decoration: none;
         }
 
         /* ========================================
@@ -653,6 +681,16 @@ if (!isset($current_page)) {
 
             if (progress) progress.style.background = barColor;
             text.style.color = textColor;
+
+            // Show renew button when days remaining < 14
+            const renewBtn = document.getElementById('renewButton');
+            if (renewBtn) {
+                if (remaining <= 14) {
+                    renewBtn.style.display = 'block';
+                } else {
+                    renewBtn.style.display = 'none';
+                }
+            }
 
             // Smooth transition: hide skeleton, show content
             showContent();

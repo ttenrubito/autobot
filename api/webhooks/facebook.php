@@ -40,8 +40,8 @@ try {
  */
 function handleVerification(): void
 {
-    $mode      = $_GET['hub.mode'] ?? '';
-    $token     = $_GET['hub.verify_token'] ?? '';
+    $mode = $_GET['hub.mode'] ?? '';
+    $token = $_GET['hub.verify_token'] ?? '';
     $challenge = $_GET['hub.challenge'] ?? '';
 
     $expectedToken = getenv('FACEBOOK_VERIFY_TOKEN') ?: 'autobot_verify_2024';
@@ -89,7 +89,7 @@ function handleIncomingMessage(): void
 
     foreach ($data['entry'] as $entry) {
         // page_id ของเพจ = entry.id (ชัวร์สุด)
-        $pageId = isset($entry['id']) ? (string)$entry['id'] : '';
+        $pageId = isset($entry['id']) ? (string) $entry['id'] : '';
 
         if (!isset($entry['messaging']) || !is_array($entry['messaging'])) {
             continue;
@@ -129,14 +129,16 @@ function verifySignatureMulti(string $payload, string $signature): ?string
     foreach ($rows as $r) {
         $cfg = json_decode($r['config'] ?? '{}', true);
         if (is_array($cfg)) {
-            $s = trim((string)($cfg['app_secret'] ?? ''));
-            if ($s !== '') $secrets[$s] = true;
+            $s = trim((string) ($cfg['app_secret'] ?? ''));
+            if ($s !== '')
+                $secrets[$s] = true;
         }
     }
 
     // 2) fallback env
-    $envSecret = trim((string)(getenv('FACEBOOK_APP_SECRET') ?: ''));
-    if ($envSecret !== '') $secrets[$envSecret] = true;
+    $envSecret = trim((string) (getenv('FACEBOOK_APP_SECRET') ?: ''));
+    if ($envSecret !== '')
+        $secrets[$envSecret] = true;
 
     if (empty($secrets)) {
         Logger::error('No Facebook app_secret found (DB/env)');
@@ -180,7 +182,7 @@ function processMessagingEvent(array $event, string $entryPageId): void
             'payload' => $postbackPayload,
             'sender_id' => $event['sender']['id'] ?? null,
         ]);
-        
+
         // ✅ Convert postback to message format so rest of code can process it
         // This treats button clicks the same as if user typed the text
         if ($postbackPayload !== '') {
@@ -203,51 +205,52 @@ function processMessagingEvent(array $event, string $entryPageId): void
         ]);
         return;
     }
-    
+
     // Extract IDs first
-    $senderId    = isset($event['sender']['id']) ? (string)$event['sender']['id'] : '';
-    $recipientId = isset($event['recipient']['id']) ? (string)$event['recipient']['id'] : '';
-    
+    $senderId = isset($event['sender']['id']) ? (string) $event['sender']['id'] : '';
+    $recipientId = isset($event['recipient']['id']) ? (string) $event['recipient']['id'] : '';
+
     // ใช้ pageId จาก entry.id ก่อน (ชัวร์สุด) ถ้าไม่มีค่อย fallback recipient.id
     $pageId = $entryPageId !== '' ? $entryPageId : $recipientId;
-    
+
     // ✅ Detect admin messages - 2 ways:
     // 1) is_echo flag (when replying via Page Inbox)
     // 2) sender_id === page_id (when Page sends message)
     $isEcho = !empty($event['message']['is_echo']);
     $isAdmin = $isEcho || ($senderId === $pageId);
 
-    $text      = (string)($event['message']['text'] ?? '');
-    $messageId = (string)($event['message']['mid'] ?? '');
+    $text = (string) ($event['message']['text'] ?? '');
+    $messageId = (string) ($event['message']['mid'] ?? '');
 
-    if ($senderId === '' || $pageId === '') return;
+    if ($senderId === '' || $pageId === '')
+        return;
 
     // ✅ CRITICAL FIX: Admin Handoff Detection at Webhook Level
     // When staff/admin sends a message from Facebook Business Suite containing "admin"
     // → Pause bot for 1 hour by updating last_admin_message_at in database
     // NOTE: Must find channel FIRST before checking admin command
-    
+
     // Find channel by page_id (needed for admin handoff)
     $channel = findFacebookChannelByPageId($pageId);
     if ($channel === null) {
         Logger::warning("No active Facebook channel found for page_id={$pageId}");
         return;
     }
-    
+
     // ✅ Upsert customer profile (ถ้าเป็นข้อความจากลูกค้า ไม่ใช่ admin)
     // Get page_access_token from channel config JSON
     $cfg = json_decode($channel['config'] ?? '{}', true);
-    $pageAccessToken = trim((string)($cfg['page_access_token'] ?? ''));
+    $pageAccessToken = trim((string) ($cfg['page_access_token'] ?? ''));
     if (!$isAdmin && !empty($senderId) && !empty($pageAccessToken)) {
-        upsertCustomerProfile('facebook', $senderId, $pageAccessToken, 'default', (int)$channel['id']);
+        upsertCustomerProfile('facebook', $senderId, $pageAccessToken, 'default', (int) $channel['id']);
     }
-    
+
     $isAdminCommand = false;
     if ($isAdmin && $text !== '') {  // ✅ Check if message is FROM the page (human staff OR automation bot)
         $textLower = mb_strtolower(trim($text), 'UTF-8');
         if (preg_match('/^(?:\/admin|#admin|admin)(?:\s|$)/u', $textLower)) {
             $isAdminCommand = true;
-            
+
             Logger::info('[FB_WEBHOOK] 🚨 ADMIN HANDOFF TRIGGERED!', [
                 'text' => $text,
                 'sender_id' => $senderId,
@@ -258,29 +261,29 @@ function processMessagingEvent(array $event, string $entryPageId): void
                 'channel_id' => $channel['id'],
                 'action' => 'Pausing bot for 1 hour',
             ]);
-            
+
             // ✅ Update database immediately - pause bot for this user
             // NOTE: We need to find the session for the RECIPIENT (customer), not sender (page)
             // When is_echo=true, recipient is the customer who will receive the reply
             try {
                 $db = Database::getInstance();
-                
+
                 // Get recipient from event (the customer)
                 $customerId = $recipientId; // When echo, recipient = customer
-                
+
                 // Find or create session for this customer
                 $sessionSql = "SELECT id FROM chat_sessions 
                               WHERE channel_id = ? AND external_user_id = ? 
                               ORDER BY created_at DESC LIMIT 1";
-                $session = $db->queryOne($sessionSql, [(int)$channel['id'], $customerId]);
-                
+                $session = $db->queryOne($sessionSql, [(int) $channel['id'], $customerId]);
+
                 if ($session) {
-                    $sessionId = (int)$session['id'];
+                    $sessionId = (int) $session['id'];
                     $db->execute(
                         'UPDATE chat_sessions SET last_admin_message_at = NOW(), updated_at = NOW() WHERE id = ?',
                         [$sessionId]
                     );
-                    
+
                     Logger::info('[FB_WEBHOOK] ✅ Admin handoff activated', [
                         'session_id' => $sessionId,
                         'channel_id' => $channel['id'],
@@ -296,16 +299,16 @@ function processMessagingEvent(array $event, string $entryPageId): void
             } catch (Exception $e) {
                 Logger::error('[FB_WEBHOOK] Failed to activate admin handoff: ' . $e->getMessage());
             }
-            
+
             // Don't send this message to gateway - it's an admin command, not a real conversation
             return;
         }
-        
+
         // ✅ NEW: Admin Suggest Product - detect product codes and send card to customer
         // Supports: #product XXX, #สินค้า XXX, or any message containing product code
         // Format: GLD-BRC-001, RLX-SUB-001, P-2026-000001
         $productCode = null;
-        
+
         // Check for explicit command first: #product XXX or #สินค้า XXX
         if (preg_match('/^(?:#product|#สินค้า)\s+([A-Z0-9\-]+)/iu', $text, $cmdMatch)) {
             $productCode = strtoupper(trim($cmdMatch[1]));
@@ -314,33 +317,31 @@ function processMessagingEvent(array $event, string $entryPageId): void
         elseif (preg_match('/(P-\d{4}-\d{6})/i', $text, $refMatch)) {
             // Internal Ref ID format: P-2026-000001
             $productCode = strtoupper(trim($refMatch[1]));
-        }
-        elseif (preg_match('/([A-Z]{2,5}[-][A-Z0-9]{2,5}[-][A-Z0-9]{2,5})/i', $text, $codeMatch)) {
+        } elseif (preg_match('/([A-Z]{2,5}[-][A-Z0-9]{2,5}[-][A-Z0-9]{2,5})/i', $text, $codeMatch)) {
             // 3-part code: GLD-BRC-001
             $productCode = strtoupper(trim($codeMatch[1]));
-        }
-        elseif (preg_match('/([A-Z]{2,5}[-][A-Z0-9]{2,5})/i', $text, $codeMatch)) {
+        } elseif (preg_match('/([A-Z]{2,5}[-][A-Z0-9]{2,5})/i', $text, $codeMatch)) {
             // 2-part code: RLX-SUB
             $code = strtoupper(trim($codeMatch[1]));
             if (strlen($code) >= 5) {
                 $productCode = $code;
             }
         }
-        
+
         if ($productCode !== null) {
             Logger::info('[FB_WEBHOOK] 🎁 Admin Suggest Product detected', [
                 'text' => $text,
                 'product_code' => $productCode,
                 'customer_id' => $recipientId,
             ]);
-            
+
             // Search for product in database
-            $product = findProductByCode($productCode, (int)$channel['user_id']);
-            
+            $product = findProductByCode($productCode, (int) $channel['user_id']);
+
             if ($product) {
                 // Build product card and send to customer
                 $cardSent = sendAdminSuggestProductCard($recipientId, $product, $channel, $text);
-                
+
                 if ($cardSent) {
                     Logger::info('[FB_WEBHOOK] ✅ Product card sent to customer', [
                         'product_code' => $productCode,
@@ -377,14 +378,14 @@ function processMessagingEvent(array $event, string $entryPageId): void
 
     // ✅ Deduplication: Check if we've already processed this message
     // ใช้ gateway_message_events ที่มีอยู่แล้ว แทนการสร้างตารางใหม่
-    if ($messageId !== '' && isMessageAlreadyProcessed((int)$channel['id'], $messageId)) {
+    if ($messageId !== '' && isMessageAlreadyProcessed((int) $channel['id'], $messageId)) {
         Logger::info("Facebook webhook: Duplicate message detected (mid=$messageId, channel_id={$channel['id']}), skipping");
         return;
     }
 
     // Per-webhook trace id for correlation (also copied to gateway payload metadata)
     $traceId = bin2hex(random_bytes(8));
-    
+
     // ✅ Extract attachments (images, files, etc.)
     $attachments = [];
     $messageType = 'text';
@@ -409,17 +410,17 @@ function processMessagingEvent(array $event, string $entryPageId): void
     }
 
     $gatewayPayload = [
-        'inbound_api_key'   => $channel['inbound_api_key'],
-        'channel_type'      => 'facebook',
-        'external_user_id'  => $senderId,
-        'message_type'      => $messageType,  // ✅ Dynamic: 'text', 'image', etc.
-        'text'              => $text,
-        'attachments'       => $attachments,  // ✅ Pass attachments to gateway
-        'is_admin'          => $isAdmin,  // ✅ Use combined detection
+        'inbound_api_key' => $channel['inbound_api_key'],
+        'channel_type' => 'facebook',
+        'external_user_id' => $senderId,
+        'message_type' => $messageType,  // ✅ Dynamic: 'text', 'image', etc.
+        'text' => $text,
+        'attachments' => $attachments,  // ✅ Pass attachments to gateway
+        'is_admin' => $isAdmin,  // ✅ Use combined detection
         'metadata' => [
             'message_id' => $messageId,
-            'page_id'    => $pageId,
-            'platform'   => 'facebook',
+            'page_id' => $pageId,
+            'platform' => 'facebook',
             // Useful for debugging after switching bot profile handler
             'bot_profile_id' => $channel['bot_profile_id'] ?? null,
             'trace_id' => $traceId,
@@ -433,19 +434,25 @@ function processMessagingEvent(array $event, string $entryPageId): void
         'page_id' => $pageId ?? null,
         'sender_id' => $senderId ?? null,
         'message_id' => $messageId ?? null,
-        'text_len' => mb_strlen((string)$text, 'UTF-8'),
-        'text_preview' => mb_substr((string)$text, 0, 120, 'UTF-8'),
+        'text_len' => mb_strlen((string) $text, 'UTF-8'),
+        'text_preview' => mb_substr((string) $text, 0, 120, 'UTF-8'),
     ]);
+
+    // ✅ Send typing indicator BEFORE calling Gateway
+    // This shows "typing..." bubble while bot processes (can take 1-5 seconds for LLM)
+    if (!$isAdmin) {
+        sendTypingIndicator($senderId, $channel, 'typing_on');
+    }
 
     $t0 = microtime(true);
     $resp = callGateway($gatewayPayload);
-    $elapsedMs = (int)round((microtime(true) - $t0) * 1000);
+    $elapsedMs = (int) round((microtime(true) - $t0) * 1000);
 
     Logger::info('[FB_WEBHOOK] Gateway call finished', [
         'trace_id' => $traceId,
         'elapsed_ms' => $elapsedMs,
         'resp_type' => gettype($resp),
-        'resp_success' => (is_array($resp) && isset($resp['success'])) ? (bool)$resp['success'] : null,
+        'resp_success' => (is_array($resp) && isset($resp['success'])) ? (bool) $resp['success'] : null,
         'resp_keys' => is_array($resp) ? array_keys($resp) : null,
     ]);
 
@@ -474,7 +481,7 @@ function processMessagingEvent(array $event, string $entryPageId): void
     $replyText = '';
     $actions = [];
     if (is_array($data)) {
-        $replyText = (string)($data['reply_text'] ?? '');
+        $replyText = (string) ($data['reply_text'] ?? '');
         $actions = (isset($data['actions']) && is_array($data['actions'])) ? $data['actions'] : [];
     }
 
@@ -503,10 +510,10 @@ function processMessagingEvent(array $event, string $entryPageId): void
     // Persist should be idempotent (ignore duplicate-key).
     if ($messageId !== '') {
         try {
-            if (isMessageAlreadyProcessed((int)$channel['id'], $messageId)) {
-                updateMessageEventPayload((int)$channel['id'], $messageId, $resp);
+            if (isMessageAlreadyProcessed((int) $channel['id'], $messageId)) {
+                updateMessageEventPayload((int) $channel['id'], $messageId, $resp);
             } else {
-                recordMessageEvent((int)$channel['id'], $messageId, $resp);
+                recordMessageEvent((int) $channel['id'], $messageId, $resp);
             }
         } catch (Throwable $e) {
             // Best-effort only; do not break the reply path
@@ -518,7 +525,7 @@ function processMessagingEvent(array $event, string $entryPageId): void
     // Check for reply_texts array first, fallback to single reply_text
     $replyTexts = [];
     $replyMessages = []; // Flex/Rich messages
-    
+
     if (is_array($data)) {
         // Check for reply_messages (Flex/Rich messages - convert to FB Generic Template)
         if (!empty($data['reply_messages']) && is_array($data['reply_messages'])) {
@@ -529,7 +536,7 @@ function processMessagingEvent(array $event, string $entryPageId): void
                 'types' => array_map(fn($m) => $m['type'] ?? 'unknown', $replyMessages)
             ]);
         }
-        
+
         // Check for new format: reply_texts array
         if (!empty($data['reply_texts']) && is_array($data['reply_texts'])) {
             $replyTexts = $data['reply_texts'];
@@ -540,7 +547,7 @@ function processMessagingEvent(array $event, string $entryPageId): void
         }
         // Fallback to single message format (only if no Flex messages)
         elseif (!empty($data['reply_text']) && empty($replyMessages)) {
-            $replyTexts = [(string)$data['reply_text']];
+            $replyTexts = [(string) $data['reply_text']];
             Logger::info('[FB_WEBHOOK] Single message reply (legacy format)', [
                 'trace_id' => $traceId,
             ]);
@@ -550,11 +557,12 @@ function processMessagingEvent(array $event, string $entryPageId): void
     // ✅ Extract quick_replies and images from actions (if any)
     $fbQuickReplies = [];
     $imageActions = [];
-    
+
     if (!empty($actions) && is_array($actions)) {
         foreach ($actions as $action) {
-            if (!is_array($action)) continue;
-            
+            if (!is_array($action))
+                continue;
+
             // Collect quick_replies
             if (($action['type'] ?? '') === 'quick_reply' && !empty($action['items'])) {
                 foreach ($action['items'] as $item) {
@@ -565,13 +573,13 @@ function processMessagingEvent(array $event, string $entryPageId): void
                     ];
                 }
             }
-            
+
             // Collect images
             if (($action['type'] ?? '') === 'image' && !empty($action['url'])) {
                 $imageActions[] = $action;
             }
         }
-        
+
         if (!empty($fbQuickReplies)) {
             Logger::info('[FB_WEBHOOK] ✅ Found quick_replies in actions', ['count' => count($fbQuickReplies)]);
         }
@@ -579,16 +587,16 @@ function processMessagingEvent(array $event, string $entryPageId): void
             Logger::info('[FB_WEBHOOK] ✅ Found images in actions', ['count' => count($imageActions)]);
         }
     }
-    
+
     // =========================================================
     // ✅ SEND ORDER: Carousel FIRST, then Images, then text + quick_reply LAST
     // This ensures quick_reply buttons appear at the bottom
     // =========================================================
-    
+
     // 0️⃣ Send Flex/Carousel as Facebook Generic Template FIRST
     if (!empty($replyMessages)) {
         Logger::info("[FB_WEBHOOK] 🎨 Converting " . count($replyMessages) . " Flex message(s) to FB Template");
-        
+
         foreach ($replyMessages as $flexMsg) {
             if (($flexMsg['type'] ?? '') === 'flex' && !empty($flexMsg['contents'])) {
                 $fbTemplate = convertFlexToFacebookTemplate($flexMsg);
@@ -607,7 +615,7 @@ function processMessagingEvent(array $event, string $entryPageId): void
             }
         }
     }
-    
+
     // 1️⃣ Send images FIRST (before text messages)
     if (!empty($imageActions)) {
         Logger::info("[FB_WEBHOOK] 📸 Sending " . count($imageActions) . " image(s) FIRST");
@@ -626,7 +634,7 @@ function processMessagingEvent(array $event, string $entryPageId): void
             usleep(200000); // 200ms
         }
     }
-    
+
     // 2️⃣ Send text messages AFTER images (with quick_reply on last message)
     if (!empty($replyTexts)) {
         $messageCount = count($replyTexts);
@@ -634,13 +642,13 @@ function processMessagingEvent(array $event, string $entryPageId): void
             'trace_id' => $traceId,
             'recipient_psid' => $senderId,
         ]);
-        
+
         foreach ($replyTexts as $index => $messageText) {
-            $messageText = trim((string)$messageText);
+            $messageText = trim((string) $messageText);
             if ($messageText === '') {
                 continue;
             }
-            
+
             // Add natural delay between messages (except for first message after images)
             if ($index > 0 || !empty($imageActions)) {
                 // Random delay between 300-500ms for human-like feel
@@ -650,26 +658,26 @@ function processMessagingEvent(array $event, string $entryPageId): void
                 ]);
                 usleep($delayMicros);
             }
-            
+
             Logger::info('[FB_WEBHOOK] Sending message #' . ($index + 1) . '/' . $messageCount, [
                 'trace_id' => $traceId,
                 'message_len' => mb_strlen($messageText, 'UTF-8'),
                 'message_preview' => mb_substr($messageText, 0, 50, 'UTF-8'),
             ]);
-            
+
             // ✅ Attach quick_replies to LAST message only
             $isLastMessage = ($index === $messageCount - 1);
             $quickRepliesToSend = ($isLastMessage && !empty($fbQuickReplies)) ? $fbQuickReplies : null;
-            
+
             $ok = sendFacebookMessage($senderId, $messageText, $channel, $quickRepliesToSend);
-            
+
             Logger::info('[FB_WEBHOOK] Message #' . ($index + 1) . ' send result', [
                 'trace_id' => $traceId,
                 'ok' => $ok,
                 'had_quick_replies' => !empty($quickRepliesToSend),
             ]);
         }
-        
+
         Logger::info('[FB_WEBHOOK] All messages sent', [
             'trace_id' => $traceId,
             'total_sent' => $messageCount,
@@ -684,14 +692,14 @@ function isMessageAlreadyProcessed(int $channelId, string $externalEventId): boo
 {
     try {
         $db = Database::getInstance();
-        
+
         // Check if event exists in last 24 hours
         $sql = "SELECT COUNT(*) as cnt FROM gateway_message_events 
                 WHERE channel_id = ? AND external_event_id = ? 
                 AND created_at > NOW() - INTERVAL 24 HOUR";
-        
+
         $result = $db->queryOne($sql, [$channelId, $externalEventId]);
-        return ($result && (int)$result['cnt'] > 0);
+        return ($result && (int) $result['cnt'] > 0);
     } catch (Exception $e) {
         Logger::error("Deduplication check error: " . $e->getMessage());
         // On error, assume not processed to avoid blocking legitimate messages
@@ -706,12 +714,12 @@ function recordMessageEvent(int $channelId, string $externalEventId, ?array $res
 {
     try {
         $db = Database::getInstance();
-        
+
         $payloadJson = $responsePayload !== null ? json_encode($responsePayload, JSON_UNESCAPED_UNICODE) : null;
-        
+
         $sql = "INSERT INTO gateway_message_events (channel_id, external_event_id, response_payload, created_at) 
                 VALUES (?, ?, ?, NOW())";
-        
+
         $db->execute($sql, [$channelId, $externalEventId, $payloadJson]);
     } catch (Exception $e) {
         $msg = $e->getMessage();
@@ -768,7 +776,8 @@ function findFacebookChannelByPageId(string $pageId): ?array
     ";
 
     $row = $db->queryOne($sql, [$pageId]);
-    if (!$row || !is_array($row)) return null;
+    if (!$row || !is_array($row))
+        return null;
     return $row;
 }
 
@@ -787,24 +796,24 @@ function callGateway(array $payload): ?array
     $ch = curl_init($gatewayUrl);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_POST           => true,
-        CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_UNICODE),
-        CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
-        CURLOPT_TIMEOUT        => 70, // Increased for Gemini Vision retry (up to 2 retries * 30s + processing)
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE),
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_TIMEOUT => 70, // Increased for Gemini Vision retry (up to 2 retries * 30s + processing)
         CURLOPT_CONNECTTIMEOUT => 10,
     ]);
 
     $raw = curl_exec($ch);
     $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $err  = curl_error($ch);
+    $err = curl_error($ch);
     curl_close($ch);
 
     // Debug log raw response
     Logger::info('[FB_WEBHOOK] Gateway raw response', [
         'gateway_url' => $gatewayUrl,
         'http_code' => $http,
-        'raw_len' => strlen((string)$raw),
-        'raw_snippet' => substr((string)$raw, 0, 300),
+        'raw_len' => strlen((string) $raw),
+        'raw_snippet' => substr((string) $raw, 0, 300),
         'curl_error' => $err,
     ]);
 
@@ -813,7 +822,7 @@ function callGateway(array $payload): ?array
             'gateway_url' => $gatewayUrl,
             'http_code' => $http,
             'curl_error' => $err,
-            'resp_snippet' => substr((string)$raw, 0, 500),
+            'resp_snippet' => substr((string) $raw, 0, 500),
         ]);
 
         return [
@@ -822,7 +831,7 @@ function callGateway(array $payload): ?array
             'http_code' => $http,
             'curl_error' => $err,
             'gateway_url' => $gatewayUrl,
-            'resp_snippet' => substr((string)$raw, 0, 500),
+            'resp_snippet' => substr((string) $raw, 0, 500),
         ];
     }
 
@@ -830,7 +839,7 @@ function callGateway(array $payload): ?array
     if (!is_array($decoded)) {
         Logger::error('[FB_WEBHOOK] Gateway returned non-JSON', [
             'gateway_url' => $gatewayUrl,
-            'resp_snippet' => substr((string)$raw, 0, 500),
+            'resp_snippet' => substr((string) $raw, 0, 500),
             'json_error' => json_last_error_msg(),
         ]);
 
@@ -838,7 +847,7 @@ function callGateway(array $payload): ?array
             'success' => false,
             'error' => 'gateway_invalid_json',
             'gateway_url' => $gatewayUrl,
-            'resp_snippet' => substr((string)$raw, 0, 500),
+            'resp_snippet' => substr((string) $raw, 0, 500),
         ];
     }
 
@@ -857,7 +866,7 @@ function callGateway(array $payload): ?array
 function sendFacebookMessage(string $recipientPsid, string $text, array $channel, ?array $quickReplies = null): bool
 {
     $cfg = json_decode($channel['config'] ?? '{}', true);
-    $pageToken = trim((string)($cfg['page_access_token'] ?? ''));
+    $pageToken = trim((string) ($cfg['page_access_token'] ?? ''));
 
     if ($pageToken === '') {
         Logger::error('Facebook page_access_token not configured for channel_id=' . ($channel['id'] ?? ''));
@@ -868,7 +877,7 @@ function sendFacebookMessage(string $recipientPsid, string $text, array $channel
     $url = 'https://graph.facebook.com/v18.0/me/messages?access_token=' . urlencode($pageToken);
 
     $message = ['text' => $text];
-    
+
     // ✅ Add quick_replies if provided
     if (!empty($quickReplies)) {
         $message['quick_replies'] = $quickReplies;
@@ -878,30 +887,87 @@ function sendFacebookMessage(string $recipientPsid, string $text, array $channel
     }
 
     $payload = [
-        'recipient'      => ['id' => $recipientPsid],
-        'message'        => $message,
+        'recipient' => ['id' => $recipientPsid],
+        'message' => $message,
         'messaging_type' => 'RESPONSE',
     ];
 
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_POST           => true,
-        CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_UNICODE),
-        CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
-        CURLOPT_TIMEOUT        => 30,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE),
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_TIMEOUT => 30,
     ]);
 
     $resp = curl_exec($ch);
     $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $err  = curl_error($ch);
+    $err = curl_error($ch);
     curl_close($ch);
 
     if ($http !== 200) {
-        Logger::error('Facebook send message failed http_code=' . $http . ' err=' . $err . ' resp=' . substr((string)$resp, 0, 800));
+        Logger::error('Facebook send message failed http_code=' . $http . ' err=' . $err . ' resp=' . substr((string) $resp, 0, 800));
         return false;
     }
 
+    return true;
+}
+
+/**
+ * Send typing indicator to Facebook user
+ * Shows "typing..." bubble in Messenger while bot processes message
+ * 
+ * @param string $recipientPsid User's Page-Scoped ID
+ * @param array $channel Channel configuration with page_access_token
+ * @param string $action 'typing_on', 'typing_off', or 'mark_seen'
+ * @return bool Success
+ */
+function sendTypingIndicator(string $recipientPsid, array $channel, string $action = 'typing_on'): bool
+{
+    $cfg = json_decode($channel['config'] ?? '{}', true);
+    $pageToken = trim((string) ($cfg['page_access_token'] ?? ''));
+
+    if ($pageToken === '') {
+        Logger::warning('[FB_TYPING] No page_access_token for channel_id=' . ($channel['id'] ?? ''));
+        return false;
+    }
+
+    $url = 'https://graph.facebook.com/v18.0/me/messages?access_token=' . urlencode($pageToken);
+
+    $payload = [
+        'recipient' => ['id' => $recipientPsid],
+        'sender_action' => $action,
+    ];
+
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode($payload),
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_TIMEOUT => 5,  // Short timeout - don't block main flow
+        CURLOPT_CONNECTTIMEOUT => 2,
+    ]);
+
+    $resp = curl_exec($ch);
+    $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err = curl_error($ch);
+    curl_close($ch);
+
+    if ($http !== 200) {
+        Logger::warning('[FB_TYPING] Failed to send typing indicator', [
+            'http_code' => $http,
+            'curl_error' => $err,
+            'response' => substr((string) $resp, 0, 200),
+        ]);
+        return false;
+    }
+
+    Logger::info('[FB_TYPING] ✅ Typing indicator sent', [
+        'recipient' => $recipientPsid,
+        'action' => $action,
+    ]);
     return true;
 }
 
@@ -914,34 +980,35 @@ function convertFlexToFacebookTemplate(array $flexMsg): ?array
     if (!$contents || ($contents['type'] ?? '') !== 'carousel') {
         return null;
     }
-    
+
     $bubbles = $contents['contents'] ?? [];
     if (empty($bubbles)) {
         return null;
     }
-    
+
     $elements = [];
     foreach (array_slice($bubbles, 0, 10) as $bubble) { // FB limit: 10 elements
-        if (($bubble['type'] ?? '') !== 'bubble') continue;
-        
+        if (($bubble['type'] ?? '') !== 'bubble')
+            continue;
+
         // Extract data from LINE bubble
         $hero = $bubble['hero'] ?? [];
         $body = $bubble['body'] ?? [];
         $footer = $bubble['footer'] ?? [];
-        
+
         $imageUrl = $hero['url'] ?? 'https://via.placeholder.com/400x300';
-        
+
         // Extract texts from body
         $title = '';
         $subtitle = '';
         $price = '';
-        
+
         $bodyContents = $body['contents'] ?? [];
         foreach ($bodyContents as $item) {
             if (($item['type'] ?? '') === 'text') {
                 $text = $item['text'] ?? '';
                 $size = $item['size'] ?? '';
-                
+
                 if ($size === 'sm' && !$title) {
                     // Product code
                     $title = $text;
@@ -954,14 +1021,14 @@ function convertFlexToFacebookTemplate(array $flexMsg): ?array
                 }
             }
         }
-        
+
         // Build FB element
         $element = [
             'title' => mb_substr($subtitle ?: $title, 0, 80), // FB limit: 80 chars
             'subtitle' => mb_substr("รหัส: {$title}\n💰 {$price}", 0, 80),
             'image_url' => $imageUrl,
         ];
-        
+
         // Extract button from footer
         $buttons = [];
         $footerContents = $footer['contents'] ?? [];
@@ -980,18 +1047,18 @@ function convertFlexToFacebookTemplate(array $flexMsg): ?array
                 }
             }
         }
-        
+
         if (!empty($buttons)) {
             $element['buttons'] = array_slice($buttons, 0, 3); // FB limit: 3 buttons
         }
-        
+
         $elements[] = $element;
     }
-    
+
     if (empty($elements)) {
         return null;
     }
-    
+
     return [
         'message' => [
             'attachment' => [
@@ -1011,7 +1078,7 @@ function convertFlexToFacebookTemplate(array $flexMsg): ?array
 function sendFacebookTemplate(string $recipientPsid, array $template, array $channel): bool
 {
     $cfg = json_decode($channel['config'] ?? '{}', true);
-    $pageToken = trim((string)($cfg['page_access_token'] ?? ''));
+    $pageToken = trim((string) ($cfg['page_access_token'] ?? ''));
 
     if ($pageToken === '') {
         Logger::error('[FB_TEMPLATE] ❌ Facebook page_access_token not configured');
@@ -1024,7 +1091,7 @@ function sendFacebookTemplate(string $recipientPsid, array $template, array $cha
         'recipient' => ['id' => $recipientPsid],
         'messaging_type' => 'RESPONSE',
     ], $template);
-    
+
     Logger::info("[FB_TEMPLATE] Sending Generic Template", [
         'recipient' => $recipientPsid,
         'element_count' => count($template['message']['attachment']['payload']['elements'] ?? [])
@@ -1033,22 +1100,22 @@ function sendFacebookTemplate(string $recipientPsid, array $template, array $cha
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_POST           => true,
-        CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_UNICODE),
-        CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
-        CURLOPT_TIMEOUT        => 30,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE),
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_TIMEOUT => 30,
     ]);
 
     $resp = curl_exec($ch);
     $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $err  = curl_error($ch);
+    $err = curl_error($ch);
     curl_close($ch);
 
     if ($http !== 200) {
         Logger::error('[FB_TEMPLATE] ❌ Facebook API returned error', [
             'http_code' => $http,
             'curl_error' => $err,
-            'facebook_response' => substr((string)$resp, 0, 800),
+            'facebook_response' => substr((string) $resp, 0, 800),
         ]);
         return false;
     }
@@ -1069,9 +1136,9 @@ function sendFacebookImage(string $recipientPsid, string $imageUrl, array $chann
         'image_url' => $imageUrl,
         'channel_id' => $channel['id'] ?? 'unknown'
     ]);
-    
+
     $cfg = json_decode($channel['config'] ?? '{}', true);
-    $pageToken = trim((string)($cfg['page_access_token'] ?? ''));
+    $pageToken = trim((string) ($cfg['page_access_token'] ?? ''));
 
     if ($pageToken === '') {
         Logger::error('[FB_IMAGE] ❌ Facebook page_access_token not configured for channel_id=' . ($channel['id'] ?? ''));
@@ -1101,7 +1168,7 @@ function sendFacebookImage(string $recipientPsid, string $imageUrl, array $chann
         ],
         'messaging_type' => 'RESPONSE',
     ];
-    
+
     Logger::info("[FB_IMAGE] Sending to Facebook API", [
         'api_endpoint' => 'v18.0/me/messages',
         'image_url' => $imageUrl
@@ -1110,22 +1177,22 @@ function sendFacebookImage(string $recipientPsid, string $imageUrl, array $chann
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_POST           => true,
-        CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_UNICODE),
-        CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
-        CURLOPT_TIMEOUT        => 30,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE),
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_TIMEOUT => 30,
     ]);
 
     $resp = curl_exec($ch);
     $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $err  = curl_error($ch);
+    $err = curl_error($ch);
     curl_close($ch);
 
     if ($http !== 200) {
         Logger::error('[FB_IMAGE] ❌ Facebook API returned error', [
             'http_code' => $http,
             'curl_error' => $err,
-            'facebook_response' => substr((string)$resp, 0, 800),
+            'facebook_response' => substr((string) $resp, 0, 800),
             'image_url' => $imageUrl
         ]);
         return false;
@@ -1149,28 +1216,28 @@ function upsertCustomerProfile(string $platform, string $platformUserId, string 
     if (empty($platformUserId) || empty($pageAccessToken)) {
         return null;
     }
-    
+
     try {
         $db = Database::getInstance();
-        
+
         // First check if profile already exists
         $existing = $db->queryOne(
             "SELECT id FROM customer_profiles WHERE platform = ? AND platform_user_id = ? LIMIT 1",
             [$platform, $platformUserId]
         );
-        
+
         if ($existing) {
             // Update last_active_at and total_inquiries
             $db->execute(
                 "UPDATE customer_profiles SET last_active_at = NOW(), total_inquiries = COALESCE(total_inquiries, 0) + 1, updated_at = NOW() WHERE id = ?",
                 [$existing['id']]
             );
-            return (int)$existing['id'];
+            return (int) $existing['id'];
         }
-        
+
         // Get profile from Facebook Graph API
         $profileUrl = "https://graph.facebook.com/v18.0/{$platformUserId}?fields=name,profile_pic&access_token={$pageAccessToken}";
-        
+
         $ch = curl_init($profileUrl);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
@@ -1179,10 +1246,10 @@ function upsertCustomerProfile(string $platform, string $platformUserId, string 
         $resp = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
-        
+
         $displayName = null;
         $avatarUrl = null;
-        
+
         if ($httpCode === 200) {
             $profile = json_decode($resp, true);
             if (is_array($profile)) {
@@ -1195,7 +1262,7 @@ function upsertCustomerProfile(string $platform, string $platformUserId, string 
                 'http_code' => $httpCode,
             ]);
         }
-        
+
         // Insert new customer profile (always create even if no display name)
         $sql = "
             INSERT INTO customer_profiles (tenant_id, channel_id, platform, platform_user_id, display_name, avatar_url, total_inquiries, first_seen_at, last_active_at, created_at, updated_at)
@@ -1208,26 +1275,26 @@ function upsertCustomerProfile(string $platform, string $platformUserId, string 
                 last_active_at = NOW(),
                 updated_at = NOW()
         ";
-        
+
         $db->execute($sql, [$tenantId, $channelId, $platform, $platformUserId, $displayName, $avatarUrl]);
-        
+
         // Get the ID (either new or existing due to race condition)
         $result = $db->queryOne(
             "SELECT id FROM customer_profiles WHERE platform = ? AND platform_user_id = ? LIMIT 1",
             [$platform, $platformUserId]
         );
-        
-        $profileId = $result ? (int)$result['id'] : null;
-        
+
+        $profileId = $result ? (int) $result['id'] : null;
+
         Logger::info('[FB_PROFILE] Customer profile upserted', [
             'profile_id' => $profileId,
             'platform' => $platform,
             'platform_user_id' => $platformUserId,
             'display_name' => $displayName,
         ]);
-        
+
         return $profileId;
-        
+
     } catch (Throwable $e) {
         Logger::error('[FB_PROFILE] Error upserting customer profile: ' . $e->getMessage(), [
             'platform_user_id' => $platformUserId,
@@ -1247,7 +1314,7 @@ function findProductByCode(string $code, int $userId): ?array
     try {
         $db = Database::getInstance();
         $codeUpper = strtoupper(trim($code));
-        
+
         // Try finding by internal ref_id first (P-YYYY-NNNNNN format)
         if (preg_match('/^P-\d{4}-\d{6}$/i', $codeUpper)) {
             $sql = "SELECT id, ref_id, name, code AS product_code, price, stock_status, 
@@ -1261,7 +1328,7 @@ function findProductByCode(string $code, int $userId): ?array
                 return $product;
             }
         }
-        
+
         // Try finding by product_code (GLD-BRC-001 format)
         $sql = "SELECT id, ref_id, name, code AS product_code, price, stock_status, 
                        main_image_url, description, category
@@ -1269,12 +1336,12 @@ function findProductByCode(string $code, int $userId): ?array
                 WHERE code = ? AND user_id = ? AND status = 'active'
                 LIMIT 1";
         $product = $db->queryOne($sql, [$codeUpper, $userId]);
-        
+
         if ($product) {
             Logger::info('[FB_PRODUCT] Found by code in DB', ['code' => $codeUpper]);
             return $product;
         }
-        
+
         // Try case-insensitive search
         $sql = "SELECT id, ref_id, name, code AS product_code, price, stock_status, 
                        main_image_url, description, category
@@ -1282,16 +1349,16 @@ function findProductByCode(string $code, int $userId): ?array
                 WHERE (UPPER(code) = ? OR UPPER(ref_id) = ?) AND user_id = ? AND status = 'active'
                 LIMIT 1";
         $product = $db->queryOne($sql, [$codeUpper, $codeUpper, $userId]);
-        
+
         if ($product) {
             Logger::info('[FB_PRODUCT] Found by case-insensitive search in DB', ['code' => $codeUpper]);
             return $product;
         }
-        
+
         // ✅ Fallback to mock products if not found in DB
         Logger::info('[FB_PRODUCT] Not in DB, trying mock data', ['code' => $codeUpper]);
         return findProductInMock($codeUpper);
-        
+
     } catch (Throwable $e) {
         Logger::error('[FB_PRODUCT] Error finding product: ' . $e->getMessage(), [
             'code' => $code,
@@ -1308,7 +1375,7 @@ function findProductByCode(string $code, int $userId): ?array
 function findProductInMock(string $code): ?array
 {
     $mockProducts = require __DIR__ . '/../mock-data/products.php';
-    
+
     foreach ($mockProducts as $product) {
         // Match by SKU (exact or partial)
         $sku = strtoupper($product['sku'] ?? '');
@@ -1327,7 +1394,7 @@ function findProductInMock(string $code): ?array
             ];
         }
     }
-    
+
     Logger::warning('[FB_PRODUCT] Not found in mock data either', ['code' => $code]);
     return null;
 }
@@ -1343,7 +1410,7 @@ function findProductInMock(string $code): ?array
 function sendAdminSuggestProductCard(string $recipientPsid, array $product, array $channel, string $adminMessage): bool
 {
     $cfg = json_decode($channel['config'] ?? '{}', true);
-    $pageToken = trim((string)($cfg['page_access_token'] ?? ''));
+    $pageToken = trim((string) ($cfg['page_access_token'] ?? ''));
 
     if ($pageToken === '') {
         Logger::error('[FB_SUGGEST] ❌ Facebook page_access_token not configured');
@@ -1357,21 +1424,21 @@ function sendAdminSuggestProductCard(string $recipientPsid, array $product, arra
     $price = $product['price'] ?? 0;
     $imageUrl = $product['main_image_url'] ?? '';
     $stockStatus = $product['stock_status'] ?? 'available';
-    
+
     // Format price
-    $priceText = $price > 0 ? number_format((float)$price, 0) . ' บาท' : 'สอบถามราคา';
-    
+    $priceText = $price > 0 ? number_format((float) $price, 0) . ' บาท' : 'สอบถามราคา';
+
     // Stock status text
     $stockText = $stockStatus === 'available' ? '✅ มีสินค้า' : ($stockStatus === 'sold' ? '❌ ขายแล้ว' : '📦 ' . $stockStatus);
-    
+
     // Use default image if none
     if (empty($imageUrl)) {
         $imageUrl = 'https://autobot-ft2igm5e6q-as.a.run.app/assets/images/default-product.png';
     }
-    
+
     // Build button payload - use ref_id for checkout flow
     $buttonPayload = 'สนใจ ' . $productRefId;
-    
+
     // Prepare Generic Template
     $template = [
         'message' => [
@@ -1404,7 +1471,7 @@ function sendAdminSuggestProductCard(string $recipientPsid, array $product, arra
         'recipient' => ['id' => $recipientPsid],
         'messaging_type' => 'RESPONSE',
     ], $template);
-    
+
     Logger::info("[FB_SUGGEST] 🎁 Sending Admin Suggest Product Card", [
         'recipient' => $recipientPsid,
         'product_code' => $productCode,
@@ -1416,22 +1483,22 @@ function sendAdminSuggestProductCard(string $recipientPsid, array $product, arra
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_POST           => true,
-        CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_UNICODE),
-        CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
-        CURLOPT_TIMEOUT        => 30,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE),
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_TIMEOUT => 30,
     ]);
 
     $resp = curl_exec($ch);
     $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $err  = curl_error($ch);
+    $err = curl_error($ch);
     curl_close($ch);
 
     if ($http !== 200) {
         Logger::error('[FB_SUGGEST] ❌ Facebook API returned error', [
             'http_code' => $http,
             'curl_error' => $err,
-            'facebook_response' => substr((string)$resp, 0, 800),
+            'facebook_response' => substr((string) $resp, 0, 800),
         ]);
         return false;
     }
