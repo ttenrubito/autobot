@@ -269,19 +269,11 @@ function renderPayments() {
             const statusText = payment.status === 'verified' ? 'อนุมัติแล้ว' :
                 payment.status === 'pending' ? 'รอตรวจสอบ' : 'ปฏิเสธ';
 
-            const typeClass = payment.payment_type === 'full' ? 'full' :
-                payment.payment_type === 'savings' ? 'savings' :
-                    payment.payment_type === 'deposit' ? 'deposit' :
-                        payment.payment_type === 'deposit_interest' ? 'deposit-interest' : 'installment';
-            const typeIcon = payment.payment_type === 'full' ? '💳' :
-                payment.payment_type === 'savings' ? '🐷' :
-                    payment.payment_type === 'deposit' ? '📦' :
-                        payment.payment_type === 'deposit_interest' ? '💵' : '📅';
-            const typeText = payment.payment_type === 'full' ? 'จ่ายเต็ม' :
-                payment.payment_type === 'savings' ? 'ออมเงิน' :
-                    payment.payment_type === 'deposit' ? 'มัดจำ' :
-                        payment.payment_type === 'deposit_interest' ? 'ต่อดอกฝาก' :
-                            `งวด ${payment.current_period || 1}/${payment.installment_period || 1}`;
+            const typeClass = getPaymentTypeClass(payment.payment_type);
+            const typeIcon = getPaymentTypeIcon(payment.payment_type);
+            const typeText = payment.payment_type === 'installment' 
+                ? `งวด ${payment.current_period || 1}/${payment.installment_period || 1}`
+                : getPaymentTypeText(payment.payment_type).replace(/^[^\s]+\s/, ''); // Remove emoji prefix
 
             const orderNo = payment.order_no || '';
             const isHighlighted = targetOrderNoFromQuery && String(orderNo) === String(targetOrderNoFromQuery);
@@ -332,19 +324,11 @@ function renderPayments() {
             const statusText = payment.status === 'verified' ? 'อนุมัติแล้ว' :
                 payment.status === 'pending' ? 'รอตรวจสอบ' : 'ปฏิเสธ';
 
-            const typeClass = payment.payment_type === 'full' ? 'full' :
-                payment.payment_type === 'savings' ? 'savings' :
-                    payment.payment_type === 'deposit' ? 'deposit' :
-                        payment.payment_type === 'deposit_interest' ? 'deposit-interest' : 'installment';
-            const typeIcon = payment.payment_type === 'full' ? '💳' :
-                payment.payment_type === 'savings' ? '🐷' :
-                    payment.payment_type === 'deposit' ? '📦' :
-                        payment.payment_type === 'deposit_interest' ? '💵' : '📅';
-            const typeText = payment.payment_type === 'full' ? 'จ่ายเต็ม' :
-                payment.payment_type === 'savings' ? 'ออมเงิน' :
-                    payment.payment_type === 'deposit' ? 'มัดจำ' :
-                        payment.payment_type === 'deposit_interest' ? 'ต่อดอกฝาก' :
-                            `งวด ${payment.current_period || 1}/${payment.installment_period || 1}`;
+            const typeClass = getPaymentTypeClass(payment.payment_type);
+            const typeIcon = getPaymentTypeIcon(payment.payment_type);
+            const typeText = payment.payment_type === 'installment' 
+                ? `งวด ${payment.current_period || 1}/${payment.installment_period || 1}`
+                : getPaymentTypeText(payment.payment_type).replace(/^[^\s]+\s/, ''); // Remove emoji prefix
 
             // Customer profile
             const customerName = payment.customer_name || 'ลูกค้า';
@@ -1274,14 +1258,50 @@ function getPaymentMethodText(method) {
     return methods[method] || method;
 }
 
-function getPaymentTypeText(type) {
+function getPaymentTypeText(type, payment = null) {
     const types = {
         'full': '💳 จ่ายเต็ม',
         'deposit': '💎 มัดจำ',
         'installment': '📅 ผ่อนชำระ',
-        'savings_deposit': '🐷 ฝากออม'
+        'savings': '🐷 ออมเงิน',
+        'savings_deposit': '🐷 ฝากออม',
+        'deposit_interest': '💵 ต่อดอกฝาก',
+        'pawn_redemption': '🔓 ไถ่ถอนจำนำ'
     };
+    
+    // For installment, show period info if available
+    if (type === 'installment' && payment) {
+        return `📅 งวด ${payment.current_period || 1}/${payment.installment_period || 1}`;
+    }
+    
     return types[type] || type || '-';
+}
+
+// Helper functions for payment type display
+function getPaymentTypeClass(type) {
+    const classes = {
+        'full': 'full',
+        'deposit': 'deposit',
+        'savings': 'savings',
+        'savings_deposit': 'savings',
+        'deposit_interest': 'deposit-interest',
+        'pawn_redemption': 'pawn-redemption',
+        'installment': 'installment'
+    };
+    return classes[type] || 'installment';
+}
+
+function getPaymentTypeIcon(type) {
+    const icons = {
+        'full': '💳',
+        'deposit': '💎',
+        'savings': '🐷',
+        'savings_deposit': '🐷',
+        'deposit_interest': '💵',
+        'pawn_redemption': '🔓',
+        'installment': '📅'
+    };
+    return icons[type] || '📅';
 }
 
 /**

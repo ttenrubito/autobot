@@ -1120,6 +1120,16 @@ include('../includes/customer/sidebar.php');
         color: #15803d;
     }
 
+    .payment-type-badge.type-deposit-interest {
+        background: #ede9fe;
+        color: #7c3aed;
+    }
+
+    .payment-type-badge.type-pawn-redemption {
+        background: #fef3c7;
+        color: #b45309;
+    }
+
     /* Loading State */
     .loading-state {
         grid-column: 1 / -1;
@@ -2456,6 +2466,11 @@ include('../includes/customer/sidebar.php');
     .type-badge.type-deposit-interest {
         background: #ede9fe;
         color: #7c3aed;
+    }
+
+    .type-badge.type-pawn-redemption {
+        background: #fef3c7;
+        color: #b45309;
     }
 
     /* Status Badge */
