@@ -682,6 +682,14 @@ function processMessagingEvent(array $event, string $entryPageId): void
             'trace_id' => $traceId,
             'total_sent' => $messageCount,
         ]);
+    } else if (empty($replyMessages) && empty($imageActions)) {
+        // ✅ No reply (gatekeeper blocked or no response) - stop typing indicator
+        if (!$isAdmin) {
+            sendTypingIndicator($senderId, $channel, 'typing_off');
+            Logger::info('[FB_WEBHOOK] No reply - stopped typing indicator (gatekeeper/no-reply)', [
+                'trace_id' => $traceId,
+            ]);
+        }
     }
 }
 

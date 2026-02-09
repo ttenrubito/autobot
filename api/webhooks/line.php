@@ -356,6 +356,13 @@ function processEvent($event)
     // ✅ Send response back to LINE (Flex messages, text messages + actions/images)
     if (!empty($replyMessages) || !empty($replyTexts) || !empty($actions)) {
         sendLineReply($replyToken, $replyTexts, $actions, $channel, $replyMessages);
+    } else {
+        // ✅ No reply (gatekeeper blocked or no response)
+        // Note: LINE loading indicator auto-expires after 20 seconds, no API to stop it early
+        Logger::info('[LINE_WEBHOOK] No reply - gatekeeper/no-reply case', [
+            'user_id' => $userId,
+            'message_type' => $messageType,
+        ]);
     }
 }
 
