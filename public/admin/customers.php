@@ -2052,8 +2052,7 @@ include('../../includes/admin/sidebar.php');
             document.getElementById('storeConfigChannelName').textContent = channelName;
             document.getElementById('storeConfigError').style.display = 'none';
             document.getElementById('storeConfigSuccess').style.display = 'none';
-
-            // Reset form to defaults
+ // Reset form to defaults
             document.getElementById('storeConfigType').value = 'luxury_resale';
             document.getElementById('featurePawn').checked = true;
             document.getElementById('featureRepair').checked = true;
@@ -2065,7 +2064,7 @@ include('../../includes/admin/sidebar.php');
             document.getElementById('tradeInReturnRate').value = 15;
             document.getElementById('categoryKeywords').value = '';
 
-            // Load existing config if any
+           // Load existing config if any
             await loadStoreConfig(channelId);
 
             document.getElementById('storeConfigModal').classList.remove('hidden');
@@ -2303,77 +2302,7 @@ function switchCustomerTab(tab) {
 }
 
 // ---- Channels API helpers ----
-async function loadCustomerChannels(userId) {
-    const tbody = document.getElementById('channelsTable');
-    if (!tbody) return;
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;">กำลังโหลด...</td></tr>';
-    try {
-        const res = await apiCall(`/api/admin/customer-channels.php?user_id=${userId}`);
-        if (!res.success || !Array.isArray(res.data.channels) || res.data.channels.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--color-gray);">ยังไม่มีข้อมูลช่องทาง</td></tr>';
-            return;
-        }
-        tbody.innerHTML = res.data.channels.map(ch => {
-            const statusBadge = ch.status === 'active'
-                ? '<span class="badge badge-success">เปิดใช้งาน</span>'
-                : ch.status === 'paused'
-                    ? '<span class="badge badge-warning">พักการใช้งาน</span>'
-                    : '<span class="badge badge-secondary">ปิดใช้งาน</span>';
-
-            const refreshBtn = (ch.type === 'facebook')
-                ? `<button class="btn btn-sm btn-outline" title="Refresh Facebook Token" onclick="refreshFacebookToken(${ch.id})"><i class="fas fa-sync"></i></button>`
-                : '';
-
-            return `
-                <tr>
-                    <td>${ch.name}</td>
-                    <td>${ch.type}</td>
-                    <td>${ch.inbound_api_key}</td>
-                    <td>${ch.bot_profile_name || '-'}</td>
-                    <td>${statusBadge}</td>
-                    <td>
-                        ${refreshBtn}
-                        <button class="btn btn-sm btn-outline" onclick="editChannel(${ch.id})"><i class="fas fa-edit"></i></button>
-                        <button class="btn btn-sm btn-danger" onclick="deleteChannel(${ch.id})"><i class="fas fa-trash"></i></button>
-                    </td>
-                </tr>
-            `;
-        }).join('');
-    } catch (e) {
-        console.error('loadCustomerChannels error', e);
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:red;">โหลดข้อมูลช่องทางไม่สำเร็จ</td></tr>';
-    }
-}
-
-async function refreshFacebookToken(channelId) {
-    if (!channelId) return;
-    if (!confirm('ต้องการ Refresh Facebook Token สำหรับ Channel นี้ใช่หรือไม่?')) return;
-    try {
-        const res = await apiCall('/api/admin/refresh-facebook-tokens.php', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ channel_id: channelId })
-        });
-
-        if (!res || !res.success) {
-            alert((res && (res.message || res.error)) ? (res.message || res.error) : 'Refresh token ไม่สำเร็จ');
-            return;
-        }
-
-        const summary = res.data && res.data.summary ? res.data.summary : null;
-        const results = res.data && Array.isArray(res.data.results) ? res.data.results : [];
-        const first = results[0] || null;
-        const msg = first && first.message ? first.message : 'ดำเนินการเรียบร้อย';
-
-        alert(`✅ ${msg}` + (summary ? `\n(refreshed=${summary.refreshed}, skipped=${summary.skipped}, failed=${summary.failed})` : ''));
-
-        // reload channels to reflect any expiry tracking fields if shown later
-        if (selectedCustomerId) loadCustomerChannels(selectedCustomerId);
-    } catch (e) {
-        console.error('refreshFacebookToken error', e);
-        alert('เกิดข้อผิดพลาดในการเรียก refresh token');
-    }
-}
+// Note: loadCustomerChannels and refreshFacebookToken are defined in the main script block above (with Store Config button support)
 
 // ✅ Refresh ALL Facebook tokens at once
 async function refreshAllFacebookTokens() {
