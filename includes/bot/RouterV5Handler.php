@@ -3714,6 +3714,10 @@ PROMPT;
         ]);
 
         switch ($type) {
+            // ✅ NEW: Handle generic product inquiry → show categories
+            case 'browse_products':
+                return $this->handleBrowseProducts($config, $context);
+                
             case 'product_list':
                 // Return product cards
                 if (!empty($result['products'])) {
