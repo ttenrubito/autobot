@@ -72,7 +72,7 @@ class TransactionService
                     WHERE (platform_user_id = ? OR external_user_id = ?)
                     AND status IN ('active', 'overdue', 'pending')
                     ORDER BY next_due_date ASC";
-            
+
             $installments = $this->db->query($sql, [$platformUserId, $platformUserId]);
 
             if (empty($installments)) {
@@ -102,7 +102,7 @@ class TransactionService
     protected function formatInstallmentResult(array $data, string $source): array
     {
         $installments = $data['installments'] ?? [];
-        
+
         if (empty($installments)) {
             return [
                 'ok' => true,
@@ -126,36 +126,36 @@ class TransactionService
             $contractNo = $inst['contract_no'] ?? '-';
             $contractId = $inst['id'] ?? null; // contract_id from installment_contracts
             $orderId = $inst['order_id'] ?? null;
-            $financedAmount = (float)($inst['financed_amount'] ?? 0);
-            $paidAmount = (float)($inst['paid_amount'] ?? 0);
+            $financedAmount = (float) ($inst['financed_amount'] ?? 0);
+            $paidAmount = (float) ($inst['paid_amount'] ?? 0);
             $remaining = $financedAmount - $paidAmount;
-            $paidPeriods = (int)($inst['paid_periods'] ?? 0);
-            $totalPeriods = (int)($inst['total_periods'] ?? 3);
+            $paidPeriods = (int) ($inst['paid_periods'] ?? 0);
+            $totalPeriods = (int) ($inst['total_periods'] ?? 3);
             $nextDue = $inst['next_due_date'] ?? '-';
             $status = $inst['status'] ?? 'active';
-            
+
             // Status icon based on contract status
             $statusIcon = $status === 'overdue' ? '🔴' : ($paidPeriods > 0 ? '🟢' : '🟡');
-            
+
             $lines[] = '';
             $lines[] = "──────────────";
             $lines[] = "{$num}. {$statusIcon} {$productName}";
             $lines[] = "📄 {$contractNo}";
-            
+
             // Get schedule details for this contract (from installment_payments table)
             $schedules = $this->getInstallmentSchedules($orderId, $contractNo, $contractId);
-            
+
             if (!empty($schedules)) {
                 foreach ($schedules as $schedule) {
                     $periodNum = $schedule['period_number'] ?? 0;
                     $dueDate = $schedule['due_date'] ?? '-';
-                    $amount = (float)($schedule['amount'] ?? 0);
+                    $amount = (float) ($schedule['amount'] ?? 0);
                     $scheduleStatus = $schedule['status'] ?? 'pending';
                     $paidAt = $schedule['paid_at'] ?? null;
-                    
+
                     // Format date in Thai (short)
                     $dueDateFormatted = $this->formatThaiDate($dueDate);
-                    
+
                     // Status indicator - compact format
                     if ($scheduleStatus === 'paid') {
                         $statusIcon = '✅';
@@ -179,7 +179,7 @@ class TransactionService
                             }
                         }
                     }
-                    
+
                     // Compact format: ✅ 1: 28 ม.ค. ฿16,677
                     $lines[] = "{$statusIcon} งวด{$periodNum}: {$dueDateFormatted} ฿" . number_format($amount, 0);
                 }
@@ -187,12 +187,12 @@ class TransactionService
                 // Fallback: generate schedule from contract data (when installment_payments table not available)
                 $perPeriod = $totalPeriods > 0 ? $financedAmount / $totalPeriods : $financedAmount;
                 $startDate = $inst['start_date'] ?? $inst['created_at'] ?? date('Y-m-d');
-                
+
                 for ($p = 1; $p <= $totalPeriods; $p++) {
                     // Calculate due date for each period (monthly)
                     $periodDueDate = date('Y-m-d', strtotime($startDate . ' + ' . $p . ' months'));
                     $dueDateFormatted = $this->formatThaiDate($periodDueDate);
-                    
+
                     // Determine status based on paid_periods and current date
                     if ($p <= $paidPeriods) {
                         $statusIcon = '✅';
@@ -207,20 +207,20 @@ class TransactionService
                             $totalNextPayment += $perPeriod;
                         }
                     }
-                    
+
                     $lines[] = "{$statusIcon} งวด{$p}: {$dueDateFormatted} ฿" . number_format($perPeriod, 0);
                 }
             }
-            
+
             $lines[] = "💰 เหลือ: ฿" . number_format($remaining, 0);
-            
+
             $totalDue += $remaining;
         }
 
         $lines[] = '';
         $lines[] = "──────────────";
         $lines[] = "💰 รวม: ฿" . number_format($totalDue, 0);
-        
+
         if ($totalNextPayment > 0) {
             $lines[] = "📌 งวดถัดไป: ฿" . number_format($totalNextPayment, 0);
         }
@@ -252,7 +252,7 @@ class TransactionService
                 );
                 if (!empty($payments)) {
                     // Map to expected format
-                    return array_map(function($p) {
+                    return array_map(function ($p) {
                         return [
                             'period_number' => $p['period_number'],
                             'amount' => $p['amount'],
@@ -264,7 +264,7 @@ class TransactionService
                     }, $payments);
                 }
             }
-            
+
             // FALLBACK 1: Try installment_schedules by order_id
             if ($orderId) {
                 $schedules = $this->db->query(
@@ -277,7 +277,7 @@ class TransactionService
                     return $schedules;
                 }
             }
-            
+
             // FALLBACK 2: Try installment_payments via contract_no
             if ($contractNo) {
                 $payments = $this->db->query(
@@ -289,7 +289,7 @@ class TransactionService
                     [$contractNo]
                 );
                 if (!empty($payments)) {
-                    return array_map(function($p) {
+                    return array_map(function ($p) {
                         return [
                             'period_number' => $p['period_number'],
                             'amount' => $p['amount'],
@@ -309,7 +309,7 @@ class TransactionService
                 'error' => $e->getMessage()
             ]);
         }
-        
+
         return [];
     }
 
@@ -321,24 +321,33 @@ class TransactionService
         if (empty($date) || $date === '-') {
             return '-';
         }
-        
+
         $thaiMonths = [
-            1 => 'ม.ค.', 2 => 'ก.พ.', 3 => 'มี.ค.', 4 => 'เม.ย.',
-            5 => 'พ.ค.', 6 => 'มิ.ย.', 7 => 'ก.ค.', 8 => 'ส.ค.',
-            9 => 'ก.ย.', 10 => 'ต.ค.', 11 => 'พ.ย.', 12 => 'ธ.ค.'
+            1 => 'ม.ค.',
+            2 => 'ก.พ.',
+            3 => 'มี.ค.',
+            4 => 'เม.ย.',
+            5 => 'พ.ค.',
+            6 => 'มิ.ย.',
+            7 => 'ก.ค.',
+            8 => 'ส.ค.',
+            9 => 'ก.ย.',
+            10 => 'ต.ค.',
+            11 => 'พ.ย.',
+            12 => 'ธ.ค.'
         ];
-        
+
         try {
             $timestamp = strtotime($date);
             if ($timestamp === false) {
                 return $date;
             }
-            
+
             $day = date('j', $timestamp);
-            $month = (int)date('n', $timestamp);
-            $year = (int)date('Y', $timestamp) + 543; // Buddhist year
+            $month = (int) date('n', $timestamp);
+            $year = (int) date('Y', $timestamp) + 543; // Buddhist year
             $shortYear = $year % 100; // Last 2 digits
-            
+
             return "{$day} {$thaiMonths[$month]} {$shortYear}";
         } catch (\Exception $e) {
             return $date;
@@ -387,7 +396,7 @@ class TransactionService
                     WHERE platform_user_id = ? 
                     AND status IN ('active', 'extended', 'expired')
                     ORDER BY due_date ASC";
-            
+
             $pawns = $this->db->query($sql, [$platformUserId]);
 
             if (empty($pawns)) {
@@ -415,7 +424,7 @@ class TransactionService
     protected function formatPawnResult(array $data, string $source): array
     {
         $pawns = $data['pawns'] ?? [];
-        
+
         if (empty($pawns)) {
             return [
                 'ok' => true,
@@ -431,14 +440,14 @@ class TransactionService
             $num = $i + 1;
             $ticketNo = $pawn['ticket_no'] ?? $pawn['pawn_no'] ?? '-';
             $itemName = $pawn['item_name'] ?? 'สินค้า';
-            $loanAmount = (float)($pawn['loan_amount'] ?? 0);
-            $accruedInterest = (float)($pawn['accrued_interest'] ?? 0);
-            $totalDue = (float)($pawn['total_due'] ?? ($loanAmount + $accruedInterest));
+            $loanAmount = (float) ($pawn['loan_amount'] ?? 0);
+            $accruedInterest = (float) ($pawn['accrued_interest'] ?? 0);
+            $totalDue = (float) ($pawn['total_due'] ?? ($loanAmount + $accruedInterest));
             $dueDate = $pawn['due_date'] ?? '-';
             $status = $pawn['status'] ?? 'active';
-            
+
             $statusIcon = in_array($status, ['expired', 'extended']) ? '⚠️' : '📌';
-            
+
             $lines[] = "{$num}. {$statusIcon} ตั๋ว #{$ticketNo}";
             $lines[] = "   รายการ: {$itemName}";
             $lines[] = "   เงินต้น: ฿" . number_format($loanAmount, 0);
@@ -499,7 +508,7 @@ class TransactionService
                     WHERE platform_user_id = ? 
                     AND status NOT IN ('completed', 'cancelled', 'delivered')
                     ORDER BY created_at DESC";
-            
+
             $repairs = $this->db->query($sql, [$platformUserId]);
 
             if (empty($repairs)) {
@@ -527,7 +536,7 @@ class TransactionService
     protected function formatRepairResult(array $data, string $source): array
     {
         $repairs = $data['repairs'] ?? [];
-        
+
         if (empty($repairs)) {
             return [
                 'ok' => true,
@@ -556,8 +565,8 @@ class TransactionService
             $status = $repair['status'] ?? 'pending';
             $statusText = $statusMap[$status] ?? $status;
             $estimatedDate = $repair['estimated_completion'] ?? $repair['estimated_date'] ?? '-';
-            $estimatedCost = (float)($repair['estimated_cost'] ?? 0);
-            
+            $estimatedCost = (float) ($repair['estimated_cost'] ?? 0);
+
             $lines[] = "{$num}. งาน #{$repairNo}";
             $lines[] = "   รายการ: {$itemType}";
             if ($itemDescription) {
@@ -626,7 +635,7 @@ class TransactionService
                     AND channel_id = ?
                     AND status = 'active'
                     ORDER BY created_at DESC";
-            
+
             $accounts = $this->db->query($sql, [$platformUserId, $channelId]);
 
             return $this->formatSavingsResult(['accounts' => $accounts], 'local');
@@ -642,7 +651,7 @@ class TransactionService
     protected function formatSavingsResult(array $data, string $source): array
     {
         $accounts = $data['accounts'] ?? [];
-        
+
         if (empty($accounts)) {
             return [
                 'ok' => true,
@@ -657,11 +666,11 @@ class TransactionService
         foreach ($accounts as $i => $account) {
             $num = $i + 1;
             $accountNo = $account['savings_account_no'] ?? $account['account_no'] ?? '-';
-            $totalDeposits = (float)($account['total_deposits'] ?? $account['balance'] ?? 0);
-            $goldWeight = (float)($account['gold_weight_grams'] ?? $account['gold_weight'] ?? 0);
-            $paymentsMade = (int)($account['payments_made'] ?? 0);
+            $totalDeposits = (float) ($account['total_deposits'] ?? $account['balance'] ?? 0);
+            $goldWeight = (float) ($account['gold_weight_grams'] ?? $account['gold_weight'] ?? 0);
+            $paymentsMade = (int) ($account['payments_made'] ?? 0);
             $status = $account['status'] ?? 'active';
-            
+
             $lines[] = "{$num}. บัญชี #{$accountNo}";
             $lines[] = "   ยอดเงินสะสม: ฿" . number_format($totalDeposits, 0);
             if ($goldWeight > 0) {
@@ -724,16 +733,16 @@ class TransactionService
             // First try by platform_user_id
             $sql = "SELECT * FROM orders WHERE platform_user_id = ?";
             $params = [$platformUserId];
-            
+
             if ($orderNo) {
                 $sql .= " AND order_no = ?";
                 $params[] = $orderNo;
             } else {
                 $sql .= " AND status NOT IN ('completed', 'cancelled', 'delivered')";
             }
-            
+
             $sql .= " ORDER BY created_at DESC LIMIT 5";
-            
+
             $orders = $this->db->query($sql, $params);
 
             // Fallback via customer_id if no direct match
@@ -742,14 +751,14 @@ class TransactionService
                 if ($customer && !empty($customer['id'])) {
                     $sql = "SELECT * FROM orders WHERE customer_id = ?";
                     $params = [$customer['id']];
-                    
+
                     if ($orderNo) {
                         $sql .= " AND order_no = ?";
                         $params[] = $orderNo;
                     } else {
                         $sql .= " AND status NOT IN ('completed', 'cancelled', 'delivered')";
                     }
-                    
+
                     $sql .= " ORDER BY created_at DESC LIMIT 5";
                     $orders = $this->db->query($sql, $params);
                 }
@@ -767,7 +776,7 @@ class TransactionService
     protected function formatOrderResult(array $data, string $source): array
     {
         $orders = $data['orders'] ?? [];
-        
+
         if (empty($orders)) {
             return [
                 'ok' => true,
@@ -792,11 +801,11 @@ class TransactionService
         foreach ($orders as $i => $order) {
             $num = $i + 1;
             $orderNo = $order['order_no'] ?? '-';
-            $total = (float)($order['total_amount'] ?? 0);
+            $total = (float) ($order['total_amount'] ?? 0);
             $status = $order['status'] ?? 'pending';
             $statusText = $statusMap[$status] ?? $status;
             $createdAt = $order['created_at'] ?? '-';
-            
+
             $lines[] = "{$num}. ออเดอร์ #{$orderNo}";
             $lines[] = "   ยอดรวม: ฿" . number_format($total, 0);
             $lines[] = "   สถานะ: {$statusText}";
@@ -817,12 +826,15 @@ class TransactionService
 
     /**
      * Calculate trade-in value
-     * Business rules:
-     * - Exchange: 10% deduction
-     * - Return: 15% deduction
-     * - Rolex: 35% deduction
+     * Business rules (configurable via Store Config):
+     * - Exchange: default 10% deduction
+     * - Return: default 15% deduction
+     * - Rolex: default 35% deduction
+     * 
+     * @param float $originalPrice Original purchase price
+     * @param array|null $rates Optional custom rates from Store Config
      */
-    public function calculateTradeIn(float $originalPrice): array
+    public function calculateTradeIn(float $originalPrice, ?array $rates = null): array
     {
         if ($originalPrice <= 0) {
             return [
@@ -831,10 +843,10 @@ class TransactionService
             ];
         }
 
-        // Business Logic
-        $exchangeDeduct = 0.10; // 10%
-        $returnDeduct = 0.15;   // 15%
-        $rolexDeduct = 0.35;    // 35%
+        // V6: Use configurable rates or defaults
+        $exchangeDeduct = $rates['exchange_rate'] ?? 0.10; // 10%
+        $returnDeduct = $rates['return_rate'] ?? 0.15;     // 15%
+        $rolexDeduct = $rates['special_brands']['Rolex'] ?? 0.35; // 35%
 
         $exchangeCredit = $originalPrice * (1 - $exchangeDeduct);
         $returnAmount = $originalPrice * (1 - $returnDeduct);
@@ -846,9 +858,9 @@ class TransactionService
         $lines[] = "💰 ราคาซื้อเดิม: ฿" . number_format($originalPrice, 0);
         $lines[] = "";
         $lines[] = "📊 **ยอดที่จะได้รับ:**";
-        $lines[] = "• เปลี่ยนสินค้า (หัก 10%): ฿" . number_format($exchangeCredit, 0);
-        $lines[] = "• คืนสินค้า (หัก 15%): ฿" . number_format($returnAmount, 0);
-        $lines[] = "• Rolex (หัก 35%): ฿" . number_format($rolexAmount, 0);
+        $lines[] = "• เปลี่ยนสินค้า (หัก " . ($exchangeDeduct * 100) . "%): ฿" . number_format($exchangeCredit, 0);
+        $lines[] = "• คืนสินค้า (หัก " . ($returnDeduct * 100) . "%): ฿" . number_format($returnAmount, 0);
+        $lines[] = "• Rolex (หัก " . ($rolexDeduct * 100) . "%): ฿" . number_format($rolexAmount, 0);
         $lines[] = "";
         $lines[] = "📌 รับเปลี่ยน/คืนเฉพาะสินค้าที่ซื้อจากร้านเท่านั้นนะคะ";
         $lines[] = "";
@@ -858,6 +870,7 @@ class TransactionService
             'original_price' => $originalPrice,
             'exchange_credit' => $exchangeCredit,
             'return_amount' => $returnAmount,
+            'custom_rates' => $rates !== null,
         ]);
 
         return [
@@ -871,7 +884,6 @@ class TransactionService
             ]
         ];
     }
-
     /**
      * Get trade-in policy information
      */
@@ -913,12 +925,12 @@ class TransactionService
                 [$channelId]
             );
             $platform = $channel['platform'] ?? 'facebook';
-            
+
             $sql = "SELECT * FROM customer_profiles
                     WHERE platform_user_id = ? 
                     AND platform = ?
                     LIMIT 1";
-            
+
             $result = $this->db->queryOne($sql, [$platformUserId, $platform]);
             return $result ?: null; // Convert false to null
         } catch (\Exception $e) {
@@ -932,7 +944,7 @@ class TransactionService
     protected function isBackendEnabled(array $config, string $endpoint): bool
     {
         return !empty($config['backend_api']['enabled']) &&
-               !empty($config['backend_api']['endpoints'][$endpoint]);
+            !empty($config['backend_api']['endpoints'][$endpoint]);
     }
 
     /**

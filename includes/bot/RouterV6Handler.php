@@ -251,6 +251,18 @@ class RouterV6Handler implements BotHandlerInterface
             $context['platform_user_id'] = $platformUserId;
             $context['channel']['id'] = $channelId;
 
+            // ==================== V6: MULTI-TENANT STORE CONFIG ====================
+            // Load store-specific configuration (features, business rules, keywords)
+            $storeConfig = $this->storeConfigService->getConfig($channelId);
+            $context['store_config'] = $storeConfig;
+            $context['enabled_features'] = $this->storeConfigService->getEnabledFeatures($channelId);
+
+            Logger::info('[ROUTER_V6] Store config loaded', [
+                'trace_id' => $traceId,
+                'store_type' => $storeConfig['store_type'] ?? 'default',
+                'enabled_features' => $context['enabled_features'],
+            ]);
+
             // ==================== SESSION ====================
 
             $session = $this->chatService->getOrCreateSession($context);
@@ -639,33 +651,61 @@ class RouterV6Handler implements BotHandlerInterface
             // ==================== DEPOSIT/BOOKING FLOW ====================
 
             case 'deposit_flow':
+                // V6: Check if deposit feature is enabled
+                if (!$this->storeConfigService->isFeatureEnabled($context['channel']['id'], 'deposit')) {
+                    return ['reply' => $templates['feature_disabled'] ?? 'ขออภัยค่ะ บริการมัดจำสินค้ายังไม่เปิดให้บริการค่ะ 🙏'];
+                }
                 // User wants to book/deposit but hasn't specified product
                 return $this->handleDepositFlowAskProduct($params, $config, $context, $templates);
 
             case 'deposit_new':
+                // V6: Check if deposit feature is enabled
+                if (!$this->storeConfigService->isFeatureEnabled($context['channel']['id'], 'deposit')) {
+                    return ['reply' => $templates['feature_disabled'] ?? 'ขออภัยค่ะ บริการมัดจำสินค้ายังไม่เปิดให้บริการค่ะ 🙏'];
+                }
                 // User wants to deposit for a specific product (has context)
                 return $this->handleDepositWithProduct($params, $config, $context);
 
-            // ==================== TRANSACTION CHECKS ====================
+            // ==================== TRANSACTION CHECKS (with V6 Feature Guards) ====================
 
             case 'installment_check':
+                // V6: Check if installment feature is enabled
+                if (!$this->storeConfigService->isFeatureEnabled($context['channel']['id'], 'installment')) {
+                    return ['reply' => $templates['feature_disabled'] ?? 'ขออภัยค่ะ บริการผ่อนชำระยังไม่เปิดให้บริการค่ะ 🙏'];
+                }
                 $result = $this->transactionService->checkInstallment($config, $context);
                 return ['reply' => $result['message']];
 
             case 'pawn_check':
+                // V6: Check if pawn feature is enabled
+                if (!$this->storeConfigService->isFeatureEnabled($context['channel']['id'], 'pawn')) {
+                    return ['reply' => $templates['feature_disabled'] ?? 'ขออภัยค่ะ บริการจำนำยังไม่เปิดให้บริการค่ะ 🙏'];
+                }
                 $result = $this->transactionService->checkPawn($config, $context);
                 return ['reply' => $result['message']];
 
             case 'pawn_new':
             case 'pawn_inquiry':
+                // V6: Check if pawn feature is enabled
+                if (!$this->storeConfigService->isFeatureEnabled($context['channel']['id'], 'pawn')) {
+                    return ['reply' => $templates['feature_disabled'] ?? 'ขออภัยค่ะ บริการจำนำยังไม่เปิดให้บริการค่ะ 🙏'];
+                }
                 // ✅ เช็คว่าลูกค้าเคยซื้อสินค้าจากร้านหรือไม่
                 return $this->handlePawnInquiry($config, $context, $templates);
 
             case 'repair_check':
+                // V6: Check if repair feature is enabled
+                if (!$this->storeConfigService->isFeatureEnabled($context['channel']['id'], 'repair')) {
+                    return ['reply' => $templates['feature_disabled'] ?? 'ขออภัยค่ะ บริการซ่อมยังไม่เปิดให้บริการค่ะ 🙏'];
+                }
                 $result = $this->transactionService->checkRepair($config, $context);
                 return ['reply' => $result['message']];
 
             case 'savings_check':
+                // V6: Check if savings feature is enabled
+                if (!$this->storeConfigService->isFeatureEnabled($context['channel']['id'], 'savings')) {
+                    return ['reply' => $templates['feature_disabled'] ?? 'ขออภัยค่ะ บริการออมทรัพย์ยังไม่เปิดให้บริการค่ะ 🙏'];
+                }
                 $result = $this->transactionService->checkSavings($config, $context);
                 return ['reply' => $result['message']];
 
@@ -681,6 +721,10 @@ class RouterV6Handler implements BotHandlerInterface
                 return $this->handleChangePaymentMethod($params, $config, $context);
 
             case 'installment_flow':
+                // V6: Check if installment feature is enabled
+                if (!$this->storeConfigService->isFeatureEnabled($context['channel']['id'], 'installment')) {
+                    return ['reply' => $templates['feature_disabled'] ?? 'ขออภัยค่ะ บริการผ่อนชำระยังไม่เปิดให้บริการค่ะ 🙏'];
+                }
                 $result = $this->transactionService->checkInstallment($config, $context);
                 return ['reply' => $result['message']];
 
@@ -691,12 +735,22 @@ class RouterV6Handler implements BotHandlerInterface
                 $text = $context['message']['text'] ?? '';
                 $keyword = $this->extractProductKeywords($text);
 
+                // ✅ V6 Sync from V5: If keyword is generic, show browse instead
+                $genericKeywords = ['สินค้า', 'ของ', 'รายการ', 'catalog', ''];
+                if (in_array(mb_strtolower(trim($keyword), 'UTF-8'), $genericKeywords)) {
+                    Logger::info('[ROUTER_V6] product_availability: generic keyword, routing to browse', [
+                        'original_text' => $text,
+                        'extracted_keyword' => $keyword
+                    ]);
+                    return $this->handleBrowseProducts($config, $context);
+                }
+
                 if (!empty($keyword)) {
                     // ✅ Has specific keyword - skip LLM rewrite, search directly
                     return $this->handleProductSearch(['keyword' => $keyword, 'skip_llm_rewrite' => true], $config, $context);
                 }
 
-                // ✅ NEW: Empty keyword (e.g., "มีไหม", "มีบ้างไหม") - use LLM to get context from chat history
+                // ✅ Empty keyword (e.g., "มีไหม", "มีบ้างไหม") - use LLM to get context from chat history
                 Logger::info('[ROUTER_V6] product_availability: empty keyword, using LLM context', [
                     'original_text' => $text
                 ]);
@@ -740,14 +794,24 @@ class RouterV6Handler implements BotHandlerInterface
                 return $this->handlePriceNegotiation($config, $context, $templates);
 
             case 'trade_in_inquiry':
+                // V6: Check if trade_in feature is enabled
+                if (!$this->storeConfigService->isFeatureEnabled($context['channel']['id'], 'trade_in')) {
+                    return ['reply' => $templates['feature_disabled'] ?? 'ขออภัยค่ะ บริการเทิร์น/แลกเปลี่ยนยังไม่เปิดให้บริการค่ะ 🙏'];
+                }
                 // ✅ Refactored: Call TransactionService instead of local method
                 $msg = $this->transactionService->getTradeInPolicy();
                 return ['reply' => $msg];
 
             case 'trade_in_calculate':
-                // ✅ Refactored: Call TransactionService instead of local method
+                // V6: Check if trade_in feature is enabled
+                if (!$this->storeConfigService->isFeatureEnabled($context['channel']['id'], 'trade_in')) {
+                    return ['reply' => $templates['feature_disabled'] ?? 'ขออภัยค่ะ บริการเทิร์น/แลกเปลี่ยนยังไม่เปิดให้บริการค่ะ 🙏'];
+                }
+                // ✅ V6: Use configurable trade-in rates
+                $channelId = $context['channel']['id'];
+                $rates = $this->storeConfigService->getTradeInRates($channelId);
                 $originalPrice = (float) ($params['original_price'] ?? 0);
-                $result = $this->transactionService->calculateTradeIn($originalPrice);
+                $result = $this->transactionService->calculateTradeIn($originalPrice, $rates);
                 return ['reply' => $result['message']];
 
             // ==================== GREETINGS ====================
