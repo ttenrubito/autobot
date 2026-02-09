@@ -328,9 +328,12 @@ class IntentService
 
         // ✅ NEW: Browse Products - General inquiry without specific product
         // "สนใจสินค้า", "อยากดูสินค้า", "มีสินค้าอะไรบ้าง", "แนะนำบ้าง", "มีอะไรแนะนำ"
-        if (preg_match('/^(สนใจ|อยากดู|อยากได้)\s*สินค้า\s*(ครับ|ค่ะ|คะ|จ้า|นะ)?$/u', $text) ||
+        // ✅ Explicit pattern for "มีสินค้าอะไรบ้าง" and similar
+        if (preg_match('/^มี.*(สินค้า|ของ).*(อะไร|บ้าง|ไหม)/u', $text) ||
+            preg_match('/^(สนใจ|อยากดู|อยากได้)\s*สินค้า\s*(ครับ|ค่ะ|คะ|จ้า|นะ)?$/u', $text) ||
             preg_match('/(มี|มีอะไร|แนะนำ|อยากดู).*(อะไร|อะไรบ้าง|บ้าง|แนะนำ)\s*(ไหม|มั้ย|คะ|ครับ)?$/u', $text) ||
-            preg_match('/(สินค้า|ของ).*(แนะนำ|ยอดนิยม|ขายดี|ใหม่)/u', $text)) {
+            preg_match('/(สินค้า|ของ).*(แนะนำ|ยอดนิยม|ขายดี|ใหม่)/u', $text) ||
+            preg_match('/^สินค้า\s*(ครับ|ค่ะ|คะ)?$/u', $text)) {
             \Logger::info('[IntentService] Regex Hit: browse_products (general inquiry)');
             return $this->makeResult('browse_products', 0.9, [], 'regex');
         }
