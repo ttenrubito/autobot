@@ -326,6 +326,15 @@ class IntentService
             return $this->makeResult('price_inquiry', 0.9, [], 'regex');
         }
 
+        // ✅ NEW: Browse Products - General inquiry without specific product
+        // "สนใจสินค้า", "อยากดูสินค้า", "มีสินค้าอะไรบ้าง", "แนะนำบ้าง", "มีอะไรแนะนำ"
+        if (preg_match('/^(สนใจ|อยากดู|อยากได้)\s*สินค้า\s*(ครับ|ค่ะ|คะ|จ้า|นะ)?$/u', $text) ||
+            preg_match('/(มี|มีอะไร|แนะนำ|อยากดู).*(อะไร|อะไรบ้าง|บ้าง|แนะนำ)\s*(ไหม|มั้ย|คะ|ครับ)?$/u', $text) ||
+            preg_match('/(สินค้า|ของ).*(แนะนำ|ยอดนิยม|ขายดี|ใหม่)/u', $text)) {
+            \Logger::info('[IntentService] Regex Hit: browse_products (general inquiry)');
+            return $this->makeResult('browse_products', 0.9, [], 'regex');
+        }
+
         // General Product Search / Availability (มีสินค้าไหม, อยากได้แหวน, มีพระปิดตาไหม)
         // Matches: "มีแหวนไหม", "หานาฬิกา", "อยากได้แหวนเพชร", "มีพระสมเด็จไหม", "หาพระเลี่ยมทอง"
         // ✅ UPDATED: Added พระ, พระเครื่อง, เลี่ยม, ตลับ for amulet searches

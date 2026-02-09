@@ -680,6 +680,16 @@ class RouterV5Handler implements BotHandlerInterface
                 $text = $context['message']['text'] ?? '';
                 $keyword = $this->extractProductKeywords($text);
                 
+                // ✅ NEW: If keyword is generic (just "สินค้า", "ของ"), show browse instead
+                $genericKeywords = ['สินค้า', 'ของ', 'รายการ', 'catalog', ''];
+                if (in_array(mb_strtolower(trim($keyword), 'UTF-8'), $genericKeywords)) {
+                    Logger::info('[ROUTER_V5] product_availability: generic keyword, routing to browse', [
+                        'original_text' => $text,
+                        'extracted_keyword' => $keyword
+                    ]);
+                    return $this->handleBrowseProducts($config, $context);
+                }
+                
                 if (!empty($keyword)) {
                     // ✅ Has specific keyword - skip LLM rewrite, search directly
                     return $this->handleProductSearch(['keyword' => $keyword, 'skip_llm_rewrite' => true], $config, $context);
