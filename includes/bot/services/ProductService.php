@@ -269,13 +269,18 @@ class ProductService
      * @param array $context Chat context
      * @return array ['ok' => bool, 'products' => array, 'total' => int]
      */
-    public function search(string $query, array $config, array $context): array
+    public function search(string $query, array $config, array $context, array $options = []): array
     {
         $query = trim($query);
         
         if (empty($query)) {
             return ['ok' => false, 'products' => [], 'total' => 0, 'error' => 'empty_query'];
         }
+        
+        // Extract options
+        $category = $options['category'] ?? null;
+        $excludeCategory = $options['exclude_category'] ?? null;
+        $searchAll = $options['search_all'] ?? false;
 
         // Detect search type
         $searchType = $this->detectSearchType($query);
@@ -285,10 +290,10 @@ class ProductService
                 // Step A: Exact Match - Direct API call for product codes
                 return $this->searchByCode($query, $config, $context);
             case 'keyword':
-                // Step B: Semantic Match - Use Vector Search
-                return $this->searchByKeywordHybrid($query, $config, $context);
+                // Step B: Semantic Match - Use Vector Search with filters
+                return $this->searchByKeywordHybrid($query, $config, $context, $options);
             default:
-                return $this->searchByKeywordHybrid($query, $config, $context);
+                return $this->searchByKeywordHybrid($query, $config, $context, $options);
         }
     }
 
@@ -556,6 +561,30 @@ class ProductService
     }
 
     /**
+     * Get keywords for a category (for exclusion matching)
+     * 
+     * @param string $category Category in English (e.g., 'watch', 'ring')
+     * @return array Keywords that indicate this category
+     */
+    protected function getCategoryKeywords(string $category): array
+    {
+        $categoryMappings = [
+            'watch' => ['watch', 'นาฬิกา', 'rolex', 'omega', 'tag', 'patek', 'seiko', 'citizen', 'casio', 'timepiece'],
+            'ring' => ['ring', 'แหวน', 'wedding band', 'engagement'],
+            'necklace' => ['necklace', 'สร้อยคอ', 'สร้อย', 'chain', 'pendant'],
+            'bracelet' => ['bracelet', 'กำไล', 'ข้อมือ', 'bangle'],
+            'earring' => ['earring', 'ต่างหู', 'ตุ้มหู', 'ear'],
+            'pendant' => ['pendant', 'จี้', 'charm'],
+            'bag' => ['bag', 'กระเป๋า', 'purse', 'handbag', 'wallet', 'กระเป๋าแบรนด์เนม'],
+            'amulet' => ['amulet', 'พระ', 'พระเครื่อง', 'เลี่ยม', 'วัตถุมงคล'],
+            'jewelry' => ['jewelry', 'jewellery', 'เครื่องประดับ', 'เพชร', 'diamond', 'ชุดเครื่องประดับ'],
+            'gold' => ['gold', 'ทอง', 'ทองคำ', 'ทองแท่ง', 'gold bar', 'ทองคำแท่ง'],
+        ];
+        
+        return $categoryMappings[$category] ?? [$category];
+    }
+
+    /**
      * Convert Thai number words to numeric values
      * Supports: "5แสน" → "500000", "2หมื่น" → "20000", "ล้านห้า" → "1500000"
      * 
@@ -792,27 +821,95 @@ class ProductService
      * 4. ถ้ายังไม่พบ → fallback ไป Vector Search
      * 
      * ปรับปรุง 2026-02-02: ใช้ Category Filter ก่อนเสมอ ไม่ใช่แค่ broad search
-     * เพราะ "มีแหวนเพชรแท้ไหม" ควรหา category=ring + material=diamond ได้
+     * เพราะ "มีแหวนเพชรไหม" ควรหา category=ring + material=diamond ได้
      */
-    protected function searchByKeywordHybrid(string $keyword, array $config, array $context, int $limit = 5): array
+    protected function searchByKeywordHybrid(string $keyword, array $config, array $context, $optionsOrLimit = 5): array
     {
-        \Logger::info("[ProductService] Hybrid search started", ['keyword' => $keyword]);
+        // Support both old (int $limit) and new (array $options) signature
+        if (is_array($optionsOrLimit)) {
+            $options = $optionsOrLimit;
+            $limit = 5;
+        } else {
+            $options = [];
+            $limit = (int)$optionsOrLimit;
+        }
+        
+        // Extract options for category filtering
+        $requestedCategory = $options['category'] ?? null;
+        $excludeCategory = $options['exclude_category'] ?? null;
+        $searchAll = $options['search_all'] ?? false;
+        
+        \Logger::info("[ProductService] Hybrid search started", [
+            'keyword' => $keyword,
+            'requested_category' => $requestedCategory,
+            'exclude_category' => $excludeCategory,
+            'search_all' => $searchAll
+        ]);
         
         // Step 0: Analyze Query - extract category/material filters
         $analysis = $this->analyzeQuery($keyword);
         $filters = $analysis['filters'];
         
+        // ✅ Override category from LLM if provided
+        if ($requestedCategory) {
+            $filters['category'] = $requestedCategory;
+        }
+        
         // ==================== STEP 1: Category Filter (Always Try First) ====================
         // ถ้า detect ได้ category หรือ material → ลอง filter ก่อนเสมอ
         // e.g., "มีแหวนเพชรแท้ไหม" → category=ring, material=diamond
         
-        if (!empty($filters)) {
-            \Logger::info("[ProductService] Using Category Filter (filter-first)", $filters);
+        if (!empty($filters) || $excludeCategory || $searchAll) {
+            \Logger::info("[ProductService] Using Category Filter (filter-first)", [
+                'filters' => $filters,
+                'exclude' => $excludeCategory,
+                'search_all' => $searchAll
+            ]);
             
             $category = $filters['category'] ?? null;
             $material = $filters['material'] ?? null;
             
-            $products = \ProductSearchService::searchByCategory($category, $material, $limit * 2); // Get more to filter
+            // ✅ If search_all, get all products (no category filter)
+            if ($searchAll || $excludeCategory) {
+                $products = \ProductSearchService::searchAll($limit * 4); // Get more for filtering
+            } else {
+                $products = \ProductSearchService::searchByCategory($category, $material, $limit * 2);
+            }
+            
+            // ✅ Apply exclude_category filter
+            if (!empty($products) && $excludeCategory) {
+                $excludeCatLower = strtolower($excludeCategory);
+                $productsFiltered = array_filter($products, function($p) use ($excludeCatLower) {
+                    $productCategory = strtolower($p['category'] ?? '');
+                    // Also check product_code prefix and title
+                    $productCode = strtolower($p['product_code'] ?? '');
+                    $title = mb_strtolower($p['title'] ?? '', 'UTF-8');
+                    
+                    // Map category to keywords for exclusion
+                    $excludeKeywords = $this->getCategoryKeywords($excludeCatLower);
+                    
+                    // Check if product belongs to excluded category
+                    foreach ($excludeKeywords as $exKw) {
+                        if (mb_strpos($productCategory, $exKw) !== false) return false;
+                        if (mb_strpos($title, $exKw) !== false) return false;
+                        // Check brand too for watches
+                        if ($excludeCatLower === 'watch') {
+                            $watchBrands = ['rolex', 'omega', 'tag', 'patek', 'cartier', 'seiko', 'citizen'];
+                            $brand = strtolower($p['brand'] ?? '');
+                            if (in_array($brand, $watchBrands)) return false;
+                        }
+                    }
+                    return true;
+                });
+                
+                \Logger::info("[ProductService] Applied exclude filter", [
+                    'exclude' => $excludeCategory,
+                    'before' => count($products),
+                    'after' => count($productsFiltered)
+                ]);
+                
+                $products = array_values($productsFiltered);
+            }
             
             if (!empty($products)) {
                 // ถ้ามี remaining_query (e.g., "Rolex" จาก "นาฬิกา Rolex") → filter ต่อ

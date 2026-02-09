@@ -1043,6 +1043,11 @@ class RouterV5Handler implements BotHandlerInterface
         $keyword = $params['keyword'] ?? null;
         $query = $code ?: $keyword;
         $skipLlmRewrite = $params['skip_llm_rewrite'] ?? false;
+        
+        // Search filters from params or will be set by LLM
+        $category = $params['category'] ?? null;
+        $excludeCategory = $params['exclude_category'] ?? null;
+        $searchAll = $params['search_all'] ?? false;
 
         if (!$query) {
             return ['reply' => 'พิมพ์รหัสสินค้า หรือชื่อสินค้าที่สนใจได้เลยค่ะ 😊'];
@@ -1050,6 +1055,7 @@ class RouterV5Handler implements BotHandlerInterface
 
         // ✅ Step 1: Context-Aware Query Rewriting + Chit-chat Detection
         // Skip if already confirmed as product search (e.g., from product_availability intent)
+        $rewriteResult = null;
         if (!$skipLlmRewrite) {
             $rewriteResult = $this->rewriteQueryWithContext($query, $config, $context);
             
@@ -1078,10 +1084,24 @@ class RouterV5Handler implements BotHandlerInterface
             // ✅ Step 3: Use rewritten query for product search
             $searchQuery = $rewriteResult['rewritten'] ?? $query;
             
-            if ($searchQuery !== $query) {
+            // ✅ Step 4: Extract category filters from LLM response
+            if (!$category) {
+                $category = $rewriteResult['category'] ?? null;
+            }
+            if (!$excludeCategory) {
+                $excludeCategory = $rewriteResult['exclude_category'] ?? null;
+            }
+            if (!$searchAll) {
+                $searchAll = $rewriteResult['search_all'] ?? false;
+            }
+            
+            if ($searchQuery !== $query || $category || $excludeCategory) {
                 Logger::info('[ROUTER_V5] Query rewritten for context', [
                     'original' => $query,
-                    'rewritten' => $searchQuery
+                    'rewritten' => $searchQuery,
+                    'category' => $category,
+                    'exclude_category' => $excludeCategory,
+                    'search_all' => $searchAll
                 ]);
             }
         } else {
@@ -1092,10 +1112,34 @@ class RouterV5Handler implements BotHandlerInterface
             ]);
         }
 
-        $result = $this->productService->search($searchQuery, $config, $context);
+        // ✅ Step 5: Build search options with filters
+        $searchOptions = [];
+        if ($category) {
+            $searchOptions['category'] = $category;
+        }
+        if ($excludeCategory) {
+            $searchOptions['exclude_category'] = $excludeCategory;
+        }
+        if ($searchAll) {
+            $searchOptions['search_all'] = true;
+        }
+        
+        // Call ProductService with enhanced options
+        $result = $this->productService->search($searchQuery, $config, $context, $searchOptions);
 
         if (!$result['ok'] || empty($result['products'])) {
-            return ['reply' => 'ยังไม่เจอสินค้าที่ค้นหาค่ะ 🔍 ลองพิมพ์คำค้นอื่น หรือดูสินค้าแนะนำได้เลยนะคะ'];
+            // ✅ If exclusion search failed, try broader search
+            if ($excludeCategory && !$searchAll) {
+                Logger::info('[ROUTER_V5] Exclusion search failed, trying broader search', [
+                    'exclude_category' => $excludeCategory
+                ]);
+                $searchOptions['search_all'] = true;
+                $result = $this->productService->search($searchQuery, $config, $context, $searchOptions);
+            }
+            
+            if (!$result['ok'] || empty($result['products'])) {
+                return ['reply' => 'ยังไม่เจอสินค้าที่ค้นหาค่ะ 🔍 ลองพิมพ์คำค้นอื่น หรือดูสินค้าแนะนำได้เลยนะคะ'];
+            }
         }
 
         $products = $result['products'];
@@ -4732,19 +4776,24 @@ PROMPT;
             ];
         }
 
-        // Build rewrite prompt
+        // Build rewrite prompt - Enhanced with category/exclusion support
         $prompt = <<<PROMPT
 You are a Thai e-commerce chatbot assistant for a luxury second-hand goods store.
 
 Analyze the user's current message in context of the conversation history.
 
+## Store Categories
+Available product categories: นาฬิกา (watch), แหวน (ring), สร้อยคอ (necklace), กำไล/ข้อมือ (bracelet), ต่างหู (earring), จี้ (pendant), กระเป๋า (bag), พระเครื่อง (amulet), เครื่องประดับ (jewelry), ชุดเครื่องประดับ (jewelry set)
+
 ## Task
-1. If the message is a PRODUCT SEARCH query (asking about products, colors, features, prices):
+1. If the message is a PRODUCT SEARCH query:
    - Rewrite it into a clear product search query in Thai
    - Include context from history (e.g., product type, brand mentioned earlier)
+   - If user wants something DIFFERENT from what was shown, set appropriate category
+   - If user says "ไม่ใช่ X" or "อย่างอื่น" or "ไม่เอา X", detect the excluded category
    
 2. If the message is CHIT-CHAT (greetings, thanks, general questions not about products):
-   - Return NON_PRODUCT_SEARCH
+   - Return is_chit_chat: true
 
 ## Conversation History:
 {$history}
@@ -4752,12 +4801,22 @@ Analyze the user's current message in context of the conversation history.
 ## Current Message: "{$query}"
 
 ## Output Format (JSON only):
-{"rewritten": "rewritten search query or original", "is_chit_chat": true/false}
+{
+  "rewritten": "rewritten search query",
+  "is_chit_chat": false,
+  "category": "detected category in English or null",
+  "exclude_category": "category to exclude in English or null",
+  "search_all": false
+}
 
-Example outputs:
-- If user asks "มีสีน้ำเงินมั้ย" after discussing Rolex watches: {"rewritten": "นาฬิกา Rolex สีน้ำเงิน", "is_chit_chat": false}
-- If user says "ขอบคุณครับ": {"rewritten": "ขอบคุณครับ", "is_chit_chat": true}
-- If user says "สวัสดีครับ": {"rewritten": "สวัสดีครับ", "is_chit_chat": true}
+## Examples:
+- User says "ไม่ใช่นาฬิกา" after seeing watches: {"rewritten": "เครื่องประดับ สร้อย แหวน", "is_chit_chat": false, "category": "jewelry", "exclude_category": "watch", "search_all": false}
+- User says "อยากดูอย่างอื่น" after seeing watches: {"rewritten": "เครื่องประดับ กระเป๋า", "is_chit_chat": false, "category": null, "exclude_category": "watch", "search_all": true}
+- User says "ราคาเท่าไรก็ได้": {"rewritten": "previous_search_term", "is_chit_chat": false, "category": null, "exclude_category": null, "search_all": true}
+- User says "มีสีน้ำเงินมั้ย" after Rolex: {"rewritten": "นาฬิกา Rolex สีน้ำเงิน", "is_chit_chat": false, "category": "watch", "exclude_category": null, "search_all": false}
+- User says "ขอบคุณครับ": {"rewritten": "ขอบคุณครับ", "is_chit_chat": true, "category": null, "exclude_category": null, "search_all": false}
+
+Respond with JSON only:
 
 Respond with JSON only:
 PROMPT;
@@ -4820,23 +4879,32 @@ PROMPT;
         $data = json_decode($response, true);
         $text = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
         
-        // Parse JSON response
-        $jsonMatch = preg_match('/\{[^}]+\}/', $text, $matches);
-        if ($jsonMatch) {
+        // Parse JSON response - now supports nested objects with more fields
+        // Match the full JSON object including nested braces
+        if (preg_match('/\{(?:[^{}]|(?:\{[^{}]*\}))*\}/s', $text, $matches)) {
             $parsed = json_decode($matches[0], true);
             if (is_array($parsed)) {
                 $rewritten = $parsed['rewritten'] ?? $query;
                 $isChitChat = (bool)($parsed['is_chit_chat'] ?? false);
+                $category = $parsed['category'] ?? null;
+                $excludeCategory = $parsed['exclude_category'] ?? null;
+                $searchAll = (bool)($parsed['search_all'] ?? false);
                 
                 Logger::info('[ROUTER_V5] Query rewritten by LLM', [
                     'original' => $query,
                     'rewritten' => $rewritten,
-                    'is_chit_chat' => $isChitChat
+                    'is_chit_chat' => $isChitChat,
+                    'category' => $category,
+                    'exclude_category' => $excludeCategory,
+                    'search_all' => $searchAll
                 ]);
                 
                 return [
                     'rewritten' => $rewritten,
                     'is_chit_chat' => $isChitChat,
+                    'category' => $category,
+                    'exclude_category' => $excludeCategory,
+                    'search_all' => $searchAll,
                     'original' => $query,
                     'source' => 'llm_rewrite'
                 ];

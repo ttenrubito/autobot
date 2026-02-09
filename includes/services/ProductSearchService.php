@@ -117,6 +117,23 @@ class ProductSearchService
     }
 
     /**
+     * Search ALL products without category filter
+     * Used when user wants to see products from different categories
+     * 
+     * @param int $limit Maximum results
+     * @return array Products array
+     */
+    public static function searchAll(int $limit = 20): array
+    {
+        $products = self::getBasicMockProducts();
+        
+        // Shuffle to get variety
+        shuffle($products);
+        
+        return array_slice($products, 0, $limit);
+    }
+
+    /**
      * Internal search method
      * 
      * @param array $params Search parameters
@@ -249,13 +266,24 @@ class ProductSearchService
             ['ref_id' => 'P-2026-000022', 'product_code' => 'GLD-NCK-002', 'title' => 'สร้อยคอทองคำ ลายโซ่ 1 บาท', 'brand' => 'Thai Gold', 'category' => 'necklace', 'price' => 34000, 'availability' => 'in_stock', 'thumbnail_url' => 'https://images.unsplash.com/photo-1611085583191-a3b181a88401?w=400'],
             // Bracelets
             ['ref_id' => 'P-2026-000030', 'product_code' => 'GLD-BRC-001', 'title' => 'กำไลทองคำแท้ 96.5% ลายโซ่', 'brand' => 'Thai Gold', 'category' => 'bracelet', 'price' => 68000, 'availability' => 'in_stock', 'thumbnail_url' => 'https://images.unsplash.com/photo-1611591437281-460bfbe1220a?w=400'],
+            // Earrings
+            ['ref_id' => 'P-2026-000040', 'product_code' => 'DIA-EAR-001', 'title' => 'ต่างหูเพชรแท้ ทองคำขาว', 'brand' => 'เพชรวิบวับ', 'category' => 'earring', 'price' => 125000, 'availability' => 'in_stock', 'thumbnail_url' => 'https://images.unsplash.com/photo-1535632066927-ab7c9ab60908?w=400'],
+            // Jewelry Sets (ชุดเครื่องประดับ)
+            ['ref_id' => 'P-2026-000050', 'product_code' => 'SET-DIA-001', 'title' => 'ชุดเครื่องประดับเพชร สร้อย+ต่างหู+แหวน', 'brand' => 'เพชรวิบวับ', 'category' => 'jewelry', 'price' => 385000, 'availability' => 'in_stock', 'thumbnail_url' => 'https://images.unsplash.com/photo-1515562141207-7a88fb7ce338?w=400'],
+            ['ref_id' => 'P-2026-000051', 'product_code' => 'SET-GLD-001', 'title' => 'ชุดทองคำแท้ 96.5% สร้อย+กำไล+แหวน', 'brand' => 'Thai Gold', 'category' => 'jewelry', 'price' => 158000, 'availability' => 'in_stock', 'thumbnail_url' => 'https://images.unsplash.com/photo-1601121141461-9d6647bca1ed?w=400'],
+            ['ref_id' => 'P-2026-000052', 'product_code' => 'SET-PRL-001', 'title' => 'ชุดเครื่องประดับไข่มุก สร้อย+ต่างหู', 'brand' => 'Pearl House', 'category' => 'jewelry', 'price' => 45000, 'availability' => 'in_stock', 'thumbnail_url' => 'https://images.unsplash.com/photo-1611085583191-a3b181a88401?w=400'],
             // Bags
             ['ref_id' => 'P-2026-000100', 'product_code' => 'GUC-MAR-001', 'title' => 'GUCCI Marmont Mini Bag Black', 'brand' => 'GUCCI', 'category' => 'bag', 'price' => 45900, 'availability' => 'in_stock', 'thumbnail_url' => 'https://images.unsplash.com/photo-1584917865442-de89df76afd3?w=400'],
+            ['ref_id' => 'P-2026-000101', 'product_code' => 'LV-SPD-001', 'title' => 'Louis Vuitton Speedy 25 Monogram', 'brand' => 'Louis Vuitton', 'category' => 'bag', 'price' => 65000, 'availability' => 'in_stock', 'thumbnail_url' => 'https://images.unsplash.com/photo-1548036328-c9fa89d128fa?w=400'],
+            ['ref_id' => 'P-2026-000102', 'product_code' => 'CHA-FLP-001', 'title' => 'Chanel Classic Flap Medium Black', 'brand' => 'Chanel', 'category' => 'bag', 'price' => 285000, 'availability' => 'in_stock', 'thumbnail_url' => 'https://images.unsplash.com/photo-1591561954557-26941169b49e?w=400'],
             // Amulets (พระเลี่ยมทอง)
             ['ref_id' => 'P-2026-000200', 'product_code' => 'AMU-LP-001', 'title' => 'พระหลวงปู่ทวด เลี่ยมทองคำแท้', 'brand' => 'วัดช้างให้', 'category' => 'amulet', 'price' => 35000, 'availability' => 'in_stock', 'thumbnail_url' => 'https://images.unsplash.com/photo-1617791160505-6f00504e3519?w=400'],
             ['ref_id' => 'P-2026-000201', 'product_code' => 'AMU-SG-001', 'title' => 'พระสมเด็จ วัดระฆัง เลี่ยมทอง', 'brand' => 'วัดระฆัง', 'category' => 'amulet', 'price' => 89000, 'availability' => 'in_stock', 'thumbnail_url' => 'https://images.unsplash.com/photo-1617791160505-6f00504e3519?w=400'],
             ['ref_id' => 'P-2026-000202', 'product_code' => 'AMU-NK-001', 'title' => 'พระนางกวัก เนื้อทองคำ เลี่ยมทอง', 'brand' => 'วัดหนองแขม', 'category' => 'amulet', 'price' => 125000, 'availability' => 'in_stock', 'thumbnail_url' => 'https://images.unsplash.com/photo-1617791160505-6f00504e3519?w=400'],
             ['ref_id' => 'P-2026-000203', 'product_code' => 'AMU-JT-001', 'title' => 'พระจตุคามรามเทพ เลี่ยมทองกรอบเพชร', 'brand' => 'วัดพระมหาธาตุ', 'category' => 'amulet', 'price' => 250000, 'availability' => 'in_stock', 'thumbnail_url' => 'https://images.unsplash.com/photo-1617791160505-6f00504e3519?w=400'],
+            // Gold Bars (ทองคำแท่ง)
+            ['ref_id' => 'P-2026-000300', 'product_code' => 'GLD-BAR-001', 'title' => 'ทองคำแท่ง 1 บาท 96.5%', 'brand' => 'ฮั่วเซ่งเฮง', 'category' => 'gold', 'price' => 42500, 'availability' => 'in_stock', 'thumbnail_url' => 'https://images.unsplash.com/photo-1610375461246-83df859d849d?w=400'],
+            ['ref_id' => 'P-2026-000301', 'product_code' => 'GLD-BAR-002', 'title' => 'ทองคำแท่ง 2 บาท 96.5%', 'brand' => 'ฮั่วเซ่งเฮง', 'category' => 'gold', 'price' => 85000, 'availability' => 'in_stock', 'thumbnail_url' => 'https://images.unsplash.com/photo-1610375461246-83df859d849d?w=400'],
         ];
     }
 
