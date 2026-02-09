@@ -130,25 +130,37 @@ class StoreConfigService
     }
 
     /**
-     * Load config from database (store_config table)
+     * Load config from database (customer_channels.config JSON)
+     * Store settings are stored at config.store_settings
      */
     protected function loadFromDatabase(int $channelId): ?array
     {
         try {
             $row = $this->db->queryOne(
-                "SELECT * FROM store_config WHERE channel_id = ? LIMIT 1",
+                "SELECT config FROM customer_channels WHERE id = ? LIMIT 1",
                 [$channelId]
             );
 
-            if (!$row) {
+            if (!$row || empty($row['config'])) {
                 return null;
             }
 
+            $config = json_decode($row['config'], true);
+            $storeSettings = $config['store_settings'] ?? null;
+
+            if (!$storeSettings) {
+                return null;
+            }
+
+            // Merge with defaults
+            $features = $storeSettings['features'] ?? [];
+            $businessRules = $storeSettings['business_rules'] ?? [];
+
             return [
-                'store_type' => $row['store_type'] ?? 'luxury_resale',
-                'features' => json_decode($row['features'] ?? '{}', true) ?: self::DEFAULT_FEATURES,
-                'business_rules' => json_decode($row['business_rules'] ?? '{}', true) ?: self::DEFAULT_BUSINESS_RULES,
-                'category_keywords' => $row['category_keywords'] ?? self::DEFAULT_CATEGORIES['luxury_resale'],
+                'store_type' => $storeSettings['store_type'] ?? 'luxury_resale',
+                'features' => array_merge(self::DEFAULT_FEATURES, $features),
+                'business_rules' => array_replace_recursive(self::DEFAULT_BUSINESS_RULES, $businessRules),
+                'category_keywords' => $storeSettings['category_keywords'] ?? self::DEFAULT_CATEGORIES[$storeSettings['store_type'] ?? 'luxury_resale'] ?? self::DEFAULT_CATEGORIES['luxury_resale'],
             ];
         } catch (\Exception $e) {
             \Logger::warning('[StoreConfigService] Failed to load config', [

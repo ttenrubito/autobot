@@ -214,7 +214,8 @@ include('../../includes/admin/sidebar.php');
                             <div class="form-group">
                                 <label class="form-label">App ID <span style="color:red;">*</span></label>
                                 <input type="text" id="fbAppId" class="form-control" placeholder="123456789012345">
-                                <small style="color:var(--color-gray);">Get from Facebook App → Settings → Basic → App ID</small>
+                                <small style="color:var(--color-gray);">Get from Facebook App → Settings → Basic → App
+                                    ID</small>
                             </div>
                             <div class="form-group">
                                 <label class="form-label">Page Access Token <span style="color:red;">*</span></label>
@@ -686,6 +687,105 @@ include('../../includes/admin/sidebar.php');
                             เพื่อกำหนด logic ของบอทต่อช่องทาง (Channel) แต่ละอัน
                         </p>
                     </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Store Config Modal (Multi-tenant V6) -->
+    <div id="storeConfigModal" class="modal-backdrop hidden">
+        <div class="modal-content" style="max-width: 700px;">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title"><i class="fas fa-store-alt"></i> ตั้งค่า Store Config (Multi-tenant)</h3>
+                    <button class="modal-close-btn" onclick="closeStoreConfigModal()"><i
+                            class="fas fa-times"></i></button>
+                </div>
+                <div class="card-body">
+                    <input type="hidden" id="storeConfigChannelId">
+                    <div style="margin-bottom: 1rem; padding: 0.75rem; background: #f0f9ff; border-radius: 8px;">
+                        <strong>Channel:</strong> <span id="storeConfigChannelName"></span>
+                    </div>
+
+                    <!-- Store Type -->
+                    <div class="form-group">
+                        <label class="form-label">ประเภทร้าน (Store Type)</label>
+                        <select id="storeConfigType" class="form-control">
+                            <option value="luxury_resale">ร้านมือสอง หรูหรา (Luxury Resale)</option>
+                            <option value="jewelry">ร้านทอง/เครื่องประดับ</option>
+                            <option value="watches">ร้านนาฬิกา</option>
+                            <option value="amulets">ร้านพระเครื่อง</option>
+                            <option value="electronics">ร้าน Electronics</option>
+                            <option value="general">ทั่วไป (General)</option>
+                        </select>
+                    </div>
+
+                    <!-- Feature Toggles -->
+                    <div class="form-group">
+                        <label class="form-label">Feature Toggles (เปิด/ปิด ฟีเจอร์)</label>
+                        <div
+                            style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.5rem; padding: 1rem; background: #f9fafb; border-radius: 8px;">
+                            <label style="display:flex;align-items:center;gap:0.5rem;">
+                                <input type="checkbox" id="featurePawn" checked> <span>🏦 รับจำนำ (Pawn)</span>
+                            </label>
+                            <label style="display:flex;align-items:center;gap:0.5rem;">
+                                <input type="checkbox" id="featureRepair" checked> <span>🔧 ซ่อม (Repair)</span>
+                            </label>
+                            <label style="display:flex;align-items:center;gap:0.5rem;">
+                                <input type="checkbox" id="featureTradeIn" checked> <span>🔄 เทิร์นของ (Trade-in)</span>
+                            </label>
+                            <label style="display:flex;align-items:center;gap:0.5rem;">
+                                <input type="checkbox" id="featureSavings" checked> <span>💰 ออมทอง (Savings)</span>
+                            </label>
+                            <label style="display:flex;align-items:center;gap:0.5rem;">
+                                <input type="checkbox" id="featureInstallment" checked> <span>📋 ผ่อนชำระ</span>
+                            </label>
+                            <label style="display:flex;align-items:center;gap:0.5rem;">
+                                <input type="checkbox" id="featureDeposit" checked> <span>🔒 รับฝากของ</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Business Rules -->
+                    <div class="form-group">
+                        <label class="form-label">Trade-in Rates (อัตรารับเทิร์น)</label>
+                        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.5rem;">
+                            <div>
+                                <label style="font-size:0.85rem;color:var(--color-gray);">อัตราแลกเปลี่ยน (%)</label>
+                                <input type="number" id="tradeInExchangeRate" class="form-control" min="0" max="100"
+                                    step="0.1" value="10" placeholder="10">
+                            </div>
+                            <div>
+                                <label style="font-size:0.85rem;color:var(--color-gray);">อัตราคืน (%)</label>
+                                <input type="number" id="tradeInReturnRate" class="form-control" min="0" max="100"
+                                    step="0.1" value="15" placeholder="15">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Category Keywords -->
+                    <div class="form-group">
+                        <label class="form-label">Product Category Keywords (Regex)</label>
+                        <textarea id="categoryKeywords" class="form-control" rows="2"
+                            placeholder="นาฬิกา|กระเป๋า|เครื่องประดับ|ทอง"></textarea>
+                        <small style="color:var(--color-gray);">คำหลักสำหรับ intent matching แยกด้วย | เช่น
+                            นาฬิกา|กระเป๋า|ทอง</small>
+                    </div>
+
+                    <div id="storeConfigError" class="alert alert-danger" style="display: none; margin-top: 1rem;">
+                    </div>
+                    <div id="storeConfigSuccess" class="alert alert-success" style="display: none; margin-top: 1rem;">
+                    </div>
+
+                    <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
+                        <button type="button" class="btn btn-primary" style="flex: 1;" onclick="saveStoreConfig()">
+                            <i class="fas fa-save"></i> บันทึก Store Config
+                        </button>
+                        <button type="button" class="btn btn-outline" style="flex: 1;"
+                            onclick="closeStoreConfigModal()">
+                            <i class="fas fa-times"></i> ยกเลิก
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1902,6 +2002,7 @@ include('../../includes/admin/sidebar.php');
                         <td>${statusBadge}</td>
                         <td>
                             ${refreshBtn}
+                            <button class="btn btn-sm btn-outline" onclick="openStoreConfig(${ch.id}, '${ch.name.replace(/'/g, "\\'")}')"><i class="fas fa-store-alt"></i></button>
                             <button class="btn btn-sm btn-outline" onclick="editChannel(${ch.id})"><i class="fas fa-edit"></i></button>
                             <button class="btn btn-sm btn-danger" onclick="deleteChannel(${ch.id})"><i class="fas fa-trash"></i></button>
                         </td>
@@ -1917,7 +2018,7 @@ include('../../includes/admin/sidebar.php');
         async function refreshFacebookToken(channelId) {
             if (!channelId) return;
             const forceRefresh = confirm('ต้องการ Force Refresh Facebook Token (บังคับ refresh แม้ยังไม่หมดอายุ)?\n\nกด OK = บังคับ refresh\nกด Cancel = refresh เฉพาะที่ใกล้หมดอายุ');
-            
+
             try {
                 const res = await apiCall('/api/admin/refresh-facebook-tokens.php', {
                     method: 'POST',
@@ -1942,6 +2043,129 @@ include('../../includes/admin/sidebar.php');
             } catch (e) {
                 console.error('refreshFacebookToken error', e);
                 alert('เกิดข้อผิดพลาดในการเรียก refresh token');
+            }
+        }
+
+        // ===== Store Config Modal Functions (Multi-tenant V6) =====
+        async function openStoreConfig(channelId, channelName) {
+            document.getElementById('storeConfigChannelId').value = channelId;
+            document.getElementById('storeConfigChannelName').textContent = channelName;
+            document.getElementById('storeConfigError').style.display = 'none';
+            document.getElementById('storeConfigSuccess').style.display = 'none';
+
+            // Reset form to defaults
+            document.getElementById('storeConfigType').value = 'luxury_resale';
+            document.getElementById('featurePawn').checked = true;
+            document.getElementById('featureRepair').checked = true;
+            document.getElementById('featureTradeIn').checked = true;
+            document.getElementById('featureSavings').checked = true;
+            document.getElementById('featureInstallment').checked = true;
+            document.getElementById('featureDeposit').checked = true;
+            document.getElementById('tradeInExchangeRate').value = 10;
+            document.getElementById('tradeInReturnRate').value = 15;
+            document.getElementById('categoryKeywords').value = '';
+
+            // Load existing config if any
+            await loadStoreConfig(channelId);
+
+            document.getElementById('storeConfigModal').classList.remove('hidden');
+        }
+
+        function closeStoreConfigModal() {
+            document.getElementById('storeConfigModal').classList.add('hidden');
+        }
+
+        async function loadStoreConfig(channelId) {
+            try {
+                const res = await apiCall(`/api/admin/store-config.php?channel_id=${channelId}`);
+                if (res.success && res.data && res.data.store_settings) {
+                    const cfg = res.data.store_settings;
+
+                    // Store type
+                    if (cfg.store_type) {
+                        document.getElementById('storeConfigType').value = cfg.store_type;
+                    }
+
+                    // Feature toggles
+                    if (cfg.features) {
+                        document.getElementById('featurePawn').checked = cfg.features.pawn !== false;
+                        document.getElementById('featureRepair').checked = cfg.features.repair !== false;
+                        document.getElementById('featureTradeIn').checked = cfg.features.trade_in !== false;
+                        document.getElementById('featureSavings').checked = cfg.features.savings !== false;
+                        document.getElementById('featureInstallment').checked = cfg.features.installment !== false;
+                        document.getElementById('featureDeposit').checked = cfg.features.deposit !== false;
+                    }
+
+                    // Business rules
+                    if (cfg.business_rules && cfg.business_rules.trade_in) {
+                        const ti = cfg.business_rules.trade_in;
+                        if (ti.exchange_rate !== undefined) {
+                            document.getElementById('tradeInExchangeRate').value = (ti.exchange_rate * 100).toFixed(1);
+                        }
+                        if (ti.return_rate !== undefined) {
+                            document.getElementById('tradeInReturnRate').value = (ti.return_rate * 100).toFixed(1);
+                        }
+                    }
+
+                    // Category keywords
+                    if (cfg.category_keywords) {
+                        document.getElementById('categoryKeywords').value = cfg.category_keywords;
+                    }
+                }
+            } catch (e) {
+                console.log('loadStoreConfig: no existing config or error', e);
+            }
+        }
+
+        async function saveStoreConfig() {
+            const channelId = document.getElementById('storeConfigChannelId').value;
+            const errorEl = document.getElementById('storeConfigError');
+            const successEl = document.getElementById('storeConfigSuccess');
+
+            try {
+                const storeSettings = {
+                    store_type: document.getElementById('storeConfigType').value,
+                    features: {
+                        pawn: document.getElementById('featurePawn').checked,
+                        repair: document.getElementById('featureRepair').checked,
+                        trade_in: document.getElementById('featureTradeIn').checked,
+                        savings: document.getElementById('featureSavings').checked,
+                        installment: document.getElementById('featureInstallment').checked,
+                        deposit: document.getElementById('featureDeposit').checked
+                    },
+                    business_rules: {
+                        trade_in: {
+                            exchange_rate: parseFloat(document.getElementById('tradeInExchangeRate').value) / 100,
+                            return_rate: parseFloat(document.getElementById('tradeInReturnRate').value) / 100
+                        }
+                    },
+                    category_keywords: document.getElementById('categoryKeywords').value
+                };
+
+                const res = await apiCall('/api/admin/store-config.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        channel_id: parseInt(channelId),
+                        store_settings: storeSettings
+                    })
+                });
+
+                if (res.success) {
+                    successEl.textContent = '✅ บันทึก Store Config สำเร็จ';
+                    successEl.style.display = 'block';
+                    errorEl.style.display = 'none';
+                    setTimeout(() => closeStoreConfigModal(), 1500);
+                } else {
+                    errorEl.textContent = res.message || 'บันทึกไม่สำเร็จ';
+                    errorEl.style.display = 'block';
+                    successEl.style.display = 'none';
+                }
+            } catch (e) {
+                console.error('saveStoreConfig error', e);
+                errorEl.textContent = 'เกิดข้อผิดพลาดในการบันทึก';
+                errorEl.style.display = 'block';
+                successEl.style.display = 'none';
             }
         }
 
