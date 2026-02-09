@@ -491,10 +491,25 @@ class FunctionExecutor
     {
         $reason = $args['reason'] ?? 'ลูกค้าต้องการคุยกับแอดมิน';
 
-        // Update session for admin handoff
+        // ✅ FIX: Update database directly instead of calling non-existent ChatService method
         $sessionId = $this->context['session_id'] ?? null;
         if ($sessionId) {
-            $this->chatService->markForAdminHandoff($sessionId, $reason);
+            try {
+                $db = \Database::getInstance();
+                $db->execute(
+                    'UPDATE chat_sessions SET last_admin_message_at = NOW(), updated_at = NOW() WHERE id = ?',
+                    [$sessionId]
+                );
+                Logger::info('[FUNC_EXECUTOR] Admin handoff activated', [
+                    'session_id' => $sessionId,
+                    'reason' => $reason,
+                ]);
+            } catch (\Exception $e) {
+                Logger::error('[FUNC_EXECUTOR] Failed to activate admin handoff', [
+                    'error' => $e->getMessage(),
+                    'session_id' => $sessionId,
+                ]);
+            }
         }
 
         return [
