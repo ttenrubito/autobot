@@ -4808,26 +4808,65 @@ You are an advanced Thai e-commerce chatbot for a luxury second-hand goods store
 ## Store Categories
 Categories: นาฬิกา (watch), แหวน (ring), สร้อยคอ (necklace), กำไล/ข้อมือ (bracelet), ต่างหู (earring), จี้ (pendant), กระเป๋า (bag), พระเครื่อง (amulet), เครื่องประดับ (jewelry), ชุดเครื่องประดับ (jewelry set)
 
-## Popular Brands
-Watches: Rolex, Omega, Patek Philippe, Audemars Piguet, Tag Heuer, Cartier, Breitling, IWC, Tudor, Seiko
-Bags: Louis Vuitton, Chanel, Hermes, Gucci, Prada, Dior, Balenciaga, Celine, Fendi, Bottega Veneta
-Jewelry: Cartier, Bvlgari, Tiffany, Van Cleef & Arpels, Harry Winston, Chopard
+## Popular Brands & Abbreviations
+Watches: Rolex, Omega, Patek Philippe (PP), Audemars Piguet (AP), Tag Heuer (TAG), Cartier, Breitling, IWC, Tudor, Seiko, Richard Mille (RM)
+Bags: Louis Vuitton (LV/หลุยส์), Chanel, Hermes (H/แอร์เมส), Gucci, Prada, Dior, Balenciaga, Celine, Fendi, Bottega Veneta (BV)
+Jewelry: Cartier, Bvlgari, Tiffany, Van Cleef & Arpels (VCA), Harry Winston (HW), Chopard
 
-## Synonyms to Expand
-- หรู/แพง/premium → Rolex, Patek Philippe, Cartier, Hermes, Chanel
-- ราคาถูก/ไม่แพง/งบน้อย → Tag Heuer, Seiko, Coach, Michael Kors
-- ผู้ชาย/men → สาย steel, หน้าปัดใหญ่, classic
-- ผู้หญิง/women → สาย leather, rose gold, diamond, ขนาดเล็ก
-- ใหม่/มือหนึ่ง → new, unworn, full set
-- มือสอง/second → pre-owned, vintage, used
+## Synonym Mappings
+- หรู/แพง/premium/luxury/ไฮเอนด์ → Rolex, Patek Philippe, Cartier, Hermes, Chanel
+- ราคาถูก/ไม่แพง/งบน้อย/ประหยัด → Tag Heuer, Seiko, Coach, Michael Kors
+- ผู้ชาย/men/หนุ่ม/สามี → สาย steel, หน้าปัดใหญ่ 40mm+, classic, sport
+- ผู้หญิง/women/สาว/ภรรยา/แฟน → สาย leather, rose gold, diamond, ขนาดเล็ก 28-36mm
+- ใหม่/มือหนึ่ง/new/unworn → new, full set, unused
+- มือสอง/second/vintage/ของเก่า → pre-owned, vintage, used
+- ของขวัญ/gift/ให้แฟน/ให้แม่ → premium brands, gift-worthy items
 
-## CRITICAL TASKS
-1. **FIX TYPOS** - Correct any misspellings (โรเลคซ์→Rolex, โอเม้กา→Omega, หลุยส์วิตอง→Louis Vuitton)
-2. **SPLIT CONCATENATED** - Split joined words (นาฬิกาrolex→นาฬิกา Rolex, กระเป๋าgucci→กระเป๋า Gucci)
-3. **EXTRACT PRICE** - Parse budget mentions (งบ5แสน→500000, ไม่เกินหมื่น→10000, 50k→50000)
-4. **COMBINE CONTEXT** - If current message is short (color/size), combine with history context
-5. **EXPAND SYNONYMS** - "หรู" → add brand names, "ถูก" → budget-friendly brands
-6. **DETECT EXCLUSION** - "ไม่ใช่X", "ไม่เอาX", "อย่างอื่น" → exclude_category
+## CRITICAL TASKS (10/10 Intelligence)
+1. **FIX TYPOS** - Correct Thai/English misspellings:
+   - โรเลคซ์/โรเล็ค/โรเลค → Rolex
+   - โอเม้กา/โอเมกา/โอเม้ก้า → Omega
+   - หลุยส์วิตตอง/หลุยวิตอง/LV → Louis Vuitton
+   - ปาเต๊ก/ปาเต็ค/PP → Patek Philippe
+   - แอร์เม่ส์/เฮอร์เมส → Hermes
+   
+2. **EXPAND ABBREVIATIONS** - Convert short forms:
+   - LV → Louis Vuitton
+   - AP → Audemars Piguet
+   - PP → Patek Philippe
+   - VCA → Van Cleef & Arpels
+   - BV → Bottega Veneta
+   - RM → Richard Mille
+   
+3. **SPLIT CONCATENATED** - Split Thai+English:
+   - นาฬิกาrolex → นาฬิกา Rolex
+   - กระเป๋าLV → กระเป๋า Louis Vuitton
+   - แหวนcartier → แหวน Cartier
+   
+4. **PARSE PRICE** - Extract budget from various formats:
+   - งบ5แสน/500000บาท → 500000
+   - ไม่เกิน3หมื่น/30k → 30000
+   - 2ล้าน/2M → 2000000
+   - หมื่นต้นๆ → 10000-15000
+   - แสนปลายๆ → 90000-100000
+   
+5. **REMOVE EMOJI** - Strip emojis but understand context:
+   - ⌚️หรูๆ → นาฬิกาหรู
+   - 👜LV → กระเป๋า Louis Vuitton
+   - 💍แต่งงาน → แหวนแต่งงาน
+   
+6. **CONTEXTUAL INFERENCE** - Understand implicit meanings:
+   - "หาของขวัญให้แฟน" → If male context: women's items, vice versa
+   - "ซื้อให้แม่" → women's items, elegant, classic
+   - "ให้ผู้ใหญ่" → classic, not flashy
+   
+7. **COMPARISON QUERIES** - Handle comparisons:
+   - "Rolex กับ Omega อันไหนดี" → Show both brands
+   - "เทียบราคา" → price comparison intent
+   
+8. **COMBINE CONTEXT** - Merge multi-message context intelligently
+9. **EXPAND SYNONYMS** - Add related search terms
+10. **DETECT EXCLUSION** - "ไม่ใช่X", "ไม่เอาX", "อย่างอื่นนอกจากX"
 
 ## Conversation History:
 {$history}
@@ -4985,30 +5024,88 @@ PROMPT;
             // Jewelry
             'บุลการี' => 'Bvlgari', 'บูลการี่' => 'Bvlgari',
             'ทิฟฟานี่' => 'Tiffany', 'ทิฟานี่' => 'Tiffany',
+            // More watch brands
+            'ริชาร์ดมิล' => 'Richard Mille', 'ริชาร์ด' => 'Richard Mille',
+            'ไอดับบลิวซี' => 'IWC', 'iwc' => 'IWC',
+            'ทิวดอร์' => 'Tudor', 'tudor' => 'Tudor',
+            'ไซโก้' => 'Seiko', 'seiko' => 'Seiko',
+            'ออเดอมาร์' => 'Audemars Piguet', 'ap' => 'Audemars Piguet',
+            'ไบรท์ลิ่ง' => 'Breitling', 'breitling' => 'Breitling',
+        ];
+        
+        // ✅ Step 1.5: Expand abbreviations (before typo correction)
+        $abbreviations = [
+            'lv' => 'Louis Vuitton', 'LV' => 'Louis Vuitton',
+            'pp' => 'Patek Philippe', 'PP' => 'Patek Philippe',
+            'ap' => 'Audemars Piguet', 'AP' => 'Audemars Piguet',
+            'rm' => 'Richard Mille', 'RM' => 'Richard Mille',
+            'bv' => 'Bottega Veneta', 'BV' => 'Bottega Veneta',
+            'vca' => 'Van Cleef & Arpels', 'VCA' => 'Van Cleef & Arpels',
+            'hw' => 'Harry Winston', 'HW' => 'Harry Winston',
         ];
         
         $correctedQuery = $query;
+        
+        // Expand abbreviations first (match whole word only)
+        foreach ($abbreviations as $abbr => $full) {
+            $pattern = '/\b' . preg_quote($abbr, '/') . '\b/i';
+            $correctedQuery = preg_replace($pattern, $full, $correctedQuery);
+        }
+        
+        // Then fix typos
         foreach ($typoCorrections as $typo => $correct) {
             $correctedQuery = str_ireplace($typo, $correct, $correctedQuery);
         }
         
-        // ✅ Step 2: Split concatenated words (e.g., "นาฬิกาrolex" → "นาฬิกา Rolex")
+        // ✅ Step 2: Remove emojis but preserve meaning
+        $emojiToText = [
+            '⌚' => 'นาฬิกา', '⌚️' => 'นาฬิกา',
+            '👜' => 'กระเป๋า', '👛' => 'กระเป๋า', '💼' => 'กระเป๋า',
+            '💍' => 'แหวน', '💎' => 'เพชร',
+            '📿' => 'สร้อย', '👂' => 'ต่างหู',
+        ];
+        foreach ($emojiToText as $emoji => $text) {
+            if (mb_strpos($correctedQuery, $emoji) !== false) {
+                $correctedQuery = str_replace($emoji, $text . ' ', $correctedQuery);
+            }
+        }
+        // Remove remaining emojis
+        $correctedQuery = preg_replace('/[\x{1F600}-\x{1F64F}|\x{1F300}-\x{1F5FF}|\x{1F680}-\x{1F6FF}|\x{2600}-\x{26FF}|\x{2700}-\x{27BF}]/u', '', $correctedQuery);
+        
+        // ✅ Step 3: Split concatenated words (e.g., "นาฬิกาrolex" → "นาฬิกา Rolex")
         $thaiEngPattern = '/([ก-๙])([a-zA-Z])/u';
         $engThaiPattern = '/([a-zA-Z])([ก-๙])/u';
         $correctedQuery = preg_replace($thaiEngPattern, '$1 $2', $correctedQuery);
         $correctedQuery = preg_replace($engThaiPattern, '$1 $2', $correctedQuery);
         
-        // ✅ Step 3: Extract price from query
+        // Clean up multiple spaces
+        $correctedQuery = preg_replace('/\s+/', ' ', trim($correctedQuery));
+        
+        // ✅ Step 4: Extract price from query (enhanced)
         $priceMin = null;
         $priceMax = null;
-        if (preg_match('/(?:งบ|ราคา)?(?:ไม่เกิน|ไม่เกิ้น|ต่ำกว่า|under)\s*(\d+)\s*(แสน|หมื่น|พัน|k|K)?/u', $correctedQuery, $m)) {
+        
+        // Pattern: งบ/ราคา + ไม่เกิน + number + unit
+        if (preg_match('/(?:งบ|ราคา)?(?:ไม่เกิน|ไม่เกิ้น|ต่ำกว่า|under|ภายใน)\s*(\d+)\s*(แสน|หมื่น|พัน|ล้าน|k|K|m|M)?/u', $correctedQuery, $m)) {
             $num = (int)$m[1];
             $unit = $m[2] ?? '';
-            if ($unit === 'แสน') $priceMax = $num * 100000;
+            if ($unit === 'ล้าน' || strtolower($unit) === 'm') $priceMax = $num * 1000000;
+            elseif ($unit === 'แสน') $priceMax = $num * 100000;
             elseif ($unit === 'หมื่น') $priceMax = $num * 10000;
             elseif ($unit === 'พัน') $priceMax = $num * 1000;
             elseif (strtolower($unit) === 'k') $priceMax = $num * 1000;
             else $priceMax = $num;
+        }
+        
+        // Pattern: number + unit directly (e.g., "5แสน", "100k")
+        if (!$priceMax && preg_match('/(\d+)\s*(แสน|หมื่น|พัน|ล้าน|k|K|m|M)\s*(?:บาท)?/u', $correctedQuery, $m)) {
+            $num = (int)$m[1];
+            $unit = $m[2] ?? '';
+            if ($unit === 'ล้าน' || strtolower($unit) === 'm') $priceMax = $num * 1000000;
+            elseif ($unit === 'แสน') $priceMax = $num * 100000;
+            elseif ($unit === 'หมื่น') $priceMax = $num * 10000;
+            elseif ($unit === 'พัน') $priceMax = $num * 1000;
+            elseif (strtolower($unit) === 'k') $priceMax = $num * 1000;
         }
         
         // Extract keywords from history
@@ -5028,10 +5125,11 @@ PROMPT;
             'cartier' => 'Cartier', 'คาร์เทียร์' => 'Cartier',
             'gucci' => 'Gucci', 'กุชชี่' => 'Gucci',
             'chanel' => 'Chanel', 'ชาแนล' => 'Chanel',
-            'louis vuitton' => 'Louis Vuitton', 'หลุยส์' => 'Louis Vuitton',
+            'louis vuitton' => 'Louis Vuitton', 'หลุยส์' => 'Louis Vuitton', 'lv' => 'Louis Vuitton',
             'hermes' => 'Hermes', 'แอร์เมส' => 'Hermes',
-            'patek' => 'Patek Philippe', 'ปาเต็ก' => 'Patek Philippe',
+            'patek' => 'Patek Philippe', 'ปาเต็ก' => 'Patek Philippe', 'pp' => 'Patek Philippe',
             'tag heuer' => 'Tag Heuer', 'แท็ก' => 'Tag Heuer',
+            'audemars' => 'Audemars Piguet', 'ap' => 'Audemars Piguet',
         ];
         
         $historyLower = mb_strtolower($history, 'UTF-8');
