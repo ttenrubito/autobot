@@ -1124,6 +1124,33 @@ class RouterV5Handler implements BotHandlerInterface
             $searchOptions['search_all'] = true;
         }
         
+        // ✅ NEW: Add price range filter from LLM
+        if (!empty($rewriteResult['price_min'])) {
+            $searchOptions['price_min'] = (int)$rewriteResult['price_min'];
+        }
+        if (!empty($rewriteResult['price_max'])) {
+            $searchOptions['price_max'] = (int)$rewriteResult['price_max'];
+        }
+        
+        // ✅ NEW: Add gender filter from LLM
+        if (!empty($rewriteResult['gender'])) {
+            $searchOptions['gender'] = $rewriteResult['gender'];
+        }
+        
+        // ✅ NEW: Add expanded keywords from LLM for broader search
+        if (!empty($rewriteResult['expanded_keywords']) && is_array($rewriteResult['expanded_keywords'])) {
+            $searchOptions['expanded_keywords'] = $rewriteResult['expanded_keywords'];
+            // Append expanded keywords to search query for hybrid search
+            $searchQuery .= ' ' . implode(' ', $rewriteResult['expanded_keywords']);
+        }
+        
+        if (!empty($searchOptions)) {
+            Logger::info('[ROUTER_V5] Smart search options', [
+                'query' => $searchQuery,
+                'options' => $searchOptions
+            ]);
+        }
+        
         // Call ProductService with enhanced options
         $result = $this->productService->search($searchQuery, $config, $context, $searchOptions);
 
@@ -4752,13 +4779,11 @@ PROMPT;
         }
 
         $llmIntegration = $this->getLlmIntegration($context);
+        
+        // ✅ Rule-based fallback when LLM not available
         if (!$llmIntegration) {
-            return [
-                'rewritten' => $query,
-                'is_chit_chat' => false,
-                'original' => $query,
-                'source' => 'no_llm_available'
-            ];
+            $fallbackResult = $this->ruleBasedContextRewrite($query, $history, $context);
+            return array_merge($fallbackResult, ['source' => 'rule_based_fallback']);
         }
 
         $apiKey = $llmIntegration['api_key'] ?? null;
@@ -4776,24 +4801,33 @@ PROMPT;
             ];
         }
 
-        // Build rewrite prompt - Enhanced with category/exclusion support
+        // Build rewrite prompt - Enhanced with full smart search (10/10)
         $prompt = <<<PROMPT
-You are a Thai e-commerce chatbot assistant for a luxury second-hand goods store.
-
-Analyze the user's current message in context of the conversation history.
+You are an advanced Thai e-commerce chatbot for a luxury second-hand goods store.
 
 ## Store Categories
-Available product categories: นาฬิกา (watch), แหวน (ring), สร้อยคอ (necklace), กำไล/ข้อมือ (bracelet), ต่างหู (earring), จี้ (pendant), กระเป๋า (bag), พระเครื่อง (amulet), เครื่องประดับ (jewelry), ชุดเครื่องประดับ (jewelry set)
+Categories: นาฬิกา (watch), แหวน (ring), สร้อยคอ (necklace), กำไล/ข้อมือ (bracelet), ต่างหู (earring), จี้ (pendant), กระเป๋า (bag), พระเครื่อง (amulet), เครื่องประดับ (jewelry), ชุดเครื่องประดับ (jewelry set)
 
-## Task
-1. If the message is a PRODUCT SEARCH query:
-   - Rewrite it into a clear product search query in Thai
-   - Include context from history (e.g., product type, brand mentioned earlier)
-   - If user wants something DIFFERENT from what was shown, set appropriate category
-   - If user says "ไม่ใช่ X" or "อย่างอื่น" or "ไม่เอา X", detect the excluded category
-   
-2. If the message is CHIT-CHAT (greetings, thanks, general questions not about products):
-   - Return is_chit_chat: true
+## Popular Brands
+Watches: Rolex, Omega, Patek Philippe, Audemars Piguet, Tag Heuer, Cartier, Breitling, IWC, Tudor, Seiko
+Bags: Louis Vuitton, Chanel, Hermes, Gucci, Prada, Dior, Balenciaga, Celine, Fendi, Bottega Veneta
+Jewelry: Cartier, Bvlgari, Tiffany, Van Cleef & Arpels, Harry Winston, Chopard
+
+## Synonyms to Expand
+- หรู/แพง/premium → Rolex, Patek Philippe, Cartier, Hermes, Chanel
+- ราคาถูก/ไม่แพง/งบน้อย → Tag Heuer, Seiko, Coach, Michael Kors
+- ผู้ชาย/men → สาย steel, หน้าปัดใหญ่, classic
+- ผู้หญิง/women → สาย leather, rose gold, diamond, ขนาดเล็ก
+- ใหม่/มือหนึ่ง → new, unworn, full set
+- มือสอง/second → pre-owned, vintage, used
+
+## CRITICAL TASKS
+1. **FIX TYPOS** - Correct any misspellings (โรเลคซ์→Rolex, โอเม้กา→Omega, หลุยส์วิตอง→Louis Vuitton)
+2. **SPLIT CONCATENATED** - Split joined words (นาฬิกาrolex→นาฬิกา Rolex, กระเป๋าgucci→กระเป๋า Gucci)
+3. **EXTRACT PRICE** - Parse budget mentions (งบ5แสน→500000, ไม่เกินหมื่น→10000, 50k→50000)
+4. **COMBINE CONTEXT** - If current message is short (color/size), combine with history context
+5. **EXPAND SYNONYMS** - "หรู" → add brand names, "ถูก" → budget-friendly brands
+6. **DETECT EXCLUSION** - "ไม่ใช่X", "ไม่เอาX", "อย่างอื่น" → exclude_category
 
 ## Conversation History:
 {$history}
@@ -4802,21 +4836,24 @@ Available product categories: นาฬิกา (watch), แหวน (ring), �
 
 ## Output Format (JSON only):
 {
-  "rewritten": "rewritten search query",
+  "rewritten": "clean search query with typos fixed, context combined",
+  "original_corrected": "original with typos fixed only",
   "is_chit_chat": false,
-  "category": "detected category in English or null",
-  "exclude_category": "category to exclude in English or null",
+  "category": "watch|ring|necklace|bracelet|earring|pendant|bag|amulet|jewelry|null",
+  "exclude_category": "category to exclude or null",
+  "price_min": null,
+  "price_max": null,
+  "gender": "male|female|null",
+  "expanded_keywords": ["additional", "search", "terms"],
   "search_all": false
 }
 
 ## Examples:
-- User says "ไม่ใช่นาฬิกา" after seeing watches: {"rewritten": "เครื่องประดับ สร้อย แหวน", "is_chit_chat": false, "category": "jewelry", "exclude_category": "watch", "search_all": false}
-- User says "อยากดูอย่างอื่น" after seeing watches: {"rewritten": "เครื่องประดับ กระเป๋า", "is_chit_chat": false, "category": null, "exclude_category": "watch", "search_all": true}
-- User says "ราคาเท่าไรก็ได้": {"rewritten": "previous_search_term", "is_chit_chat": false, "category": null, "exclude_category": null, "search_all": true}
-- User says "มีสีน้ำเงินมั้ย" after Rolex: {"rewritten": "นาฬิกา Rolex สีน้ำเงิน", "is_chit_chat": false, "category": "watch", "exclude_category": null, "search_all": false}
-- User says "ขอบคุณครับ": {"rewritten": "ขอบคุณครับ", "is_chit_chat": true, "category": null, "exclude_category": null, "search_all": false}
-
-Respond with JSON only:
+- "โรเลคซ์สีดำ": {"rewritten": "นาฬิกา Rolex สีดำ", "original_corrected": "Rolex สีดำ", "is_chit_chat": false, "category": "watch", "price_min": null, "price_max": null, "gender": null, "expanded_keywords": ["Submariner", "Daytona", "black dial"], "search_all": false}
+- "นาฬิกาหรูงบไม่เกิน3แสน": {"rewritten": "นาฬิกา Rolex Omega Tag Heuer", "is_chit_chat": false, "category": "watch", "price_min": null, "price_max": 300000, "gender": null, "expanded_keywords": ["luxury", "premium"], "search_all": false}
+- "ที่ไม่ใช่นาฬิกา": {"rewritten": "เครื่องประดับ สร้อย แหวน กระเป๋า", "is_chit_chat": false, "category": "jewelry", "exclude_category": "watch", "price_min": null, "price_max": null, "search_all": true}
+- "สีน้ำเงินมั้ย" (after Rolex in history): {"rewritten": "นาฬิกา Rolex สีน้ำเงิน", "is_chit_chat": false, "category": "watch", "expanded_keywords": ["blue dial"], "search_all": false}
+- "กระเป๋าหลุยส์วิตองสำหรับผู้หญิง": {"rewritten": "กระเป๋า Louis Vuitton ผู้หญิง", "is_chit_chat": false, "category": "bag", "gender": "female", "expanded_keywords": ["LV", "Neverfull", "Speedy"], "search_all": false}
 
 Respond with JSON only:
 PROMPT;
@@ -4826,7 +4863,7 @@ PROMPT;
                 ['role' => 'user', 'parts' => [['text' => $prompt]]]
             ],
             'generationConfig' => [
-                'maxOutputTokens' => 150,
+                'maxOutputTokens' => 300,
                 'temperature' => 0.1,
             ]
         ];
@@ -4916,6 +4953,190 @@ PROMPT;
             'is_chit_chat' => false,
             'original' => $query,
             'source' => 'parse_failed'
+        ];
+    }
+
+    /**
+     * Rule-based context rewriting (fallback when LLM not available)
+     * Extracts category/brand from chat history and combines with current query
+     * 
+     * Handles cases like:
+     * - Message 1: "อยากได้นาฬิกา"
+     * - Message 2: "Rolex"  
+     * - Message 3: "สีดำ" → Should search "นาฬิกา Rolex สีดำ"
+     */
+    protected function ruleBasedContextRewrite(string $query, string $history, array $context): array
+    {
+        // ✅ Step 1: Fix common typos first
+        $typoCorrections = [
+            // Watch brands
+            'โรเลคซ์' => 'Rolex', 'โรเลค' => 'Rolex', 'โรเล็ค' => 'Rolex',
+            'โรเลกซ์' => 'Rolex', 'โรเล็กซ' => 'Rolex', 'rอlex' => 'Rolex',
+            'โอเม้ก้า' => 'Omega', 'โอเมก้' => 'Omega', 'โอเมกา' => 'Omega',
+            'ปาเต๊ก' => 'Patek Philippe', 'patek' => 'Patek Philippe',
+            'แทคฮอย' => 'Tag Heuer', 'แท็คฮอย' => 'Tag Heuer', 'tag' => 'Tag Heuer',
+            'คาเทียร์' => 'Cartier', 'คาร์เทีย' => 'Cartier',
+            // Bag brands
+            'หลุยส์วิตตอง' => 'Louis Vuitton', 'หลุยวิตอง' => 'Louis Vuitton',
+            'แอร์เม่ส์' => 'Hermes', 'แอเมส' => 'Hermes', 'herme' => 'Hermes',
+            'ชาเนล' => 'Chanel', 'ชแนล' => 'Chanel',
+            'กุชชี่' => 'Gucci', 'กุซซี่' => 'Gucci', 'กูชี่' => 'Gucci',
+            'ปราด้า' => 'Prada', 'พราด้า' => 'Prada',
+            // Jewelry
+            'บุลการี' => 'Bvlgari', 'บูลการี่' => 'Bvlgari',
+            'ทิฟฟานี่' => 'Tiffany', 'ทิฟานี่' => 'Tiffany',
+        ];
+        
+        $correctedQuery = $query;
+        foreach ($typoCorrections as $typo => $correct) {
+            $correctedQuery = str_ireplace($typo, $correct, $correctedQuery);
+        }
+        
+        // ✅ Step 2: Split concatenated words (e.g., "นาฬิกาrolex" → "นาฬิกา Rolex")
+        $thaiEngPattern = '/([ก-๙])([a-zA-Z])/u';
+        $engThaiPattern = '/([a-zA-Z])([ก-๙])/u';
+        $correctedQuery = preg_replace($thaiEngPattern, '$1 $2', $correctedQuery);
+        $correctedQuery = preg_replace($engThaiPattern, '$1 $2', $correctedQuery);
+        
+        // ✅ Step 3: Extract price from query
+        $priceMin = null;
+        $priceMax = null;
+        if (preg_match('/(?:งบ|ราคา)?(?:ไม่เกิน|ไม่เกิ้น|ต่ำกว่า|under)\s*(\d+)\s*(แสน|หมื่น|พัน|k|K)?/u', $correctedQuery, $m)) {
+            $num = (int)$m[1];
+            $unit = $m[2] ?? '';
+            if ($unit === 'แสน') $priceMax = $num * 100000;
+            elseif ($unit === 'หมื่น') $priceMax = $num * 10000;
+            elseif ($unit === 'พัน') $priceMax = $num * 1000;
+            elseif (strtolower($unit) === 'k') $priceMax = $num * 1000;
+            else $priceMax = $num;
+        }
+        
+        // Extract keywords from history
+        $categoryKeywords = [
+            'นาฬิกา' => 'นาฬิกา', 'watch' => 'นาฬิกา',
+            'แหวน' => 'แหวน', 'ring' => 'แหวน',
+            'สร้อย' => 'สร้อย', 'necklace' => 'สร้อย',
+            'กำไล' => 'กำไล', 'bracelet' => 'กำไล',
+            'ต่างหู' => 'ต่างหู', 'earring' => 'ต่างหู',
+            'กระเป๋า' => 'กระเป๋า', 'bag' => 'กระเป๋า',
+            'เครื่องประดับ' => 'เครื่องประดับ', 'jewelry' => 'เครื่องประดับ',
+        ];
+        
+        $brandKeywords = [
+            'rolex' => 'Rolex', 'โรเล็กซ์' => 'Rolex', 'โรเลกซ์' => 'Rolex',
+            'omega' => 'Omega', 'โอเมก้า' => 'Omega',
+            'cartier' => 'Cartier', 'คาร์เทียร์' => 'Cartier',
+            'gucci' => 'Gucci', 'กุชชี่' => 'Gucci',
+            'chanel' => 'Chanel', 'ชาแนล' => 'Chanel',
+            'louis vuitton' => 'Louis Vuitton', 'หลุยส์' => 'Louis Vuitton',
+            'hermes' => 'Hermes', 'แอร์เมส' => 'Hermes',
+            'patek' => 'Patek Philippe', 'ปาเต็ก' => 'Patek Philippe',
+            'tag heuer' => 'Tag Heuer', 'แท็ก' => 'Tag Heuer',
+        ];
+        
+        $historyLower = mb_strtolower($history, 'UTF-8');
+        $queryLower = mb_strtolower($correctedQuery, 'UTF-8');
+        
+        $extractedCategory = null;
+        $extractedBrand = null;
+        $excludeCategory = null;
+        
+        // ✅ Step 4: Detect exclusion patterns
+        if (preg_match('/(ไม่ใช่|ไม่เอา|อย่างอื่น|ที่ไม่ใช่)\s*(\S+)/u', $queryLower, $exMatch)) {
+            $excluded = $exMatch[2];
+            foreach ($categoryKeywords as $key => $val) {
+                if (mb_strpos($excluded, $key) !== false) {
+                    $excludeCategory = array_search($val, $categoryKeywords);
+                    break;
+                }
+            }
+        }
+        
+        // Find category from history
+        foreach ($categoryKeywords as $key => $value) {
+            if (mb_strpos($historyLower, $key) !== false && mb_strpos($queryLower, $key) === false) {
+                $extractedCategory = $value;
+                break;
+            }
+        }
+        
+        // Find brand from history
+        foreach ($brandKeywords as $key => $value) {
+            if (mb_strpos($historyLower, $key) !== false && mb_strpos($queryLower, $key) === false) {
+                $extractedBrand = $value;
+                break;
+            }
+        }
+        
+        // Check if query is a short attribute (color, size, etc.)
+        $isShortAttribute = mb_strlen($correctedQuery, 'UTF-8') <= 12 && 
+            preg_match('/(สี|ดำ|ขาว|น้ำเงิน|แดง|ทอง|เงิน|ผู้ชาย|ผู้หญิง|เล็ก|ใหญ่|หนัง|เหล็ก|rose|gold|steel)/ui', $correctedQuery);
+        
+        // Combine if we have context and query is short/attribute-like
+        if ($isShortAttribute && ($extractedCategory || $extractedBrand)) {
+            $parts = array_filter([$extractedCategory, $extractedBrand, $correctedQuery]);
+            $rewritten = implode(' ', $parts);
+            
+            Logger::info('[ROUTER_V5] Rule-based context rewrite', [
+                'original' => $query,
+                'corrected' => $correctedQuery,
+                'rewritten' => $rewritten,
+                'extracted_category' => $extractedCategory,
+                'extracted_brand' => $extractedBrand,
+                'price_max' => $priceMax
+            ]);
+            
+            return [
+                'rewritten' => $rewritten,
+                'is_chit_chat' => false,
+                'original' => $query,
+                'original_corrected' => $correctedQuery,
+                'price_min' => $priceMin,
+                'price_max' => $priceMax,
+                'exclude_category' => $excludeCategory
+            ];
+        }
+        
+        // ✅ If query was corrected (typos fixed), return corrected version
+        if ($correctedQuery !== $query) {
+            Logger::info('[ROUTER_V5] Rule-based typo correction', [
+                'original' => $query,
+                'corrected' => $correctedQuery
+            ]);
+            
+            return [
+                'rewritten' => $correctedQuery,
+                'is_chit_chat' => false,
+                'original' => $query,
+                'original_corrected' => $correctedQuery,
+                'price_min' => $priceMin,
+                'price_max' => $priceMax,
+                'exclude_category' => $excludeCategory
+            ];
+        }
+        
+        // Check for chit-chat patterns
+        $chitChatPatterns = [
+            '/^(สวัสดี|หวัดดี|ดีค่ะ|ดีครับ|hello|hi)/ui',
+            '/^(ขอบคุณ|ขอบใจ|thank)/ui',
+            '/^(บาย|ลาก่อน|bye)/ui',
+            '/^(ใช่|ไม่ใช่|ok|โอเค|ได้|ไม่ได้)$/ui',
+        ];
+        
+        foreach ($chitChatPatterns as $pattern) {
+            if (preg_match($pattern, trim($query))) {
+                return [
+                    'rewritten' => $query,
+                    'is_chit_chat' => true,
+                    'original' => $query
+                ];
+            }
+        }
+        
+        return [
+            'rewritten' => $query,
+            'is_chit_chat' => false,
+            'original' => $query
         ];
     }
 

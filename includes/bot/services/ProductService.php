@@ -839,11 +839,18 @@ class ProductService
         $excludeCategory = $options['exclude_category'] ?? null;
         $searchAll = $options['search_all'] ?? false;
         
+        // ✅ NEW: Extract price range from LLM options
+        $llmPriceMin = isset($options['price_min']) ? (int)$options['price_min'] : null;
+        $llmPriceMax = isset($options['price_max']) ? (int)$options['price_max'] : null;
+        $llmGender = $options['gender'] ?? null;
+        
         \Logger::info("[ProductService] Hybrid search started", [
             'keyword' => $keyword,
             'requested_category' => $requestedCategory,
             'exclude_category' => $excludeCategory,
-            'search_all' => $searchAll
+            'search_all' => $searchAll,
+            'price_range' => $llmPriceMin || $llmPriceMax ? [$llmPriceMin, $llmPriceMax] : null,
+            'gender' => $llmGender
         ]);
         
         // Step 0: Analyze Query - extract category/material filters
@@ -982,6 +989,52 @@ class ProductService
                     // เช่น "นาฬิกาสีแดง" แต่ไม่มีนาฬิกาสีแดง → return empty
                     // แทนที่จะ return นาฬิกาทั้งหมด (ซึ่งไม่ตรงคำค้นหา)
                     $products = array_values($productsFiltered); // May be empty - that's correct!
+                }
+                
+                // ✅ NEW: Apply LLM price filter (price_min/price_max from options)
+                if (($llmPriceMin || $llmPriceMax) && !empty($products)) {
+                    $products = array_filter($products, function($p) use ($llmPriceMin, $llmPriceMax) {
+                        $price = (float)($p['price'] ?? 0);
+                        if ($llmPriceMin && $price < $llmPriceMin) return false;
+                        if ($llmPriceMax && $price > $llmPriceMax) return false;
+                        return true;
+                    });
+                    $products = array_values($products);
+                    
+                    \Logger::info("[ProductService] Applied LLM price filter", [
+                        'price_min' => $llmPriceMin,
+                        'price_max' => $llmPriceMax,
+                        'remaining' => count($products)
+                    ]);
+                }
+                
+                // ✅ NEW: Apply gender filter
+                if ($llmGender && !empty($products)) {
+                    $genderKeywords = $llmGender === 'male' 
+                        ? ['ผู้ชาย', 'men', 'male', 'กว้าง', '40mm', '42mm', '44mm']
+                        : ['ผู้หญิง', 'women', 'female', 'lady', 'เล็ก', '28mm', '32mm', '36mm'];
+                    
+                    $productsFiltered = array_filter($products, function($p) use ($genderKeywords) {
+                        $searchText = mb_strtolower(
+                            ($p['title'] ?? '') . ' ' . ($p['description'] ?? ''), 
+                            'UTF-8'
+                        );
+                        foreach ($genderKeywords as $kw) {
+                            if (mb_strpos($searchText, $kw) !== false) return true;
+                        }
+                        // If no gender info found, include product (don't exclude)
+                        return true;
+                    });
+                    
+                    // Only use filtered if we found matches
+                    if (!empty($productsFiltered)) {
+                        $products = array_values($productsFiltered);
+                    }
+                    
+                    \Logger::info("[ProductService] Applied gender filter", [
+                        'gender' => $llmGender,
+                        'remaining' => count($products)
+                    ]);
                 }
                 
                 // Limit results
