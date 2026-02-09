@@ -150,6 +150,21 @@ class FunctionExecutor
         $priceMax = $args['price_max'] ?? null;
         $priceMin = $args['price_min'] ?? null;
 
+        // ✅ NEW: Detect generic keywords → return browse_products instead
+        $genericKeywords = ['สินค้า', 'ของ', 'รายการ', 'สินค้าทั้งหมด', 'ทั้งหมด', 'catalog', 'all', ''];
+        $cleanKeyword = mb_strtolower(trim($keyword), 'UTF-8');
+        
+        if (in_array($cleanKeyword, $genericKeywords)) {
+            Logger::info('[FUNC_EXECUTOR] Generic keyword detected, returning browse_products', [
+                'keyword' => $keyword
+            ]);
+            return [
+                'ok' => true,
+                'type' => 'browse_products',
+                'message' => 'ลูกค้าต้องการดูหมวดหมู่สินค้า',
+            ];
+        }
+
         $result = $this->productService->search($keyword, $this->config, $this->context);
 
         if ($result['ok'] && !empty($result['products'])) {

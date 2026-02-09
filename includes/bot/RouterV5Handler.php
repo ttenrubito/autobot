@@ -3826,6 +3826,11 @@ PROMPT;
             case 'not_found':
                 return ['reply' => $result['message'] ?? 'ไม่พบข้อมูลค่ะ'];
 
+            case 'browse_products':
+                // ✅ NEW: Redirect to browse products handler
+                Logger::info('[ROUTER_V5] Redirecting to browse_products from function result');
+                return $this->handleBrowseProducts($config, $context);
+
             case 'order_status':
             case 'installment_status':
             case 'pawn_status':
