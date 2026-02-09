@@ -548,6 +548,21 @@ class ProductService
             }
         }
         
+        // 7. Material keywords - expand "ทอง" → ["gold", "ทองคำ"], etc.
+        $materialExpansions = [
+            'ทอง' => ['gold', 'ทองคำ', 'ทองแท่ง'],
+            'เงิน' => ['silver', 'sterling'],
+            'เพชร' => ['diamond', 'เพชรแท้'],
+            'แพลทินัม' => ['platinum', 'แพลตินัม'],
+        ];
+        foreach ($materialExpansions as $thai => $expansions) {
+            if (mb_strpos($queryLower, $thai) !== false) {
+                foreach ($expansions as $exp) {
+                    $searchTerms[] = strtolower($exp);
+                }
+            }
+        }
+        
         // Remove duplicates
         $searchTerms = array_unique($searchTerms);
         
